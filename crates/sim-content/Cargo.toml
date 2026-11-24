@@ -8,6 +8,9 @@ license.workspace = true
 sim-core = { path = "../sim-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `.imod` 是一个**真压缩包**（zip），不是"带扩展名的文件夹"。
+# 这里只用得上读，所以关掉默认特性、只留 deflate。
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [features]
 # 严格模式：未知字段直接报错（作者自查字段名拼错用）。

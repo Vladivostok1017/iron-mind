@@ -2985,12 +2985,48 @@ const Home = (() => {
     Dlg.open({
       title: "新的战役", body,
       actions: [
-        // 装一个战役以前要把文件夹拷进 modules/ 再重启——那是安装文档的事，
-        // 不是游戏的事。这里选一个文件夹就导入并出现在列表里。
-        { label: "导入模块…", keep: true, onClick: () => importModule() },
+        // 发布形态：从 Releases 下到一个 .imod 文件，选它就行。
+        { label: "导入 .imod", keep: true, onClick: () => importPackage() },
+        // 开发形态：直接选模块文件夹（作者手里就是一堆 json）。
+        { label: "导入文件夹…", keep: true, onClick: () => importModule() },
         { label: "取消" },
       ],
     });
+  }
+
+  // 导入一个 `.imod` 压缩包（发布形态）。
+  // 浏览器读成字节流 → base64 → 内核解码后先验一遍再落盘（坏包不会进模块目录）。
+  function importPackage() {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".imod,application/zip";
+    inp.addEventListener("change", async () => {
+      const f = (inp.files || [])[0];
+      if (!f) return;
+      if (f.size > 64 * 1024 * 1024) { toast("这个包太大了（>64 MB）"); return; }
+      toast("正在导入 " + f.name + "…");
+      const buf = new Uint8Array(await f.arrayBuffer());
+      // 分块拼 base64：一次性 apply 几万个参数会爆栈
+      let bin = "";
+      const CH = 0x8000;
+      for (let i = 0; i < buf.length; i += CH) {
+        bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
+      }
+      const b64 = btoa(bin);
+      try {
+        const r = await fetch("/api/modules/import", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: f.name, base64: b64 }),
+        });
+        const j = await r.json();
+        if (!j.ok) { toast(j.error || "导入失败"); return; }
+        toast("已导入 " + j.name);
+        Dlg.close();
+        await loadModules();
+        await Home.newCampaign();
+      } catch (e) { toast("导入失败：连不上内核"); }
+    });
+    inp.click();
   }
 
   // 从文件夹导入一个模块。浏览器只能"读"，所以把文件内容传给内核去写盘。

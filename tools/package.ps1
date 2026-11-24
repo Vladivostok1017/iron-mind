@@ -118,21 +118,24 @@ IRONMIND_API_KEY=
       if (-not $dir -or -not (Test-Path $dir)) { continue }
       $mods = if ((Get-Item $dir).Extension -eq ".imod") { @(Get-Item $dir) } else { @(Get-ChildItem $dir -Directory -Filter "*.imod") }
       foreach ($m in $mods) {
+        if ($m.PSIsContainer -eq $false) { continue } # 已经是压缩包了，不用再打
         $mj = Get-Content (Join-Path $m.FullName "module.json") -Raw | ConvertFrom-Json
         # 目录名是 `nanxun_1938.imod`，BaseName 对目录不管用，老老实实去掉扩展名
         $stem = [System.IO.Path]::GetFileNameWithoutExtension($m.Name)
-        $mz = Join-Path $dist ("$stem-v$($mj.version).zip")
+        $mz = Join-Path $dist ("$stem-v$($mj.version).imod")
         if (Test-Path $mz) { Remove-Item -Force $mz }
-        # 注意：压缩的是 .imod **文件夹本身**，解压后得到的才是可直接导入的目录
-        Compress-Archive -Path $m.FullName -DestinationPath $mz -CompressionLevel Optimal
-        Write-Host "产物：$mz（$([math]::Round((Get-Item $mz).Length/1MB,1)) MB）"
+        # `.imod` 就是 zip：成员放在**根部**（includeBaseDirectory = false），
+        # 内核按精确文件名取成员，所以不能多套一层目录。
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($m.FullName, $mz, "Optimal", $false)
+        Write-Host "产物：$mz（$([math]::Round((Get-Item $mz).Length/1MB,2)) MB）"
       }
     }
   }
 
   # ---- 校验码：Release 页面上贴一份，别人下完能自查 ----
   Write-Host "`nSHA256:"
-  Get-ChildItem $dist -Filter "*.zip" | ForEach-Object {
+  Get-ChildItem $dist -File | Where-Object { $_.Extension -in @(".zip", ".imod") } | ForEach-Object {
     $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
     "  $h  $($_.Name)"
   }

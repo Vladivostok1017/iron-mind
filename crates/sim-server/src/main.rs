@@ -73,9 +73,10 @@ fn main() {
         }
     }
 
-    // 模块可以自带真实省界；没有就让前端用 Voronoi 兜底（保持向后兼容）
-    let geo_path = std::path::Path::new(&module_path).join("provinces_geo.json");
-    let provinces_geo = std::fs::read_to_string(&geo_path).ok();
+    // 模块可以自带真实省界；没有就让前端用 Voronoi 兜底（保持向后兼容）。
+    // 从 `module.geo` 拿而不是自己拼路径：模块有两种形态（目录 / .imod 压缩包），
+    // 一旦模块是单个文件，"exe 旁边的 provinces_geo.json" 就不存在了。
+    let provinces_geo = module.geo.clone();
     if provinces_geo.is_some() {
         println!("  省界：使用模块自带的真实边界（provinces_geo.json）");
     }
@@ -536,9 +537,8 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let mut list = Vec::new();
             // 引擎自带的示例 + 外部模块仓库（IRONMIND_MODULES）
             for p in discover_modules() {
-                let meta = std::fs::read_to_string(p.join("module.json"))
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+                // 目录与 .imod 压缩包都要能读标题——统一走 peek_meta_json。
+                let meta = sim_content::peek_meta_json(&p);
                 let path = p.to_string_lossy().replace('\\', "/");
                 // 首页要拿这些字段把"战役卡"填起来：名字、规模、这仗在讲什么、
                 // 你替哪一边打。模块写什么就显示什么，引擎不替它编。
@@ -590,6 +590,77 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     return respond(&mut stream, 400, "application/json", &msg.to_string());
                 }
             };
+            // ② 单个 `.imod` 压缩包：浏览器选一个文件，前端把它 base64 过来。
+            //    这是发布之后的正常路径——玩家从 Releases 下到一个 .imod，直接导入。
+            if let (Some(name), Some(b64)) = (
+                v.get("file").and_then(|x| x.as_str()),
+                v.get("base64").and_then(|x| x.as_str()),
+            ) {
+                let bytes = match decode_base64(b64) {
+                    Some(b) => b,
+                    None => {
+                        let msg = json!({ "ok": false, "error": "base64 解不开" });
+                        return respond(&mut stream, 400, "application/json", &msg.to_string());
+                    }
+                };
+                // 先写到临时文件、用真正的加载器验一遍，再落到模块根。
+                // 不能直接落盘：一个坏包/伪装成 .imod 的随便什么文件不该进模块目录。
+                let tmp = std::env::temp_dir().join(format!(
+                    "imod-{}-{}.imod",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                ));
+                if let Err(e) = std::fs::write(&tmp, &bytes) {
+                    let msg = json!({ "ok": false, "error": format!("写临时文件失败：{e}") });
+                    return respond(&mut stream, 500, "application/json", &msg.to_string());
+                }
+                let loaded = sim_content::load_module(&tmp);
+                let _ = std::fs::remove_file(&tmp);
+                let module = match loaded {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let msg = json!({ "ok": false, "error": format!("这不是一个可用的模块：{e}") });
+                        return respond(&mut stream, 400, "application/json", &msg.to_string());
+                    }
+                };
+                // 落盘名用模块 id 的尾段（和文件夹导入一致），不信客户端给的文件名。
+                let dir = sanitize_slot(module.dir_name());
+                if dir.is_empty() {
+                    let msg = json!({ "ok": false, "error": "module.json 里的 id 不可用" });
+                    return respond(&mut stream, 400, "application/json", &msg.to_string());
+                }
+                let root = import_root();
+                let target = root.join(format!("{dir}.imod"));
+                if target.exists() {
+                    let msg = json!({ "ok": false, "error": format!("已经有一个同名模块：{dir}") });
+                    return respond(&mut stream, 409, "application/json", &msg.to_string());
+                }
+                if let Err(e) = std::fs::write(&target, &bytes) {
+                    let msg = json!({ "ok": false, "error": format!("写入失败：{e}") });
+                    return respond(&mut stream, 500, "application/json", &msg.to_string());
+                }
+                trace(format!(
+                    "   导入模块包 {name} → {}（{} KB）",
+                    target.display(),
+                    bytes.len() / 1024
+                ));
+                return respond(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    &json!({
+                        "ok": true,
+                        "name": dir,
+                        "path": target.to_string_lossy().replace('\\', "/"),
+                        "files": 1,
+                        "kind": "package",
+                    })
+                    .to_string(),
+                );
+            }
             let Some(files) = v.get("files").and_then(|f| f.as_array()) else {
                 let msg = json!({ "ok": false, "error": "没有收到文件" });
                 return respond(&mut stream, 400, "application/json", &msg.to_string());
@@ -705,7 +776,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     return Ok(());
                 }
             };
-            let geo = std::fs::read_to_string(std::path::Path::new(&path).join("provinces_geo.json")).ok();
+            let geo = loaded.geo.clone();
             let mut world = build_world(&loaded);
             sim_core::intel::run_intel(&mut world);
             *state.module.lock().unwrap() = loaded;
@@ -1427,6 +1498,40 @@ struct SaveFile {
 ///
 /// 这个名字会被拼进文件路径，所以只留字母数字、`-`、`_`、下划线以外的
 /// 一概换成 `-`，并砍到 40 字符。空名 = 不指定槽位（走时间戳）。
+/// 解 base64（标准字母表，容忍换行与 `=` 补齐）。
+///
+/// 为什么手写而不是拉一个 crate：只需要"把浏览器 `btoa` 出来的东西还原成字节"
+/// 这一件事，20 行能写完，还有单测盯着；多一个依赖反而要多维护一条供应链。
+fn decode_base64(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' | b'-' => Some(62),
+            b'/' | b'_' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::new();
+    let mut buf: u32 = 0;
+    let mut bits = 0u32;
+    for c in s.bytes() {
+        if c == b'=' || c == b'\n' || c == b'\r' || c == b' ' || c == b'\t' {
+            continue;
+        }
+        let v = val(c)? as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 fn sanitize_slot(raw: &str) -> String {
     let cleaned: String = raw
         .trim()
@@ -2877,7 +2982,9 @@ fn discover_modules() -> Vec<std::path::PathBuf> {
         let mut dirs: Vec<_> = rd.flatten().map(|e| e.path()).collect();
         dirs.sort();
         for p in dirs {
-            if p.is_dir() && p.extension().and_then(|x| x.to_str()) == Some("imod") {
+            // 模块有两种形态：目录（开发）与 .imod 压缩包（发布），都要能列出来。
+            let imod = p.extension().and_then(|x| x.to_str()) == Some("imod");
+            if imod && (p.is_dir() || p.is_file()) {
                 if !out.contains(&p) {
                     out.push(p);
                 }

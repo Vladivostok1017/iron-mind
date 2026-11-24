@@ -15,9 +15,9 @@
 pub mod error;
 pub mod migrate;
 pub mod model;
+pub mod source;
 pub mod validate;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use sim_core::fixed::Fixed;
@@ -36,6 +36,11 @@ pub struct LoadedModule {
     pub oob: OobDef,
     /// 校验过程中的 Warning（Error 已导致加载失败）。
     pub warnings: Vec<Issue>,
+    /// 模块自带的省界（`provinces_geo.json`）原文。没有就是 None，前端退回 Voronoi。
+    ///
+    /// 放在这里而不是让各个调用方自己去读文件：模块有两种形态（目录 / 压缩包），
+    /// 调用方不该关心它是从磁盘读的还是从 zip 里解出来的。
+    pub geo: Option<String>,
 }
 
 impl LoadedModule {
@@ -45,13 +50,10 @@ impl LoadedModule {
     }
 }
 
-fn read_json<T: for<'de> serde::Deserialize<'de>>(path: &Path) -> Result<T, LoadError> {
-    let text = fs::read_to_string(path).map_err(|e| LoadError::Io {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
+fn parse_json(src: &source::Source, name: &str) -> Result<serde_json::Value, LoadError> {
+    let text = src.read_text(name)?;
     serde_json::from_str(&text).map_err(|e| LoadError::Parse {
-        path: path.to_path_buf(),
+        path: src.path_of(name),
         message: format!("{}（第 {} 行第 {} 列）", e, e.line(), e.column()),
     })
 }
@@ -83,17 +85,31 @@ fn from_value<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T,
     serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
-/// 从目录加载一个模块。
-pub fn load_module(dir: &Path) -> Result<LoadedModule, LoadError> {
-    let base = dir.to_path_buf();
+/// 只读 `module.json`（不校验整包），给"列模块"这种轻量场景用。
+///
+/// 为什么需要它：模块列表要在首页把每张战役卡的标题、规模、简介填出来。
+/// 以前直接 `read_to_string(dir.join("module.json"))`——模块变成 `.imod` 压缩包
+/// 之后那一行会静默读不到，首页显示一排"?"。
+pub fn peek_meta_json(path: &Path) -> Option<serde_json::Value> {
+    let src = source::Source::open(path).ok()?;
+    let text = src.read_text("module.json").ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// 加载一个模块：**目录**（开发形态）或 `.imod` 压缩包（发布形态）。
+///
+/// 两种形态读出来的东西完全一样——`Src` 把"从哪读"这件事挡掉了，
+/// 后面迁移、校验、建世界的代码一行都不用分情况。
+pub fn load_module(path: &Path) -> Result<LoadedModule, LoadError> {
+    let src = source::Source::open(path)?;
     // 先读成裸 JSON，再迁移，最后反序列化。
     //
     // 顺序很重要：迁移器改的是**结构**，它必须在 serde 之前跑。
     // 如果先反序列化，"旧字段名"已经被默认值顶掉了，迁移器连看都看不到。
-    let mut raw_module: serde_json::Value = read_json(&base.join("module.json"))?;
-    let mut raw_scenario: serde_json::Value = read_json(&base.join("scenario.json"))?;
-    let mut raw_map: serde_json::Value = read_json(&base.join("map.json"))?;
-    let mut raw_oob: serde_json::Value = read_json(&base.join("oob.json"))?;
+    let mut raw_module: serde_json::Value = parse_json(&src, "module.json")?;
+    let mut raw_scenario: serde_json::Value = parse_json(&src, "scenario.json")?;
+    let mut raw_map: serde_json::Value = parse_json(&src, "map.json")?;
+    let mut raw_oob: serde_json::Value = parse_json(&src, "oob.json")?;
     let migrated = {
         let mut raw = migrate::RawModule {
             module: &mut raw_module,
@@ -117,19 +133,19 @@ pub fn load_module(dir: &Path) -> Result<LoadedModule, LoadError> {
     strip_comment_keys(&mut raw_map);
     strip_comment_keys(&mut raw_oob);
     let meta: ModuleMeta = from_value(raw_module).map_err(|e| LoadError::Parse {
-        path: base.join("module.json"),
+        path: src.path_of("module.json"),
         message: e,
     })?;
     let scenario: ScenarioDef = from_value(raw_scenario).map_err(|e| LoadError::Parse {
-        path: base.join("scenario.json"),
+        path: src.path_of("scenario.json"),
         message: e,
     })?;
     let map: MapDef = from_value(raw_map).map_err(|e| LoadError::Parse {
-        path: base.join("map.json"),
+        path: src.path_of("map.json"),
         message: e,
     })?;
     let oob: OobDef = from_value(raw_oob).map_err(|e| LoadError::Parse {
-        path: base.join("oob.json"),
+        path: src.path_of("oob.json"),
         message: e,
     })?;
     if !migrated.is_empty() {
@@ -158,6 +174,8 @@ pub fn load_module(dir: &Path) -> Result<LoadedModule, LoadError> {
         map,
         oob,
         warnings,
+        // 省界是可选的大文件：目录形态读旁边那个 json，压缩包形态读包里的成员。
+        geo: src.read_optional("provinces_geo.json"),
     })
 }
 
@@ -183,6 +201,7 @@ pub fn from_parts(
         map,
         oob,
         warnings,
+        geo: None,
     })
 }
 
