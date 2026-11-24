@@ -193,6 +193,23 @@
   .call-row input:focus { outline: none; border-color: #3d5a7a; }
   #call-to { width: 100%; margin-bottom: 8px; background: #0f151b; color: #cfd8e3;
     border: 1px solid #2a3542; border-radius: 4px; padding: 6px 8px; font-size: 12px; }
+  /* 指挥链：一行一环，把"我的电报变成了什么"摊开 */
+  .ch-row { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed #232d38;
+    font-size: 12px; }
+  .ch-row.ch-warn { background: #1b1710; }
+  .ch-k { width: 88px; color: #79828e; flex-shrink: 0; }
+  .ch-v { color: #cfd8e3; }
+  .ch-why { font-size: 11.5px; color: #8b95a1; line-height: 1.7; padding: 2px 0 6px 98px; }
+  /* 公文卡：一屏能读完，批/驳在一起 */
+  .ds-card { border: 1px solid #4a3f22; background: #1b1710; border-radius: 5px;
+    padding: 10px 12px; margin-bottom: 8px; }
+  .ds-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12px;
+    color: #cfd8e3; margin-bottom: 4px; }
+  .ds-day { color: #79828e; font-size: 11px; }
+  .ds-title { color: var(--gold); font-size: 12.5px; margin-bottom: 4px; }
+  .ds-text { color: #b6c0cc; font-size: 11.5px; line-height: 1.75; }
+  .ds-act { display: flex; gap: 8px; margin-top: 8px; }
+  .ds-act .btn { flex: 1; padding: 5px 0; font-size: 12px; }
   /* 铁路：底色一条 + 上面一条暖色虚线当枕木。
      补给每过一省乘"通路损耗 × 省吞吐"（铁路 0.95 / 水路 0.85 / 陆路 0.75），
      所以铁路是这张图上最重要的战略提示——以前它根本没画出来。 */
@@ -1419,6 +1436,8 @@ async function api(path, body) {
     refreshLlm();
     refreshReports();
     refreshTelegrams();
+    // 请示优先：推进完之后如果有人在等批示，直接把大窗弹出来
+    try { Dossier.popup(false); } catch (e) {}
   } catch (e) { toast("连接失败，检查服务是否运行"); }
 }
 
@@ -1497,6 +1516,12 @@ async function refreshTelegrams() {
       rp.textContent = "回电：" + t.reply;
       d.appendChild(rp);
     }
+    // 点一条电报 = 看它的**指挥链**：谁收到、理解成什么、落到哪个单位、
+    // 现在执行到哪一步。这是治"无力感"的关键一面：让玩家看见自己的
+    // 输入是怎么变成结果的，而不是只看到"某天战报里出现一行字"。
+    d.title = "点开看这条电报的指挥链";
+    d.style.cursor = "pointer";
+    d.addEventListener("click", () => Chain.open(t.id));
     box.appendChild(d);
   }
 }
@@ -2243,6 +2268,119 @@ const Call = (() => {
   return { open };
 })();
 bind("dp-call", "click", () => Call.open(selUnit));
+
+// ── 指挥链：一封电报到底改变了什么 ──
+// 玩家最想知道、而旧界面最答不上来的问题。链条只有四段：
+//   我发的（第几日）→ 送到的（第几日）→ 各将领理解成什么 → 部队现在在哪
+// 不给任何真值推演，只把服务端已经记下的 trace 摊开。
+const Chain = (() => {
+  async function open(id) {
+    let t = null;
+    try {
+      const j = await (await fetch("/api/telegrams")).json();
+      t = (j.telegrams || []).find((x) => x.id === id);
+    } catch (e) { toast("连不上内核"); return; }
+    if (!t) { toast("这封电报已经不在列表里了"); return; }
+
+    const body = document.createElement("div");
+    const step = (label, text, tone) => {
+      const row = Dlg.h("div", "ch-row" + (tone ? " " + tone : ""), body);
+      Dlg.h("span", "ch-k", row, label);
+      Dlg.h("span", "ch-v", row, text);
+      return row;
+    };
+    step("发出", "第 " + t.day_sent + " 日 · 发给 " + t.to, "");
+    step("送达", "第 " + t.arrive_day + " 日 · " +
+      (t.status === "enroute" ? "还在路上" : "已送达"), "");
+    const p = Dlg.h("p", "dg-note", body, "电报正文：" + t.text);
+    p.style.margin = "8px 0";
+
+    const traces = t.traces || [];
+    if (!traces.length) {
+      Dlg.h("p", "dg-note", body,
+        t.status === "enroute"
+          ? "还没送到，所以还没有任何将领见过它。"
+          : "送到了，但还没有将领交回判断——模型要几秒到几十秒，推进一天后再看。");
+    }
+    for (const x of traces) {
+      const verdict = x.same ? "照办" : "请示改令";
+      const row = Dlg.h("div", "ch-row" + (x.same ? "" : " ch-warn"), body);
+      Dlg.h("span", "ch-k", row, x.unit_name);
+      const v = Dlg.h("span", "ch-v", row, "");
+      v.textContent = x.general + " → " + x.kind + (x.target ? " " + x.target : "") +
+        " · " + verdict + "（把握 " + Math.round(x.confidence * 100) + "%）";
+      if (x.reason) Dlg.h("div", "ch-why", body, "「" + x.reason + "」");
+
+      // 现在这一步走到哪了：直接查世界状态里的这个番号
+      const u = allUnits().find((y) => y.index === x.unit);
+      if (u) {
+        const prov = S.provinces.find((q) => (q.units || []).some((y) => y.index === x.unit));
+        Dlg.h("div", "ch-why", body,
+          "现状：" + (prov ? prov.name : "行军中") + " · " + (u.order || "—") +
+          " · " + u.strength.toFixed(1) + " 千 · 补给 " + u.supply.toFixed(2));
+      }
+    }
+
+    Dlg.open({ title: "指挥链 · 电报 #" + t.id, body, actions: [{ label: "关闭" }] });
+  }
+  return { open };
+})();
+
+// ── 公文堆优先：请示来了就直接弹大窗 ──
+// 玩家最该处理的就是"要你点头"的东西，但它原来躺在侧栏最下面。
+// 现在只要出现新的请示就自动弹出来——是**提示**，不是拦路：可以先关掉。
+const Dossier = (() => {
+  let seen = new Set();
+  async function pending() {
+    try {
+      const j = await (await fetch("/api/reports")).json();
+      return (j.reports || []).filter((r) => r.status === "pending");
+    } catch (e) { return []; }
+  }
+  async function popup(force) {
+    const list = await pending();
+    if (!list.length) return;
+    const fresh = list.filter((r) => !seen.has(r.id));
+    if (!fresh.length && !force) return;
+    for (const r of list) seen.add(r.id);
+
+    const body = document.createElement("div");
+    Dlg.h("p", "dg-note", body,
+      "将军们在等你点头。批了，他就按自己的判断改令；驳了，他维持原令。");
+    for (const r of list) {
+      const card = Dlg.h("div", "ds-card", body);
+      const head = Dlg.h("div", "ds-head", card);
+      Dlg.h("b", null, head, r.unit_name + "（" + r.general + "）");
+      Dlg.h("span", "ds-day", head, "第 " + r.day + " 日 · 截止 " + r.deadline);
+      Dlg.h("div", "ds-title", card, "请示：" + r.title);
+      if (r.text) Dlg.h("div", "ds-text", card, r.text);
+      const act = Dlg.h("div", "ds-act", card);
+      const mk = (label, cls, choice) => {
+        const b = document.createElement("button");
+        b.className = "btn " + cls;
+        b.textContent = label;
+        b.addEventListener("click", async () => {
+          try {
+            const resp = await fetch("/api/report", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: r.id, choice }),
+            });
+            const j = await resp.json();
+            toast(j.msg || j.error || "已处理");
+            Dlg.close();
+            await api("/api/state");
+            Dossier.popup(true);
+          } catch (e) { toast("连不上内核"); }
+        });
+        act.appendChild(b);
+      };
+      mk("准他改令", "primary", "yes");
+      mk("驳回，维持原令", "", "no");
+    }
+    Dlg.open({ title: "请示 · " + list.length + " 件待批", body, actions: [{ label: "稍后处理" }] });
+  }
+  return { popup };
+})();
 
 // ── 首页 ──
 // 一进来先看到"这是个什么游戏"，而不是一张没有名字的地图。

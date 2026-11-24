@@ -712,6 +712,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         text: text.clone(),
                         status: "enroute",
                         reply: String::new(),
+                        traces: Vec::new(),
                     });
                     // 打印的是**实际要等几天**，不是 comms 里的原始参数。
                     // 以前打 delay=0，读日志的人会以为电报当天就到了。
@@ -779,6 +780,12 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     json!({
                         "id": t.id, "day_sent": t.day_sent, "arrive_day": t.arrive_day,
                         "to": t.to, "text": t.text, "status": t.status, "reply": t.reply,
+                        "traces": t.traces.iter().map(|x| json!({
+                            "day": x.day, "unit": x.unit, "unit_name": x.unit_name,
+                            "general": x.general, "kind": x.kind, "target": x.target,
+                            "same": x.same, "confidence": round2(x.confidence),
+                            "reason": x.reason,
+                        })).collect::<Vec<_>>(),
                     })
                 })
                 .collect();
@@ -1363,6 +1370,27 @@ struct Telegram {
     status: &'static str,
     /// 回电（将领的话，拼起来）
     reply: String,
+    /// 这封电报落到了谁头上、被理解成什么（指挥链视图用）。
+    ///
+    /// 只在内存里：不进世界状态、不进存档、不影响回放。
+    /// 它回答的是玩家最想问的那个问题——"我这封电报到底改变了什么"。
+    traces: Vec<Trace>,
+}
+
+/// 一封电报的一次落地：某位将领把它理解成了什么。
+#[derive(Clone)]
+struct Trace {
+    day: u32,
+    unit: usize,
+    unit_name: String,
+    general: String,
+    /// 中文命令名（进攻/推进/撤退/筑工事…）
+    kind: String,
+    target: String,
+    /// 同意上级（照办 / 有异议照办） vs 请示改令
+    same: bool,
+    confidence: f64,
+    reason: String,
 }
 
 /// 一封电报到底发给谁。
@@ -1696,6 +1724,24 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
                     t.reply.push('\n');
                 }
                 t.reply.push_str(&format!("{who}：{}", j.reply));
+            }
+        }
+        // 指挥链：记下"这封电报在他这里变成了什么"。
+        // 纯内存、只给界面看——玩家据此能看出命令在哪一环被改掉或被请示掉。
+        if let Some(id) = ready.telegram {
+            let mut list = state.telegrams.lock().unwrap();
+            if let Some(t) = list.iter_mut().find(|t| t.id == id) {
+                t.traces.push(Trace {
+                    day,
+                    unit: idx,
+                    unit_name: unit_name.clone(),
+                    general: general.clone(),
+                    kind: kind_label.to_string(),
+                    target: j.target.clone().unwrap_or_default(),
+                    same,
+                    confidence: j.confidence,
+                    reason: j.reason.clone(),
+                });
             }
         }
         if same {
