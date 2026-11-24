@@ -105,23 +105,28 @@ cargo run -q --release -p sim-testbed -- --module 路径\mymod.imod --ticks 30
 ### 开发循环：改完存盘就重载
 
 做模块最耗人的不是写数据，是"改一行 → 手动导入 → 手动点一天 → 看结果"这个循环。
-用开发模式就没有这个循环：
+开发循环的工具在 **SDK 仓库**（`../iron-mind-sdk`）：引擎出货的二进制里不放开发行为，
+作者工具也不该混进玩家安装包。它只通过引擎的公开接口驱动内核，不含引擎代码。
 
 ```powershell
-pwsh -File tools/dev.ps1 -Module ..\nanxun-1938\nanxun_1938.imod
+cd ..\iron-mind-sdk
+node imdev.mjs --module ..\nanxun-1938\nanxun_1938.imod
 ```
 
 它会起内核并**盯着模块目录**（`module.json` / `scenario.json` / `map.json` /
 `oob.json` / `provinces_geo.json`）：
 
-- 你一存盘，内核就重载模块、回到第 0 日，控制台打一行
-  `[重载] 南浔线 1938 · 87 省 · 18 单位 · 77 天`；
-- 开着的游戏页面会在 3 秒内自己换地图（省界、模块列表一起刷），不用刷新；
+- 你一存盘，内核就重载模块、回到第 0 日，控制台打一行 `[重载] 第 0 日 · 87 省`；
+- 开着的游戏页面会在 3 秒内自己换地图（省界、模块列表一起刷），不用刷新
+  ——机制是内核把"世界代号" `generation` 加一，前端轮询 `/api/llm` 看到变了就重拉；
 - **存了一半的坏 JSON 不会毁掉现场**：加载失败只打印错误，继续用旧世界，
   改完再存一次就重载。
 
 两条注意：重载会**清空命令流和电报**（旧命令在新数据上重放没有意义），
 所以这是开发工具，不是"换剧本接着打"。要保住进度请用存档。
+
+**本文档留在引擎仓库**，不搬进 SDK：规范和 `validate.rs` / `migrate.rs` 必须住在一起，
+否则文档和实现必然漂移。SDK 只放工具。
 
 ---
 
@@ -632,12 +637,6 @@ serde 用默认值顶上、不报错——作者的地图悄悄变了个样，�
 
 作者最常见的错误是**拼错字段名**。普通模式下拼错的字段会被忽略（用默认值），
 看起来"能跑但行为不对"。开发时用严格模式，未知字段直接报错：
-
-```powershell
-pwsh -File tools/dev.ps1 -Module ..\nanxun-1938\nanxun_1938.imod -Strict
-```
-
-或者直接用测试台：
 
 ```powershell
 cargo run -q --release -p sim-testbed --features sim-content/strict -- --module 路径\mymod.imod

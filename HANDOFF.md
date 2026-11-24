@@ -46,9 +46,12 @@ pwsh -File install.ps1 -Uninstall          # 卸载（存档先备份到「我�
 $env:IRONMIND_MODULES = "F:\dsh\nanxun-1938"
 cargo run -p sim-server                    # 默认捡到南浔线
 
-# 做模块：一条命令进开发循环（改完存盘自动重载，页面自动换地图）
-pwsh -File tools/dev.ps1 -Module F:\dsh\nanxun-1938\nanxun_1938.imod
-# 或者显式指定：
+# 做模块：开发循环在 SDK 仓库（F:\dsh\iron-mind-sdk），引擎里不放开发行为
+cd ../iron-mind-sdk
+node tools/module-init.js --id org.you.mymod --name "我的战役"   # 生成骨架
+node imdev.mjs --module ../nanxun-1938/nanxun_1938.imod          # 起内核 + 存盘即重载
+node imdev.mjs --check                                           # 引擎升级后查接口有没有缺
+# 不想用 SDK 的话，等价的最小做法还是显式指定：
 cargo run -p sim-server -- --module ../nanxun-1938/nanxun_1938.imod
 
 # 无头跑批，看战局演化（同样要 IRONMIND_MODULES）
@@ -116,12 +119,18 @@ install.ps1                   装成桌面程序：拷贝产物/模块、建快�
 crates/sim-testbed/           无头跑批 CLI
 
 tools/mapgen/gen.js           地图生成器（Delaunay 算邻接，作者工具，不参与模拟）
-tools/module-init.js          生成一个能直接加载的最小模块（作者起步用）
+tools/shot.js                 无头截图 + 页内跑 JS（--eval-file 绕开 PowerShell 转义）
 content/README.md              **模块开发手册**（字段契约、校验码、发布清单）
 
+（脚手架 tools/module-init.js 和开发循环 imdev.mjs 在 SDK 仓库，不在本仓库——
+ 引擎出货的二进制不带开发行为，作者工具也不该混进玩家安装包。）
+
 content/scenarios/
-├─ nanxun_1938.imod/   90 省 / 18 个单位，1938 电报时代，含规则与海空军
-└─ demo_1805.imod/     3 省，骑兵传令（跨时代兼容的实证）
+├─ demo_1805.imod/          3 省，骑兵传令（跨时代兼容的实证）
+└─ siege_tianjiazhen.imod/  围城/断补给的最小可玩例
+
+（南浔线 1938 90 省 / 18 个单位在隔壁模块仓库 F:\dsh\nanxun-1938，
+ 用 IRONMIND_MODULES 或 install.ps1 -Modules 指过去。）
 ```
 
 **测试分布**（共 64 个）：`sim-core` 内联 43 + `tests/golden_replay.rs` 4；`sim-content` 内联 2 + `tests/module_load.rs` 15。`sim-server` / `sim-testbed` 没有测试（都是 I/O 外壳，逻辑都在 sim-core）。

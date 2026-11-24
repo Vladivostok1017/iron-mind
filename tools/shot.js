@@ -30,7 +30,11 @@ function arg(name, dflt) {
 const url = arg("url", "http://127.0.0.1:8899/");
 const out = arg("out", path.join(__dirname, "_shots", "shot.png"));
 const clickSel = arg("click", null);
-const evalJs = arg("eval", null);
+// --eval-file 存在的唯一理由：PowerShell 把多行/带引号的 --eval 参数吃掉一半，
+// 报出来的错（Unexpected end of input、Invalid regular expression flags）
+// 看着像页面有问题，其实是命令行转义。要跑一段真代码就写进文件。
+const evalFile = arg("eval-file", null);
+const evalJs = evalFile ? fs.readFileSync(evalFile, "utf8").trim() : arg("eval", null);
 const waitMs = Number(arg("wait", 900));
 const size = arg("size", "1600,1000").split(",").map(Number);
 const port = Number(arg("port", 9333));

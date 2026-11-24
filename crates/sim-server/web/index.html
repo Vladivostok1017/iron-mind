@@ -752,7 +752,7 @@ async function loadGeo() {
 /* 省份是 Voronoi 切的，形状天然抽象；底下垫一层真实水系（长江、赣江、鄱阳湖），
    地图立刻就能读懂了。数据来自 Natural Earth 1:50m（公有领域），见 tools/mapgen/basemap.js */
 let BASEMAP = null;
-// 开发模式（sim-server --watch）下内核重载模块的代号；正式玩一局恒为 1
+// 世界代号：模块被替换（切模块/重载）一次就 +1。页面靠它知道"地图换了"
 let DEV_GEN = null;
 
 async function loadBasemap() {
@@ -1838,7 +1838,7 @@ async function refreshLlm() {
     const j = await (await fetch("/api/llm")).json();
     el.textContent = !j.enabled ? "规则 AI" : (j.model + " · " + j.calls + " 次");
     el.title = j.mode + (j.errors && j.errors.length ? "\n最近错误：" + j.errors[0] : "");
-    // 开发模式（--watch）：内核重载了模块，这里跟着换一张地图。
+    // 世界代号变了 = 模块被替换了（切模块、或开发工具热重载），省界要重拉。
     // 放在 /api/llm 里传是为了不额外发请求——它本来就每次状态刷新都拉一次。
     if (typeof j.generation === "number") {
       if (DEV_GEN === null) DEV_GEN = j.generation;

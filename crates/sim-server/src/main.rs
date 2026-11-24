@@ -116,17 +116,6 @@ fn main() {
         .unwrap_or(DEFAULT_PORT);
     let listen = format!("127.0.0.1:{port}");
 
-    // --watch：开发模式。盯着模块目录，改了文件就重载；页面自己刷省界和列表。
-    //
-    // 为什么需要：原来是"改一行 json → 手动导入 → 手动点一天"，
-    // 这个循环本身让人不想调试。现在保存即重载。
-    let watch = args.iter().any(|a| a == "--watch");
-    if watch {
-        println!("  [开发模式] 监听模块目录，改文件自动重载：{module_path}");
-        let st = Arc::clone(&state);
-        std::thread::spawn(move || watch_module(st));
-    }
-
     let listener = match TcpListener::bind(&listen) {
         Ok(l) => l,
         Err(e) => {
@@ -186,8 +175,9 @@ struct ServerState {
     /// 在途与已送达的电报
     telegrams: std::sync::Mutex<Vec<Telegram>>,
     next_telegram_id: std::sync::atomic::AtomicU32,
-    /// 模块重载代号。`--watch` 下每改一次文件 +1，前端据此重新拉省界。
-    /// 正式玩一局永远是 1——它只是开发模式的信号灯。
+    /// 世界代号。每次模块被替换（切模块、开发工具热重载）+1，前端据此重新拉省界。
+    /// 引擎自己不做热重载——开发循环在 SDK 仓库，它只是调 `POST /api/module`；
+    /// 这里留的是那个接口本来就该有的副作用（换世界 = 换代号）。
     generation: std::sync::atomic::AtomicU64,
 }
 
@@ -586,6 +576,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 .to_string(),
             )
         }
+        // 切换模块：整体替换世界，清空命令流/电报/公文，并给世界换代号。
         ("POST", "/api/module") => {
             use serde_json::json;
             let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
@@ -625,6 +616,11 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             state.commands.lock().unwrap().clear();
             state.reports.lock().unwrap().clear();
             state.telegrams.lock().unwrap().clear();
+            // 世界换代号：前端轮询 /api/llm 看到 generation 变了就重拉地图。
+            // 这是"存盘即换图"的整套机制，SDK 的 imdev 就靠它（引擎里不再有 --watch）。
+            state
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             trace(format!("   切换模块 → {path}"));
             let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap());
             respond(&mut stream, 200, "application/json", &snap)
@@ -2616,86 +2612,6 @@ fn module_roots() -> Vec<std::path::PathBuf> {
         roots.push(builtin);
     }
     roots
-}
-
-/// 模块目录里几个文件的最新修改时间。变了就说明作者保存过。
-fn module_stamp(dir: &str) -> Vec<(u128, u64)> {
-    const FILES: [&str; 5] = [
-        "module.json",
-        "scenario.json",
-        "map.json",
-        "oob.json",
-        "provinces_geo.json",
-    ];
-    FILES
-        .iter()
-        .map(|f| {
-            let p = std::path::Path::new(dir).join(f);
-            let m = p
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            (m, std::fs::metadata(&p).map(|x| x.len()).unwrap_or(0))
-        })
-        .collect()
-}
-
-/// 把一个模块装进正在跑的服务器（开发模式热重载用）。
-///
-/// 两条原则：
-/// 1. **加载失败就保持原样**。作者存了一个半截的 JSON 是常态，
-///    这时候把世界清掉等于把调试也清掉了——只打印错误，继续玩旧的。
-/// 2. 重载会**清空命令流**。这是必须的：旧命令在新数据上重放没有意义。
-///    所以热重载是开发工具，不是"换剧本继续打"的功能。
-fn hot_reload(state: &Arc<ServerState>, path: &str) -> Result<(), String> {
-    let loaded = load_module(&std::path::PathBuf::from(path)).map_err(|e| e.to_string())?;
-    let geo = std::fs::read_to_string(std::path::Path::new(path).join("provinces_geo.json")).ok();
-    let name = loaded.meta.name.clone();
-    let (provs, units, days) = (
-        loaded.map.provinces.len(),
-        loaded.oob.units.len(),
-        loaded.scenario.days,
-    );
-    let mut world = build_world(&loaded);
-    sim_core::intel::run_intel(&mut world);
-    *state.module.lock().unwrap() = loaded;
-    *state.provinces_geo.lock().unwrap() = geo;
-    *state.world.lock().unwrap() = Some(world);
-    state.commands.lock().unwrap().clear();
-    state.reports.lock().unwrap().clear();
-    state.telegrams.lock().unwrap().clear();
-    state
-        .generation
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    println!("\n[重载] {name} · {provs} 省 · {units} 单位 · {days} 天（第 0 日）");
-    Ok(())
-}
-
-/// 开发模式的主循环：每 700ms 看一眼模块文件。
-fn watch_module(state: Arc<ServerState>) {
-    let mut last = {
-        let p = state.module_path.lock().unwrap().clone();
-        module_stamp(&p)
-    };
-    loop {
-        std::thread::sleep(std::time::Duration::from_millis(700));
-        let path = state.module_path.lock().unwrap().clone();
-        let now = module_stamp(&path);
-        if now == last {
-            continue;
-        }
-        last = now;
-        // 编辑器保存常常是"先清空再写"，给半秒让它写完
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        // 再取一次：这半秒里可能又变了
-        last = module_stamp(&path);
-        if let Err(e) = hot_reload(&state, &path) {
-            eprintln!("[重载失败] {e}（保留原世界，改完再存一次）");
-        }
-    }
 }
 
 /// 导入的模块往哪写：第一个"可写、且不是引擎自带"的模块根。

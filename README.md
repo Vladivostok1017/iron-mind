@@ -134,12 +134,21 @@ pwsh -File install.ps1 -Modules F:\dsh\nanxun-1938 -DefaultModule nanxun_1938.im
 
 ### 开发：做模块（改完存盘就重载）
 
+作者工具在另一个仓库 [`../iron-mind-sdk`](../iron-mind-sdk)——**引擎里不装开发行为**：
+
 ```powershell
-pwsh -File tools/dev.ps1 -Module F:\dsh\nanxun-1938\nanxun_1938.imod
+cd ..\iron-mind-sdk
+node tools\module-init.js --id org.you.mymod --name "我的战役"   # 生成骨架
+node imdev.mjs --module F:\dsh\nanxun-1938\nanxun_1938.imod     # 起内核 + 存盘即重载
 ```
 
-盯着模块目录，一存盘就重载、回到第 0 日；开着的页面 3 秒内自己换地图。
+一存盘就重载、回到第 0 日；开着的页面 3 秒内自己换地图。
 存了一半的坏 JSON 只报错、不毁现场。重载会清空命令流（这是开发工具，不是读档）。
+
+它只是拿引擎的**公开 HTTP 接口**（`POST /api/module`）驱动本引擎，所以引擎内部怎么重构
+都不用改它；引擎升级后跑 `node imdev.mjs --check` 确认接口没缺（缺了退出码 2）。
+模块格式规范仍然在 [`content/README.md`](content/README.md)——它必须和 `validate.rs`/`migrate.rs`
+住在一起，否则文档和实现必然漂移。
 
 ### 开发：改引擎（浏览器 + 随手改页面）
 
