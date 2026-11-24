@@ -288,6 +288,9 @@ pub struct ProvinceDef {
     /// 是否补给源。
     #[serde(default)]
     pub supply_source: bool,
+    /// 有没有铁路/公路干线经过（补给沿这条线几乎不掉）。
+    #[serde(default)]
+    pub rail: bool,
     /// 工事等级 0-5。
     #[serde(default)]
     pub fort: u8,

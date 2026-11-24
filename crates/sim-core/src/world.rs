@@ -525,6 +525,12 @@ pub struct Province {
     pub owner: Side,
     /// 是否补给源。
     pub is_supply_source: bool,
+    /// 有没有铁路/公路干线经过。
+    ///
+    /// 这条线才是后勤的命脉：南浔铁路在，一个军就能从南昌拿到补给；
+    /// 铁路断了（省丢了），同一支部队的补给立刻塌。
+    /// 以前 supply_throughput 只是一个省上的常数，看不出"干线"这件事。
+    pub rail: bool,
     /// 经度。**不参与模拟计算**，只用于渲染时把省份摆到真实位置。
     pub lon: Fixed,
     /// 纬度。同上。
@@ -547,6 +553,7 @@ impl Province {
             neighbors: Vec::new(),
             owner,
             is_supply_source: false,
+            rail: false,
             lon: Fixed::ZERO,
             lat: Fixed::ZERO,
             positions: Vec::new(),

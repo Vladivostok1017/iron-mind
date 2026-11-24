@@ -54,6 +54,7 @@ fn prov(id: u32, name: &str, owner: SideDef, nb: &[u32]) -> ProvinceDef {
         terrain: TerrainDef::Plain,
         owner: Some(owner),
         supply_source: false,
+        rail: false,
         fort: 0,
         positions: Vec::new(),
         elev: None,

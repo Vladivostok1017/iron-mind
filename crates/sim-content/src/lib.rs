@@ -143,6 +143,7 @@ pub fn build_world(module: &LoadedModule) -> World {
         p.supply_throughput = Fixed::from_f64_input(d.supply_throughput).clamp(Fixed::ZERO, Fixed::ONE);
         p.neighbors = d.neighbors.clone();
         p.is_supply_source = d.supply_source;
+        p.rail = d.rail;
         p.lon = Fixed::from_f64_input(d.lon.unwrap_or(0.0));
         p.lat = Fixed::from_f64_input(d.lat.unwrap_or(0.0));
         // 阵地：没写就生成一个（省名 + 省地形 + 全宽度），老模块因此不用改。

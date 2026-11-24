@@ -223,6 +223,8 @@ pub fn tick(world: &mut World) {
     run_air(world, now);
     rules.run(world, Phase::PreCombat);
     run_combat(world, seed, now);
+    // 江面上的炮战：舰队之间终于会互相开火了
+    run_naval(world, seed, now);
     rules.run(world, Phase::PostCombat);
     run_morale(world);
     // 断粮：补给见底就真的会死人。放在士气之后——
@@ -274,10 +276,9 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             if np.owner != side {
                 continue;
             }
-            // 补给不走水路：海运补给是另一套机制，这里先跳过
-            if np.terrain == Terrain::Water {
-                continue;
-            }
+            // 补给可以走水道（日军靠长江运补给就是这么来的），
+            // 以前这里是直接跳过——于是"日军靠长江补给"这条史实在引擎里不存在。
+            // 现在水道通，但损耗比铁路大（见下面的 base）。
             // 敌军的行军纵队踩在这条补给线上：过得去，但运不上多少东西。
             //
             // 这条是"切断补给线"的落点。以前只认**归属**：只要省还是我的，
@@ -293,7 +294,16 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             } else {
                 Fixed::ONE
             };
-            let cand = cur_level * decay * np.supply_throughput * pass;
+            // 三种通路三种损耗：铁路 0.95、水道 0.85、普通陆路 0.75。
+            // 有干线的省几乎不掉，这就是"守住铁路"的意义。
+            let base = if np.rail {
+                Fixed::ratio(95, 100)
+            } else if np.terrain == Terrain::Water {
+                Fixed::ratio(85, 100)
+            } else {
+                decay
+            };
+            let cand = cur_level * base * np.supply_throughput * pass;
             if cand > level[nb as usize] {
                 level[nb as usize] = cand;
                 queue.push_back(nb);
@@ -1062,6 +1072,102 @@ fn run_reform(world: &mut World) {
     }
 }
 
+// ---------------------------------------------------------------- 海战
+
+/// 舰队对轰：同处一段水道的两支敌对舰队互相开火。
+///
+/// 以前舰队是"浮动加成器"——两支舰队停在同一段江面上互相看不见，
+/// 这不合理。江面上的战斗是炮战：谁先发现、谁的炮多，谁就能把对方赶走。
+///
+/// 规则刻意简单（第一版）：
+/// - 火力 = 战斗力（兵力 × 士气 × 补给 × 系数），不吃地形、不吃工事；
+/// - 每天双方各损失敌我火力占比的 6%，与陆战同一个量级；
+/// - 士气同时掉。水面没有阵地，打不过就是撤或沉。
+fn run_naval(world: &mut World, seed: u64, now: u32) {
+    const INTENSITY: (i32, i32) = (6, 100);
+
+    // (省, 中方单位, 日方单位)
+    let mut fights: Vec<(u32, Vec<usize>, Vec<usize>)> = Vec::new();
+    for p in 0..world.provinces.len() {
+        if world.provinces[p].terrain != Terrain::Water {
+            continue;
+        }
+        let mut cn = Vec::new();
+        let mut jp = Vec::new();
+        for &i in &world.units_in(p as u32) {
+            let u = &world.units[i as usize];
+            if !u.is_alive() || u.kind != UnitKind::Naval {
+                continue;
+            }
+            match u.side {
+                Side::Cn => cn.push(i as usize),
+                Side::Jp => jp.push(i as usize),
+            }
+        }
+        if !cn.is_empty() && !jp.is_empty() {
+            fights.push((p as u32, cn, jp));
+        }
+    }
+
+    for (p, cn, jp) in fights {
+        let mut cn_power = Fixed::ZERO;
+        for &i in &cn {
+            cn_power += world.units[i].combat_power();
+        }
+        let mut jp_power = Fixed::ZERO;
+        for &i in &jp {
+            jp_power += world.units[i].combat_power();
+        }
+        let total = cn_power + jp_power;
+        if total.is_zero() {
+            continue;
+        }
+        let intensity = Fixed::ratio(INTENSITY.0, INTENSITY.1);
+        let mut cn_loss = jp_power / total * intensity;
+        let mut jp_loss = cn_power / total * intensity;
+        // 炮战也有运气：独立随机流，含省号
+        let mut rc = Rng::derive(seed, stream::COMBAT, now, 9000 + p);
+        let mut rj = Rng::derive(seed, stream::COMBAT, now, 9500 + p);
+        cn_loss = (cn_loss * (Fixed::ratio(8, 10) + rc.unit_fixed() * Fixed::ratio(4, 10)))
+            .clamp(Fixed::ZERO, Fixed::ratio(40, 100));
+        jp_loss = (jp_loss * (Fixed::ratio(8, 10) + rj.unit_fixed() * Fixed::ratio(4, 10)))
+            .clamp(Fixed::ZERO, Fixed::ratio(40, 100));
+
+        let mut cn_lost = Fixed::ZERO;
+        let mut jp_lost = Fixed::ZERO;
+        for &i in &cn {
+            let u = &mut world.units[i];
+            let d = u.strength * cn_loss;
+            u.strength -= d;
+            u.losses += d;
+            u.morale -= cn_loss * Fixed::ratio(5, 10);
+            u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
+            cn_lost += d;
+        }
+        for &i in &jp {
+            let u = &mut world.units[i];
+            let d = u.strength * jp_loss;
+            u.strength -= d;
+            u.losses += d;
+            u.morale -= jp_loss * Fixed::ratio(5, 10);
+            u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
+            jp_lost += d;
+        }
+        if now % 2 == 0 {
+            let where_ = world.provinces[p as usize].name.clone();
+            let a = world.units[cn[0]].name.clone();
+            let b = world.units[jp[0]].name.clone();
+            world.report(
+                crate::world::EventKind::Combat,
+                format!(
+                    "{where_}：{a} 与 {b} 炮战，损失 {:.2} / {:.2} 千",
+                    cn_lost.to_display_f64(),
+                    jp_lost.to_display_f64()
+                ),
+            );
+        }
+    }
+}
 // ---------------------------------------------------------------- 士气
 
 fn run_morale(world: &mut World) {
@@ -1184,6 +1290,27 @@ pub fn naval_support(world: &World, province: u32, side: Side) -> Fixed {
 
 // ---------------------------------------------------------------- 空军打击
 
+
+/// 本方在整个战场上的空中战力占比（0-1）。没有飞机 → 0。
+fn air_share(world: &World, side: Side) -> Fixed {
+    let mut own = Fixed::ZERO;
+    let mut all = Fixed::ZERO;
+    for u in world.units.iter() {
+        if u.kind != UnitKind::Air || !u.is_alive() {
+            continue;
+        }
+        let p = u.strike_power * u.strength;
+        all += p;
+        if u.side == side {
+            own += p;
+        }
+    }
+    if all.is_zero() {
+        Fixed::ZERO
+    } else {
+        own / all
+    }
+}
 /// 空中打击。
 ///
 /// 每 tick，空军对**侦察半径内敌方控制省**的部队造成损耗：地面部队能炸，
@@ -1282,10 +1409,23 @@ fn run_air(world: &mut World, now: u32) {
                 continue;
             }
 
+            // 制空权：本方空中战力占比越高，投弹越从容。
+            // 没有敌机时 share = 1 → 系数 1.0（等于原样）；被完全压制时只剩 0.35。
+            let supremacy = Fixed::ratio(35, 100)
+                + Fixed::ratio(65, 100) * air_share(world, u.side);
             let mut hit = false;
             for &j in &targets {
                 let share = world.units[j].strength / total;
-                let dmg = power * share * Fixed::ratio(EFF.0, EFF.1);
+                // 行军纵队：在路上的部队没有工事、也没散开，最好打。
+                // 106 师团在万家岭被围，一半原因就是行军途中被咬住。
+                let in_column = world.units[j].order.target().is_some()
+                    && world.units[j].order.target() != Some(world.units[j].position);
+                let column = if in_column {
+                    Fixed::ratio(14, 10)
+                } else {
+                    Fixed::ONE
+                };
+                let dmg = power * share * Fixed::ratio(EFF.0, EFF.1) * supremacy * column;
                 strikes.push((i, p, j, dmg));
                 hit = true;
             }
