@@ -231,8 +231,68 @@ fn extract_json(text: &str) -> Option<String> {
     None
 }
 
+/// 从被截断的回复里把字段抠出来。
+///
+/// 模型偶尔会把 JSON 说到一半就断了（输出被截断）。这时整段解析失败，
+/// 但 order / target / dissent 往往已经写出来了——丢掉它等于白问一次。
+/// 所以退一步：按字段名逐个找，缺哪个就不填。
+fn salvage(raw: &str) -> Option<Judgement> {
+    fn field_str(raw: &str, key: &str) -> Option<String> {
+        let pat = format!("\"{key}\"");
+        let at = raw.find(&pat)?;
+        let rest = &raw[at + pat.len()..];
+        let colon = rest.find(':')?;
+        let rest = rest[colon + 1..].trim_start();
+        if let Some(stripped) = rest.strip_prefix('"') {
+            // 读到一个未被转义的引号为止；没有结尾引号就吃到末尾
+            let mut out = String::new();
+            let mut esc = false;
+            for ch in stripped.chars() {
+                if esc {
+                    out.push(ch);
+                    esc = false;
+                } else if ch == '\\' {
+                    esc = true;
+                } else if ch == '"' {
+                    break;
+                } else {
+                    out.push(ch);
+                }
+            }
+            Some(out)
+        } else {
+            None
+        }
+    }
+    fn field_num(raw: &str, key: &str) -> Option<f64> {
+        let pat = format!("\"{key}\"");
+        let at = raw.find(&pat)?;
+        let rest = &raw[at + pat.len()..];
+        let colon = rest.find(':')?;
+        let rest = rest[colon + 1..].trim_start();
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+            .unwrap_or(rest.len());
+        rest[..end].parse().ok()
+    }
+
+    let order = field_str(raw, "order")?.to_lowercase();
+    Some(Judgement {
+        order,
+        target: field_str(raw, "target").filter(|s| !s.trim().is_empty()),
+        dissent: raw.contains("\"dissent\":true") || raw.contains("\"dissent\": true"),
+        confidence: field_num(raw, "confidence").unwrap_or(0.5).clamp(0.0, 1.0),
+        reason: field_str(raw, "reason").unwrap_or_default(),
+        cost: field_str(raw, "cost").unwrap_or_default(),
+    })
+}
+
 fn parse_judgement(raw: &str) -> Result<Judgement, String> {
-    let json = extract_json(raw).ok_or_else(|| format!("回复里没有 JSON：{:.120}", raw))?;
+    let json = match extract_json(raw) {
+        Some(j) => j,
+        // 截断的回复：能救多少救多少
+        None => return salvage(raw).ok_or_else(|| format!("回复里没有 JSON：{:.120}", raw)),
+    };
     let v: serde_json::Value =
         serde_json::from_str(&json).map_err(|e| format!("JSON 解析失败：{e}"))?;
     let order = v
@@ -280,6 +340,8 @@ pub fn ask(cfg: &Config, a: &Ask) -> Result<Judgement, String> {
     let body = serde_json::json!({
         "model": cfg.model,
         "temperature": 0.9,
+        // 给足长度：截断的 JSON 会白白浪费一次调用
+        "max_tokens": 800,
         "messages": [
             { "role": "system", "content": SYSTEM },
             { "role": "user", "content": build_user(a) }

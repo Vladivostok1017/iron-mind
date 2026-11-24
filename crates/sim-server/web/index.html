@@ -23,7 +23,29 @@
   }
   #main { display: grid; grid-template-columns: 1fr 316px; overflow: hidden; }
   #stage { position: relative; background: var(--sea); overflow: hidden; }
-  aside { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; overflow: hidden; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; overflow-y: auto; }
+  /* 公文堆：请示是要人做决定的，视觉上必须比通报重 */
+  .dossier { padding: 8px 11px; margin-bottom: 6px; border-radius: 3px; font-size: 11.5px;
+    border: 1px solid #2a3542; background: #141b23; line-height: 1.5; cursor: default; }
+  .dossier .d-head { display: flex; justify-content: space-between; gap: 8px; color: #9aa6b3; margin-bottom: 3px; }
+  .dossier .d-from { color: #cfd8e3; font-weight: 600; }
+  .dossier .d-body { color: #b6c0cc; }
+  .dossier .d-ask { color: var(--gold); margin-top: 4px; }
+  .dossier .d-act { display: flex; gap: 6px; margin-top: 6px; }
+  .dossier .d-act button { flex: 1; padding: 4px 0; font-size: 11px; cursor: pointer;
+    background: #1d2833; color: #dbe8f5; border: 1px solid #2f3d4d; border-radius: 3px; }
+  .dossier .d-act button.yes { border-color: #4d6b45; color: #b6d8a8; }
+  .dossier .d-act button.no { border-color: #6b4a45; color: #d8ada8; }
+  .dossier.request { border-color: #4a3f22; background: #1b1710; }
+  .dossier.dissent { border-color: #4a2f2b; }
+  .dossier.done { opacity: .55; }
+  /* 部队列表 */
+  .ol { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 11.5px;
+    color: #a8b3c0; cursor: pointer; border-bottom: 1px solid #151b22; }
+  .ol:hover { color: #dbe8f5; background: #141b23; }
+  .ol.sel { color: var(--gold); }
+  .ol .ol-r { color: #6f7a86; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #log { max-height: 200px; }
   #bottom { display: flex; align-items: center; gap: 8px; padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line); }
 
   .crest { width: 26px; height: 26px; border-radius: 3px;
@@ -147,6 +169,16 @@
       <div id="tip"></div>
     </div>
     <aside>
+      <!-- 公文堆：请示（要你批）/ 抗命 / 通报。参照 HOI4，右侧是"军情与部队"，不是流水账。 -->
+      <div class="sec" id="dossier-sec">
+        <h3>公文堆 <span id="dossier-count" style="color:#7c8794;font-weight:400"></span></h3>
+        <div id="dossiers"></div>
+      </div>
+      <!-- 部队列表（HOI4 的 outliner）：不用在图上找单位，直接从列表选 -->
+      <div class="sec">
+        <h3>部队 <span id="outliner-count" style="color:#7c8794;font-weight:400"></span></h3>
+        <div id="outliner"></div>
+      </div>
       <div class="sec" id="node-sec" style="display:none">
         <h3>阵地 <span id="node-prov" style="color:#7c8794;font-weight:400"></span></h3>
         <div id="node-list"></div>
@@ -416,6 +448,7 @@ function render() {
     renderTop();
     renderMap();
     renderNodes();
+    renderOutliner();
     renderPanel();
   } catch (e) {
     console.error(e);
@@ -698,9 +731,143 @@ async function api(path, body) {
     if (selUnit !== null && !allUnits().find((u) => u.index === selUnit)) { selUnit = null; curProv = null; }
     render();
     refreshLlm();
+    refreshReports();
   } catch (e) { toast("连接失败，检查服务是否运行"); }
 }
 
+// 公文堆：请示要人做决定，抗命要追认，通报只读。
+// 数据来自 /api/reports，跟 /api/state 分开取，免得每点一下都把公文重传一遍。
+async function refreshReports() {
+  const box = $("dossiers");
+  if (!box) return;
+  let list = [];
+  try {
+    const j = await (await fetch("/api/reports")).json();
+    list = j.reports || [];
+  } catch (e) { return; }
+
+  const pending = list.filter((r) => r.status === "pending");
+  $("dossier-count").textContent = pending.length ? "· " + pending.length + " 待批" : "";
+  // 顶部红点：HOI4 那套"屏幕上方警示"，不要让人翻栏找
+  const badge = $("pending");
+  if (badge) {
+    badge.textContent = pending.length ? "请示 " + pending.length + " 份待批" : "战报已清";
+    badge.classList.toggle("hot", pending.length > 0);
+  }
+
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = "<div class='ol' style='cursor:default;color:#6f7a86'>暂无公文。将领有异议时会先来请示。</div>";
+    return;
+  }
+  // 只显示最要紧的 4 条：请示优先，其余折叠成一行，否则右栏会被公文吃光
+  const shown = list.filter((r) => r.status === "pending").concat(list.filter((r) => r.status !== "pending")).slice(0, 4);
+  const rest = list.length - shown.length;
+  for (const r of shown) {
+    const d = document.createElement("div");
+    d.className = "dossier " + r.kind + (r.status === "pending" ? "" : " done");
+    const head = document.createElement("div");
+    head.className = "d-head";
+    head.innerHTML = "<span class='d-from'>" + r.unit_name + "·" + r.general + "</span>" +
+      "<span>第" + r.day + "日" + (r.status === "pending" ? "　截止第" + r.deadline + "日"
+        : "　" + ({ approved: "已准", denied: "已驳回", expired: "逾期自决" }[r.status] || r.status)) + "</span>";
+    const body = document.createElement("div");
+    body.className = "d-body";
+    body.textContent = r.text.length > 110 ? r.text.slice(0, 110) + "……" : r.text;
+    body.title = r.text;
+    d.appendChild(head);
+    d.appendChild(body);
+    if (r.kind === "request" && r.status === "pending") {
+      const ask = document.createElement("div");
+      ask.className = "d-ask";
+      ask.textContent = "请示：" + r.title + "　准不准？";
+      d.appendChild(ask);
+      const acts = document.createElement("div");
+      acts.className = "d-act";
+      const yes = document.createElement("button");
+      yes.className = "yes";
+      yes.textContent = "准他改令";
+      yes.onclick = (ev) => { ev.stopPropagation(); answerReport(r.id, "yes"); };
+      const no = document.createElement("button");
+      no.className = "no";
+      no.textContent = "驳回";
+      no.onclick = (ev) => { ev.stopPropagation(); answerReport(r.id, "no"); };
+      acts.appendChild(yes);
+      acts.appendChild(no);
+      d.appendChild(acts);
+    }
+    box.appendChild(d);
+  }
+  if (rest > 0) {
+    const more = document.createElement("div");
+    more.className = "ol";
+    more.style.cursor = "default";
+    more.textContent = "另有 " + rest + " 条已处理公文";
+    box.appendChild(more);
+  }
+}
+
+async function answerReport(id, choice) {
+  try {
+    const r = await fetch("/api/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: id, choice: choice }),
+    });
+    const j = await r.json();
+    if (j.msg) toast(j.msg);
+    if (j.state) S = j.state;
+    render();
+    refreshReports();
+  } catch (e) { toast("批复失败：连不上服务"); }
+}
+
+// 部队列表：HOI4 的 outliner。不用在图上点，直接从列表挑部队。
+function renderOutliner() {
+  const box = $("outliner");
+  if (!box || !S) return;
+  const mine = allUnits().filter((u) => u.mine && u.kind_code !== 2 && u.kind_code !== 3);
+  $("outliner-count").textContent = mine.length ? "· " + mine.length + " 支" : "";
+  box.innerHTML = "";
+  if (!mine.length) {
+    box.innerHTML = "<div class='ol' style='cursor:default;color:#6f7a86'>无可用部队</div>";
+    return;
+  }
+  // 按所在省排，让同一战线的部队挨着
+  const rows = mine.map((u) => {
+    const p = S.provinces.find((q) => (q.units || []).some((x) => x.index === u.index));
+    return { u, p };
+  }).sort((a, b) => (a.p && b.p ? a.p.name.localeCompare(b.p.name) : 0));
+
+  for (const { u, p } of rows) {
+    const d = document.createElement("div");
+    d.className = "ol" + (selUnit === u.index ? " sel" : "");
+    const left = document.createElement("span");
+    left.textContent = u.name + "　" + (p ? p.name : "?") +
+      (p && p.positions && p.positions[u.node] ? "·" + p.positions[u.node].name : "");
+    const right = document.createElement("span");
+    right.className = "ol-r";
+    right.textContent = u.strength.toFixed(1) + " 千 " + u.order;
+    d.appendChild(left);
+    d.appendChild(right);
+    d.title = u.commander + (u.disobeyed ? "（抗命中）" : "");
+    d.onclick = (ev) => {
+      ev.stopPropagation();
+      selUnit = u.index;
+      curProv = p ? p.id : null;
+      nodeProv = null;
+      render();
+    };
+    box.appendChild(d);
+  }
+  if (rest > 0) {
+    const more = document.createElement("div");
+    more.className = "ol";
+    more.style.cursor = "default";
+    more.textContent = "另有 " + rest + " 条已处理公文";
+    box.appendChild(more);
+  }
+}
 // 侧栏显示将领大脑在用谁：真模型 / 模拟 / 规则
 async function refreshLlm() {
   const el = $("k-llm");
@@ -801,6 +968,13 @@ function renderPanel() {
     d.className = "item k-" + r.kind;
     d.textContent = "[" + r.tick + "] " + r.text + (r.n > 1 ? "　×" + r.n : "");
     box.appendChild(d);
+  }
+  if (rest > 0) {
+    const more = document.createElement("div");
+    more.className = "ol";
+    more.style.cursor = "default";
+    more.textContent = "另有 " + rest + " 条已处理公文";
+    box.appendChild(more);
   }
 }
 

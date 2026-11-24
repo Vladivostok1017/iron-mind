@@ -64,6 +64,8 @@ fn main() {
         commands: std::sync::Mutex::new(Vec::new()),
         llm: llm_cfg.clone(),
         brain: llm::Broker::new(llm_cfg),
+        reports: std::sync::Mutex::new(Vec::new()),
+        next_report_id: std::sync::atomic::AtomicU32::new(1),
     });
     {
         let mut w = state.world.lock().unwrap();
@@ -120,6 +122,9 @@ struct ServerState {
     /// 将领的 LLM 配置与后台问询。
     llm: llm::Config,
     brain: llm::Broker,
+    /// 公文堆（请示 / 抗命 / 通报）
+    reports: std::sync::Mutex<Vec<Report>>,
+    next_report_id: std::sync::atomic::AtomicU32,
 }
 
 fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()> {
@@ -204,6 +209,9 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 let w = guard.as_mut().unwrap();
                 for _ in 0..days.min(30) {
                     let day = w.tick;
+                    for n in expire_requests(&state, w, day) {
+                        w.report(sim_core::world::EventKind::Dissent, n);
+                    }
                     // 将领的判断在 tick 边界生效：先落命令，再推演这一天。
                     let notes = drain_ready(&state, w, day);
                     request_due(&state, w);
@@ -288,6 +296,50 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             })
             .to_string();
             respond(&mut stream, 200, "application/json", &body)
+        }
+        ("GET", "/api/reports") => {
+            use serde_json::json;
+            let list = state.reports.lock().unwrap();
+            let arr: Vec<_> = list
+                .iter()
+                .rev()
+                .take(40)
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "day": r.day,
+                        "kind": r.kind,
+                        "unit": r.unit,
+                        "unit_name": r.unit_name,
+                        "general": r.general,
+                        "title": r.title,
+                        "text": r.text,
+                        "options": r.options,
+                        "deadline": r.deadline,
+                        "status": r.status,
+                    })
+                })
+                .collect();
+            drop(list);
+            respond(&mut stream, 200, "application/json", &json!({ "reports": arr }).to_string())
+        }
+        ("POST", "/api/report") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let id = v.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            let approve = v.get("choice").and_then(|x| x.as_str()) == Some("yes");
+            let msg = {
+                let mut guard = state.world.lock().unwrap();
+                let w = guard.as_mut().unwrap();
+                answer_report(&state, w, id, approve)
+            };
+            trace(format!("   批复公文 #{id}：{msg}"));
+            let json = {
+                let guard = state.world.lock().unwrap();
+                let snap = snapshot(guard.as_ref().unwrap());
+                json!({ "ok": true, "msg": msg, "state": serde_json::from_str::<serde_json::Value>(&snap).unwrap_or(json!({})) })
+            };
+            respond(&mut stream, 200, "application/json", &json.to_string())
         }
         ("POST", "/api/save") => {
             use serde_json::json;
@@ -616,6 +668,98 @@ fn latest_save() -> Option<String> {
     best.map(|(_, p)| p)
 }
 
+/// 一条公文。
+///
+/// 参照 HOI4 的布局思路：右侧栏是"部队与军情"，不是流水账。
+/// 将领的话必须分三类，各自有不同处理方式：
+/// - `request` 请示：要玩家点头，**会过期**
+/// - `dissent` 抗命：已经发生，要玩家追认或追责
+/// - `notice` 通报：只读
+#[derive(Clone)]
+struct Report {
+    id: u32,
+    day: u32,
+    kind: &'static str,
+    unit: Option<usize>,
+    unit_name: String,
+    general: String,
+    title: String,
+    text: String,
+    /// 请示里他打算干的事
+    proposed: Option<(String, Option<u32>)>,
+    /// 请示的选项文案
+    options: Vec<String>,
+    deadline: u32,
+    status: &'static str, // pending / approved / denied / expired
+}
+
+/// 追加一条公文，返回 id。
+fn push_report(state: &Arc<ServerState>, mut r: Report) -> u32 {
+    let id = state
+        .next_report_id
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    r.id = id;
+    let mut list = state.reports.lock().unwrap();
+    list.push(r);
+    // 只留最近 60 条，避免无限增长
+    if list.len() > 60 {
+        let drop = list.len() - 60;
+        list.drain(0..drop);
+    }
+    id
+}
+
+/// 到期的请示：**不回答本身就是一个决定**。
+///
+/// 过期后将领按自己的判断办，并记一条"上意未回"。
+/// 这是整套上报机制里最要紧的一条：玩家可以不回话，但代价是失控。
+fn expire_requests(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<String> {
+    let due: Vec<(u32, usize, String, Option<u32>, String, String)> = {
+        let list = state.reports.lock().unwrap();
+        list.iter()
+            .filter(|r| r.status == "pending" && r.kind == "request" && day > r.deadline)
+            .filter_map(|r| {
+                let (kind, target) = r.proposed.clone()?;
+                Some((
+                    r.id,
+                    r.unit?,
+                    kind,
+                    target,
+                    r.unit_name.clone(),
+                    r.general.clone(),
+                ))
+            })
+            .collect()
+    };
+    let mut notes = Vec::new();
+    for (id, unit, kind, target, unit_name, general) in due {
+        if unit >= w.units.len() || !w.units[unit].is_alive() {
+            continue;
+        }
+        let rec = CmdRecord {
+            day,
+            unit,
+            kind: kind.clone(),
+            target,
+            reject: None,
+            source: "llm".into(),
+            reason: "上意未回，本官自决".into(),
+        };
+        state.commands.lock().unwrap().push(rec.clone());
+        apply_record(w, &rec);
+        {
+            let mut list = state.reports.lock().unwrap();
+            if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+                r.status = "expired";
+            }
+        }
+        notes.push(format!(
+            "{unit_name}（{general}）：请示无人答复，已自决改令 {kind}"
+        ));
+    }
+    notes
+}
+
 fn terrain_cn(t: Terrain) -> &'static str {
     match t {
         Terrain::Plain => "平原",
@@ -839,6 +983,35 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             source: "llm".into(),
             reason: j.reason.clone(),
         };
+        // 中方的将领要向上报：抗命不是立刻执行，而是**请你点头**。
+        // 日方由 AI 全权指挥，没有上级可问，直接执行。
+        if w.units[idx].side == Side::Cn {
+            let title = format!("{} {}", kind, j.target.clone().unwrap_or_default());
+            let rid = push_report(
+                state,
+                Report {
+                    id: 0,
+                    day,
+                    kind: "request",
+                    unit: Some(idx),
+                    unit_name: unit_name.clone(),
+                    general: general.clone(),
+                    title: title.trim().to_string(),
+                    text: text.clone(),
+                    proposed: Some((kind.to_string(), target)),
+                    options: vec!["准他改令".into(), "驳回，维持原令".into()],
+                    deadline: day + 2,
+                    status: "pending",
+                },
+            );
+            notes.push((
+                true,
+                format!("{text}〔请示 #{rid}：请裁示是否准他改令〕"),
+            ));
+            continue;
+        }
+
+        // 日方：直接执行，并记一条抗命通报
         let mut trial = w.clone();
         if apply_typed(&mut trial, idx, kind, target).is_some() {
             let tgt = j.target.clone().unwrap_or_else(|| "无".into());
@@ -855,6 +1028,66 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
     notes
 }
 
+/// 玩家批复一条请示。
+fn answer_report(state: &Arc<ServerState>, w: &mut World, id: u32, approve: bool) -> String {
+    let target = {
+        let list = state.reports.lock().unwrap();
+        list.iter()
+            .find(|r| r.id == id)
+            .map(|r| (r.status.to_string(), r.proposed.clone(), r.unit_name.clone(), r.general.clone()))
+    };
+    let Some((status, proposed, unit_name, general)) = target else {
+        return format!("找不到公文 #{id}");
+    };
+    if status != "pending" {
+        return format!("这份公文已经处理过了（{status}）");
+    }
+
+    if !approve {
+        let mut list = state.reports.lock().unwrap();
+        if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+            r.status = "denied";
+        }
+        return format!("已驳回 {unit_name}（{general}）的请示，维持原令");
+    }
+
+    let Some((kind, tgt)) = proposed else {
+        let mut list = state.reports.lock().unwrap();
+        if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+            r.status = "approved";
+        }
+        return format!("已批复 {unit_name} 的请示");
+    };
+
+    // 找到是哪个单位提的（按公文里的 unit 索引）
+    let unit = {
+        let list = state.reports.lock().unwrap();
+        list.iter().find(|r| r.id == id).and_then(|r| r.unit)
+    };
+    let Some(unit) = unit else {
+        return "公文里没有对应单位".into();
+    };
+
+    let rec = CmdRecord {
+        day: w.tick,
+        unit,
+        kind: kind.clone(),
+        target: tgt,
+        reject: None,
+        source: "llm".into(),
+        reason: "经上峰核准".into(),
+    };
+    state.commands.lock().unwrap().push(rec.clone());
+    apply_record(w, &rec);
+    {
+        let mut list = state.reports.lock().unwrap();
+        if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+            r.status = "approved";
+        }
+    }
+    format!("已准 {unit_name}（{general}）改令为 {kind}")
+}
+
 /// 提交到期的问询。同一个单位 `interval_days` 内只问一次，每 tick 最多几单。
 fn request_due(state: &Arc<ServerState>, w: &World) {
     if !state.llm.enabled {
@@ -862,26 +1095,38 @@ fn request_due(state: &Arc<ServerState>, w: &World) {
     }
     let day = w.tick;
     let interval = state.llm.interval_days.max(1);
-    let mut budget = 3usize;
-    for idx in 0..w.units.len() {
-        if budget == 0 {
-            break;
-        }
-        let u = &w.units[idx];
-        if !u.is_alive() || !u.kind.is_ground() {
-            continue;
-        }
-        // 已经问过还没回来的，先等
-        {
-            let asked = state.brain.asked.lock().unwrap();
-            if let Some(&d) = asked.get(&idx) {
+
+    // 先挑出"到期该问"的单位，再按**最久没问过的优先**排队。
+    //
+    // 不这样排会饿死后面的部队：预算只有 3 个，按索引顺序取的话，
+    // 0/1/2 号单位每 tick 都到期，永远占着三个名额，中方部队一次都轮不到。
+    let mut cands: Vec<(u32, usize)> = Vec::new();
+    {
+        let asked = state.brain.asked.lock().unwrap();
+        for idx in 0..w.units.len() {
+            let u = &w.units[idx];
+            if !u.is_alive() || !u.kind.is_ground() {
+                continue;
+            }
+            let last = asked.get(&idx).copied();
+            if let Some(d) = last {
                 if day.saturating_sub(d) < interval {
                     continue;
                 }
             }
+            cands.push((last.unwrap_or(0), idx));
+        }
+    }
+    cands.sort();
+
+    let mut budget = 3usize;
+    for (_, idx) in cands {
+        if budget == 0 {
+            break;
         }
         if let Some(ask) = build_ask(state, w, idx) {
             state.brain.submit(llm::Job { unit: idx, day, ask });
+            trace(format!("   问询 unit#{idx}（第{day}日）"));
             budget -= 1;
         }
     }
