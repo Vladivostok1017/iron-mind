@@ -352,6 +352,21 @@ function project() {
   };
 }
 
+/* ---------- 模块自带的真实省界 ---------- */
+/* 模块可以给一个 provinces_geo.json（用真实县界做的省轮廓）。
+   有就用真形状；没有就退回 Voronoi——两种尺度的模块都能活。 */
+let GEO = null;
+
+async function loadGeo() {
+  try {
+    const r = await fetch("/provinces_geo.json");
+    if (!r.ok) return;         // 这个模块没有真省界，正常
+    const j = await r.json();
+    GEO = j.polygons || null;
+    geom = null;               // 重新算几何
+    render();
+  } catch (e) { console.warn("省界加载失败", e); }
+}
 /* ---------- 真实地理底图 ---------- */
 /* 省份是 Voronoi 切的，形状天然抽象；底下垫一层真实水系（长江、赣江、鄱阳湖），
    地图立刻就能读懂了。数据来自 Natural Earth 1:50m（公有领域），见 tools/mapgen/basemap.js */
@@ -433,6 +448,37 @@ function buildGeom() {
   const cells = {};
   const centroids = {};
   const ids = Object.keys(pts);
+
+  // 真省界优先：直接用模块给的多边形（经投影），不切 Voronoi
+  const centroid = (poly) => {
+    let cx = 0, cy = 0, area = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const cross = p[0] * q[1] - q[0] * p[1];
+      area += cross;
+      cx += (p[0] + q[0]) * cross;
+      cy += (p[1] + q[1]) * cross;
+    }
+    area *= 0.5;
+    if (Math.abs(area) < 1e-6) return [poly[0][0], poly[0][1]];
+    return [cx / (6 * area), cy / (6 * area)];
+  };
+
+  if (GEO) {
+    for (const p of S.provinces) {
+      const rings = GEO[p.id];
+      if (!rings || !rings[0] || rings[0].length < 3) continue;
+      const poly = rings[0].map(([lon, lat]) => proj.pt(lon, lat));
+      cells[p.id] = poly;
+      centroids[p.id] = centroid(poly);
+    }
+    // 水系省份没有面（它按"水道带"画），但质心必须有，否则河带和标签会消失
+    for (const p of S.provinces) {
+      if (!centroids[p.id]) centroids[p.id] = proj.pt(p.lon, p.lat);
+    }
+    geom = { cells, centroids, box, proj };
+    return;
+  }
 
   for (const id of ids) {
     let poly = [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]];
@@ -600,9 +646,11 @@ function renderMap() {
     fill: "#080b0f",
   }, svg);
 
+  // 纸面（底）用水的颜色：真实省界之间会留出河湖的空隙，
+  // 底色是水，这些空隙自然就读成"水面"，而不是"地图缺了一块"
   el("rect", {
     x: bx, y: by, width: bw, height: bh,
-    fill: "#0d141b", stroke: "#1e2833", "stroke-width": 1,
+    fill: "#0a151d", stroke: "#1e2833", "stroke-width": 1,
   }, svg);
 
   // 经纬网（每 0.2 度一格，纯装饰，帮人判断方位与距离）
@@ -1342,6 +1390,7 @@ document.addEventListener("keydown", (e) => {
 async function boot() {
   await api("/api/state");
   if (!BASEMAP) loadBasemap();
+  if (!GEO) loadGeo();
   if (!S) setTimeout(boot, 2000);
 }
 boot();

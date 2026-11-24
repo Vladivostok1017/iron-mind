@@ -332,6 +332,17 @@ node tools/mapgen/gen.js         # 写入 nanxun_1938.imod/map.json
 ---
 
 
+## provinces_geo.json（可选：真实省界）
+
+模块可以带一份 `provinces_geo.json`，用真实行政区划边界当省份轮廓：
+
+```json
+{ "polygons": { "0": [[[lon, lat], ...]], "18": [[[lon, lat], ...]] } }
+```
+
+有它就用真形状，没有前端退回 Voronoi（所以小模块不用做这一步）。
+生成脚本见 `tools/mapgen/boundaries.js`（南浔线用 DataV 县界，75 个省 345 KB）。
+
 ## scale 与 domains（声明这是什么尺度的战役）
 
 `module.json` 里声明，校验器据此决定严格程度。**引擎代码里不区分尺度**，只认省、阵地、单位。

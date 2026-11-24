@@ -55,6 +55,13 @@ fn main() {
         println!("  [警告] {}: {}", w.code, w.message);
     }
 
+    // 模块可以自带真实省界；没有就让前端用 Voronoi 兜底（保持向后兼容）
+    let geo_path = std::path::Path::new(&module_path).join("provinces_geo.json");
+    let provinces_geo = std::fs::read_to_string(&geo_path).ok();
+    if provinces_geo.is_some() {
+        println!("  省界：使用模块自带的真实边界（provinces_geo.json）");
+    }
+
     let llm_cfg = llm::Config::from_env();
     println!("  将领大脑：{}", llm_cfg.describe());
 
@@ -66,6 +73,7 @@ fn main() {
         brain: llm::Broker::new(llm_cfg),
         reports: std::sync::Mutex::new(Vec::new()),
         next_report_id: std::sync::atomic::AtomicU32::new(1),
+        provinces_geo,
         telegrams: std::sync::Mutex::new(Vec::new()),
         next_telegram_id: std::sync::atomic::AtomicU32::new(1),
     });
@@ -127,6 +135,8 @@ struct ServerState {
     /// 公文堆（请示 / 抗命 / 通报）
     reports: std::sync::Mutex<Vec<Report>>,
     next_report_id: std::sync::atomic::AtomicU32,
+    /// 模块自带的真实省界（provinces_geo.json）。没有就退回前端 Voronoi。
+    provinces_geo: Option<String>,
     /// 在途与已送达的电报
     telegrams: std::sync::Mutex<Vec<Telegram>>,
     next_telegram_id: std::sync::atomic::AtomicU32,
@@ -197,6 +207,10 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let text: Vec<String> = tail.into_iter().rev().map(|s| s.to_string()).collect();
             respond(&mut stream, 200, "text/plain; charset=utf-8", &text.join("\n"))
         }
+        ("GET", "/provinces_geo.json") => match &state.provinces_geo {
+            Some(s) => respond(&mut stream, 200, "application/json", s),
+            None => respond(&mut stream, 404, "text/plain", "this module has no provinces_geo.json"),
+        },
         ("GET", "/basemap.json") => {
             respond(&mut stream, 200, "application/json", BASEMAP)
         }
