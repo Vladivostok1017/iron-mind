@@ -135,6 +135,14 @@ pub struct Ask {
     /// 命令来自"统帅部"还是"玩家亲自"
     pub order_from: String,
     pub nodes: Vec<String>,
+    /// 人物志：他是谁
+    pub persona: String,
+    /// 他图什么、怕什么
+    pub agenda: String,
+    /// 职务
+    pub title: String,
+    /// 记忆：他最近说过什么、身上发生了什么（最近 6 条）
+    pub memory: Vec<String>,
 }
 
 const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。你不是助手、不是客服，也不在回答"用户"的提问。
@@ -154,7 +162,20 @@ const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。�
 
 fn build_user(a: &Ask) -> String {
     let mut s = String::new();
-    s.push_str(&format!("第 {} 日。\n", a.day));
+    // 人物志放最前：他是谁，决定他怎么理解后面这些数字
+    if !a.title.is_empty() || !a.persona.is_empty() {
+        s.push_str(&format!("你是谁：{}{}\n", a.title, a.persona));
+    }
+    if !a.agenda.is_empty() {
+        s.push_str(&format!("你在意什么：{}\n", a.agenda));
+    }
+    if !a.memory.is_empty() {
+        s.push_str("你自己近来的事（你说过的话、你遭遇的事）：\n");
+        for m in a.memory.iter().take(6) {
+            s.push_str(&format!("- {m}\n"));
+        }
+    }
+    s.push_str(&format!("\n第 {} 日。\n", a.day));
     s.push_str(&format!(
         "你：{}，{}。兵力 {:.1} 千（满编 {:.1}），士气 {:.2}，补给 {:.2}。\n",
         a.general, a.side, a.strength, a.max_strength, a.morale, a.supply

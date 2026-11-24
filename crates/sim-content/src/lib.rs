@@ -193,7 +193,8 @@ pub fn build_world(module: &LoadedModule) -> World {
                 c.initiative,
                 c.aggression,
                 c.caution,
-            );
+            )
+            .with_persona(&c.title, &c.persona, &c.agenda);
         }
         units.push(unit);
     }

@@ -353,6 +353,18 @@ pub struct CommanderDef {
     /// 谨慎：高的人在劣势时倾向保存实力。
     #[serde(default = "default_half")]
     pub caution: f64,
+    /// 这个人是谁：出身、经历、用兵习惯。**只给 LLM 看，不进模拟**。
+    ///
+    /// 四个数字决定"他会不会抗命"，这一段决定"他抗命时会怎么说、
+    /// 争的是什么"。没有它，模型只能按四个小数臆想一个人。
+    #[serde(default)]
+    pub persona: String,
+    /// 他图什么、怕什么。给模型一个可以拿来权衡私心的抓手。
+    #[serde(default)]
+    pub agenda: String,
+    /// 职务（第几军司令官、师长……），纯展示与提示词用。
+    #[serde(default)]
+    pub title: String,
 }
 
 fn default_half() -> f64 {

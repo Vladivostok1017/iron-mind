@@ -733,6 +733,11 @@ function showTip(ev, p) {
   for (const u of p.units || []) {
     rows.push("<div class='t-row'>" + (u.mine ? "我" : "敌") + "：<b>" + u.name + "</b> " +
       u.strength.toFixed(1) + " 千" + (u.disobeyed ? " ⚠" : "") + "</div>");
+    // 人物志：只给我方单位显示，否则悬停卡片会长得看不下去
+    if (u.mine && u.commander_persona) {
+      rows.push("<div class='t-row' style='color:#8b95a1;line-height:1.5'>" +
+        u.commander_title + "：" + u.commander_persona + "</div>");
+    }
   }
   t.innerHTML = rows.join("");
   t.style.display = "block";

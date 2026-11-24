@@ -634,9 +634,52 @@ fn side_cn(s: Side) -> &'static str {
     }
 }
 
+/// 一个将领的"近事"：他自己下过的判断 + 与他有关的战报。
+///
+/// 为什么要给他记忆：无状态的问询会让同一个将领每天重新掷一次骰子，前言不搭后语。
+/// 有了这几条，他才会说"我前天主张守城垣，今天城垣还没破"。
+/// 这些内容**不进世界状态**，只进提示词——回放靠命令流，不靠记忆。
+fn memory_for(state: &Arc<ServerState>, w: &World, idx: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if idx >= w.units.len() {
+        return out;
+    }
+    let day = w.tick;
+    {
+        let cmds = state.commands.lock().unwrap();
+        for c in cmds
+            .iter()
+            .rev()
+            .filter(|c| c.unit == idx && c.source == "llm")
+            .take(3)
+        {
+            let why: String = c.reason.chars().take(60).collect();
+            let tail = if why.is_empty() {
+                String::new()
+            } else {
+                format!("，理由是「{why}」")
+            };
+            out.push(format!("第{}日 我主张 {}（已执行）{}", c.day, c.kind, tail));
+        }
+    }
+    let name = w.units[idx].name.clone();
+    for e in w
+        .log
+        .iter()
+        .rev()
+        .filter(|e| e.tick + 6 >= day && e.text.contains(&name))
+        .take(3)
+    {
+        let t: String = e.text.chars().take(60).collect();
+        out.push(format!("第{}日 {t}", e.tick));
+    }
+    out.reverse(); // 旧的在前，读起来是时间顺序
+    out
+}
+
 /// 给一个单位准备"问将领"的材料。**只放他自己知道的东西**：
 /// 邻接敌情用的是本方情报估计，不是真值。
-fn build_ask(w: &World, idx: usize) -> Option<llm::Ask> {
+fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize) -> Option<llm::Ask> {
     let u = w.units.get(idx)?;
     if !u.is_alive() || !u.kind.is_ground() {
         return None;
@@ -676,6 +719,10 @@ fn build_ask(w: &World, idx: usize) -> Option<llm::Ask> {
         order_label: u.order.label().to_string(),
         order_from: if u.manual { "玩家亲自" } else { "统帅部" }.to_string(),
         nodes: p.positions.iter().map(|n| n.name.clone()).collect(),
+        persona: u.commander.persona.clone(),
+        agenda: u.commander.agenda.clone(),
+        title: u.commander.title.clone(),
+        memory: memory_for(state, w, idx),
     })
 }
 
@@ -763,17 +810,22 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             _ => "固守",
         };
 
+        // 报告里带上他自己的把握程度：玩家看到的是"他有多大信心"，不是一个已定事实
+        let grip = format!("（把握 {:.0}%）", j.confidence * 100.0);
         let text = if j.reason.is_empty() {
-            format!("{unit_name}（{general}）{kind}")
+            format!("{unit_name}（{general}）{kind}{grip}")
         } else if j.cost.is_empty() {
-            format!("{unit_name}（{general}）：{}", j.reason)
+            format!("{unit_name}（{general}）：{}{grip}", j.reason)
         } else {
-            format!("{unit_name}（{general}）：{}（代价：{}）", j.reason, j.cost)
+            format!("{unit_name}（{general}）：{}（代价：{}）{grip}", j.reason, j.cost)
         };
+        // 模型自己也认为与命令不一致时，即使结果同向也标出来：那是"有异议但照办了"
+        let misgiving = j.dissent && same;
 
         if same {
             // 同意上级：不改命令，只表态
-            notes.push((false, text));
+            let t = if misgiving { format!("{text}〔有异议，仍照办〕") } else { text };
+            notes.push((false, t));
             continue;
         }
 
@@ -789,8 +841,11 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         };
         let mut trial = w.clone();
         if apply_typed(&mut trial, idx, kind, target).is_some() {
-            let e = "将领给出的命令不合法（已在预演中被拒）";
-            notes.push((false, format!("{unit_name}（{general}）{e}")));
+            let tgt = j.target.clone().unwrap_or_else(|| "无".into());
+            notes.push((
+                false,
+                format!("{unit_name}（{general}）提出的「{kind} {tgt}」不合法，已驳回"),
+            ));
             continue;
         }
         state.commands.lock().unwrap().push(rec.clone());
@@ -825,7 +880,7 @@ fn request_due(state: &Arc<ServerState>, w: &World) {
                 }
             }
         }
-        if let Some(ask) = build_ask(w, idx) {
+        if let Some(ask) = build_ask(state, w, idx) {
             state.brain.submit(llm::Job { unit: idx, day, ask });
             budget -= 1;
         }
@@ -864,6 +919,8 @@ fn snapshot(w: &World) -> String {
                     "index": ui,
                     "name": u.name,
                     "commander": u.commander.name,
+                    "commander_title": u.commander.title,
+                    "commander_persona": u.commander.persona,
                     "kind": u.kind.label(),
                     "kind_code": u.kind.code(),
                     "side": if mine { "cn" } else { "jp" },

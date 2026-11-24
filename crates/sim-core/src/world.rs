@@ -577,6 +577,12 @@ pub struct Commander {
     pub initiative: Fixed,
     pub aggression: Fixed,
     pub caution: Fixed,
+    /// 人物志：出身、经历、用兵习惯。只给 LLM 读，不参与模拟，也不进状态哈希。
+    pub persona: String,
+    /// 他图什么、怕什么。
+    pub agenda: String,
+    /// 职务。
+    pub title: String,
 }
 
 impl Commander {
@@ -588,6 +594,9 @@ impl Commander {
             initiative: Fixed::ZERO,
             aggression: Fixed::ratio(5, 10),
             caution: Fixed::ratio(5, 10),
+            persona: String::new(),
+            agenda: String::new(),
+            title: String::new(),
         }
     }
 
@@ -598,7 +607,18 @@ impl Commander {
             initiative: Fixed::from_f64_input(initiative).clamp(Fixed::ZERO, Fixed::ONE),
             aggression: Fixed::from_f64_input(aggression).clamp(Fixed::ZERO, Fixed::ONE),
             caution: Fixed::from_f64_input(caution).clamp(Fixed::ZERO, Fixed::ONE),
+            persona: String::new(),
+            agenda: String::new(),
+            title: String::new(),
         }
+    }
+
+    /// 挂上人物志（只给 LLM 用）。
+    pub fn with_persona(mut self, title: &str, persona: &str, agenda: &str) -> Self {
+        self.title = title.to_string();
+        self.persona = persona.to_string();
+        self.agenda = agenda.to_string();
+        self
     }
 
     /// 这是不是个"听话"的将领（用于战报分级）。
