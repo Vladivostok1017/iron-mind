@@ -1,31 +1,39 @@
-# 如何做一个战役模块
+# 模块开发手册
 
-模块就是一个目录，里面四个 JSON 文件。**不需要写代码**。
-
-```
-mymod.imod/
-├─ module.json     元数据
-├─ scenario.json   战役定义
-├─ map.json        地图
-└─ oob.json        部队
-```
-
-做好了把整个目录压成 zip，改后缀为 `.imod`，就是可分发的模块。
+> 这是**内容的全部契约**。引擎只提供框架：地图、编制、将领、规则、结局全部由模块声明。
+> 读完这份文档，你不需要写一行 Rust 就能做出一个战役。
+>
+> 字段名、默认值、校验码以 `crates/sim-content/src/model.rs` 和 `validate.rs` 为准；
+> 两者不一致，以代码为准，并请报 bug。
 
 ---
 
-## 快速开始
+## 0 三十秒版
+
+一个模块 = 一个目录，四个 JSON。**不需要写代码、不需要编译**。
 
 ```
-1. 复制 content/scenarios/nanxun_1938.imod 为 mymod.imod
-2. 改 module.json 里的 id 和 name（id 必须全局唯一）
-3. 改 map.json 的省份、oob.json 的部队
-4. 跑 cargo run -p sim-testbed -- --module mymod.imod 看能不能通过校验
+mymod.imod/              ← 目录名随便起，.imod 只是约定，不是压缩包
+├─ module.json           元数据（这是什么战役、谁在打、敌方统帅是谁）
+├─ scenario.json         战役定义（几天、种子、通信、规则、结局）
+├─ map.json              省份、地形、邻接、补给源
+├─ oob.json              部队：番号、兵力、位置、将领
+└─ provinces_geo.json    （可选）真实省界多边形，没有就用抽象多边形
 ```
+
+做完之后，在游戏里「新的战役 → 导入模块…」选这个目录就能玩；
+作者自己调试用 `cargo run -p sim-testbed -- --module 路径`。
+
+> **`.imod` 不是 zip。** 引擎读的是目录。旧文档写"压成 zip 改后缀"，那是错的，
+> 压过之后就加载不了——目录名带 `.imod` 只是为了让它在文件管理器里像个整体。
 
 ---
 
-## module.json
+## 1 最小可加载模块
+
+四个文件都写全，就能通过校验。复制成新目录、改个 `id` 就是你的模块。
+
+**module.json**
 
 ```json
 {
@@ -33,179 +41,208 @@ mymod.imod/
   "name": "我的战役",
   "version": "0.1.0",
   "author": "你的名字",
-  "description": "一句话说明",
-  "engine": { "min": "0.1.0" },
+  "description": "一句话说明。会显示在首页的战役卡上。",
+  "engine": { "min": "0.10.0" },
   "content_schema": 1,
-  "playable_side": "cn"
+  "playable_side": "cn",
+  "scale": "theater",
+  "domains": ["land"]
 }
 ```
 
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `id` | 是 | 全局唯一，建议反向域名 |
-| `engine.min` | 是 | 需要的最低引擎版本 |
-| `engine.max` | 否 | 最高支持版本，超出会警告 |
-| `content_schema` | 是 | 模块格式版本，当前是 1 |
-| `playable_side` | 否 | 玩家操作的一方，`cn` 或 `jp`，默认 `cn` |
+**map.json**（三个省一条线）
 
-**注意版本**：引擎升级时不会静默破坏你的模块。不兼容会明确告诉你"需要 0.4.x，当前 0.6.0"。
+```json
+{
+  "bbox": [115.9, 29.0, 116.3, 29.6],
+  "projection": "wgs84",
+  "provinces": [
+    { "id": 0, "name": "甲", "terrain": "plain", "owner": "jp",
+      "supply_source": true, "neighbors": [1], "lon": 116.0, "lat": 29.5 },
+    { "id": 1, "name": "乙", "terrain": "hill", "owner": "cn",
+      "neighbors": [0, 2], "lon": 116.1, "lat": 29.3 },
+    { "id": 2, "name": "丙", "terrain": "urban", "owner": "cn",
+      "supply_source": true, "neighbors": [1], "lon": 116.2, "lat": 29.1 }
+  ]
+}
+```
 
----
+**oob.json**
 
-## scenario.json
+```json
+{
+  "units": [
+    { "id": "jp.1", "name": "第1联队", "side": "jp", "strength": 3.0,
+      "position": 0, "stance": "attack", "effectiveness": 1.4, "supply_reach": 0.45 },
+    { "id": "cn.1", "name": "第1师", "side": "cn", "strength": 8.0,
+      "position": 2, "stance": "defend", "effectiveness": 1.0, "supply_reach": 0.12 }
+  ]
+}
+```
+
+**scenario.json**
 
 ```json
 {
   "id": "scen.mymod",
   "name": "我的战役",
   "start_date": "1938-07-26",
-  "days": 77,
-  "seed": 20250924
+  "days": 30,
+  "seed": 1,
+  "comms": { "preset": "radio" }
+}
+```
+
+验证：
+
+```powershell
+cargo run -q --release -p sim-testbed -- --module 路径\mymod.imod --ticks 30
+```
+
+跑通就说明数据合法。`--units` 看每 15 天的部队状态，`--trace 第101师团` 逐 tick
+打某个单位的位置序列（"敌人怎么跑到我后方去了"这类问题只能看时序，不能看快照）。
+
+---
+
+## 2 module.json
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 全局唯一，反域名。**决定导入时的目录名**（取最后一段） |
+| `name` | 是 | 显示名。首页战役卡、顶栏都用它 |
+| `version` | 是 | 模块自己的版本 |
+| `description` | 否 | 首页战役卡的正文。写清"这是哪一仗、你扮演谁" |
+| `author` | 否 | 署名 |
+| `engine.min` | 是 | 需要的最低引擎版本，如 `0.10.0` |
+| `engine.max` | 否 | 最高支持版本。不填就一直不管 |
+| `content_schema` | 否 | 模块格式版本，当前 `1`。高于引擎支持值会报 `meta.future_schema` |
+| `playable_side` | 否 | 玩家操作的一方：`cn` / `jp`，默认 `cn`。**当前只支持单方可玩** |
+| `scale` | 否 | `theater`（默认）/ `battle` / `siege` / `naval`。只影响校验严格程度 |
+| `domains` | 否 | `["land","naval","air"]` 的子集。声明了却没有对应单位会报错/告警 |
+| `hq` | 否 | **非玩家阵营的统帅部（AI 玩家）**，见下 |
+
+### 什么是 `hq`
+
+"敌方也有一个玩家"的实现：一个有目标、有性格的 LLM 指挥官，会按自己的方针
+给自己的师团下命令——走的是**和玩家一样的通道**（电报 → 师团长判断 → 执行），
+所以师团长照样可以不听他的。
+
+```json
+"hq": {
+  "name": "岡村寧次",
+  "title": "第11军司令官",
+  "persona": "情报参谋出身……用兵讲章法，不爱为抢功而分兵；对后勤与气象极敏感。",
+  "agenda": "他想打通南浔线，但更怕师团被各个击破——第106师团在万家岭陷进去过一次。",
+  "objectives": [
+    "沿铁路南下夺取德安，打开通往南昌的门户",
+    "保护长江水路补给线",
+    "避免单个师团孤军深入"
+  ]
 }
 ```
 
 | 字段 | 说明 |
 |---|---|
-| `days` | 战役长度。目前只做展示，不影响模拟 |
-| `seed` | 随机种子。填 0 或省略时由模块 id 派生，保证同模块同结果 |
+| `name` / `title` | 谁、什么职务。会出现在战报与指挥链里 |
+| `persona` | 他是什么人、怎么打仗。决定他的判断风格 |
+| `agenda` | 他要什么、怕什么。决定他会不会为抢功而冒险 |
+| `objectives` | 战役目标，按优先级。每天开会时喂给他 |
+
+不写 `hq`，敌方就只有师团长各自为战。**写它，敌军才会像一个整体在打仗。**
 
 ---
 
-## map.json
+## 3 map.json
 
 ```json
 {
   "bbox": [115.7, 28.6, 116.3, 29.9],
   "projection": "wgs84",
-  "provinces": [
-    {
-      "id": 0,
-      "name": "九江",
-      "terrain": "plain",
-      "owner": "jp",
-      "supply_source": true,
-      "fort": 0,
-      "supply_throughput": 1.0,
-      "neighbors": [1, 5],
-      "victory_points": 3,
-      "prototype": null,
-      "note": "出处备注"
-    }
-  ]
+  "provinces": [ { "...": "见下" } ]
 }
 ```
+
+| 顶层字段 | 说明 |
+|---|---|
+| `bbox` | 西/南/东/北。用于地图自动取景，不写也能跑 |
+| `projection` | 目前只支持 `wgs84`（等距圆柱投影），不写当 `wgs84` |
 
 ### 省份字段
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `id` | 是 | **必须从 0 连续**，引擎按索引访问 |
-| `name` | 是 | 显示名 |
+| `id` | 是 | **必须 0..n-1 连续**，引擎按索引访问 |
+| `name` | 是 | 显示名。战报里点名靠它，也是将领认地名的唯一依据 |
 | `terrain` | 是 | `plain` / `hill` / `mountain` / `marsh` / `water` / `urban` |
-| `owner` | 是 | `cn` / `jp`。当前必须填，不能留空 |
-| `supply_source` | 否 | 补给源。每方**至少一个** |
-| `fort` | 否 | 工事 0-5，越界报错 |
-| `supply_throughput` | 否 | 0-1，该省传递补给的能力 |
-| `neighbors` | 是 | 邻接省 id。**必须双向** |
-| `victory_points` | 否 | 战役要点权重（目前只做标注） |
-| `prototype` | 否 | 地形原型，见下 |
-| `note` | 否 | 资料来源备注，强烈建议写 |
+| `owner` | 是 | `cn` / `jp`，不能留空（`map.unowned_province`） |
+| `neighbors` | 是 | 邻接省 id，**必须双向**，最多 12 个 |
+| `supply_source` | 否 | 补给源。**每一方至少一个** |
+| `rail` | 否 | 有铁路/公路干线，补给沿它传几乎不掉（×0.95），**地图上会画出来** |
+| `supply_throughput` | 否 | 0-1，默认 1.0。这个省的转运能力，越小越拖后腿 |
+| `fort` | 否 | 0-5 初始工事 |
+| `victory_points` | 否 | 要点权重，目前只做标注 |
+| `prototype` | 否 | 地形原型，目前只做标注（见下） |
+| `positions` | 否 | 省内阵地，不写自动生成一个 |
+| `lon` / `lat` | 否 | 经纬度。不写就摆不好地图（前端靠它定位与取景） |
+| `elev` / `relief` | 否 | 平均海拔、相对高差（米）。**模拟不读**，只用来解释"为什么这里是山地" |
+| `note` | 否 | 出处备注。值得写 |
 
-### 地形原型
-
-从战场推演里提炼的十种要点类型，目前只做标注，将来会驱动战斗解算：
-
-| 原型 | 含义 | 典型 |
-|---|---|---|
-| `ridge_line` | 山脊线，两侧不可迂回 | 富金山、小界岭 |
-| `river_ridge` | 沿江狭长山脊，一线天 | 长山 |
-| `pocket` | 背水口袋，三面水一面山 | 田家镇 |
-| `isolated_height` | 孤立高地，两坡可上 | 张古山 |
-| `village_node` | 村落要点 | 孔家祠 |
-| `road_cut` | 公路截断点 | 松阳桥 |
-| `city_gate` | 城垣单点突破 | 瑞昌东门 |
-| `beachhead` | 湖岸滩头 | 姑塘 |
-| `encircle_gap` | 围三缺一 | 万家岭 |
-| `retreat_fan` | 多路撤退 | 小界岭转进 |
-
-### 地形效果
+### 地形与地形原型
 
 | 地形 | 防御乘数 | 说明 |
 |---|---|---|
-| plain | 1.0 | |
-| hill | 1.2 | |
-| mountain | 1.4 | |
-| marsh | 1.1 | |
-| water | 1.6 | |
-| urban | 1.3 | |
+| `plain` | 1.0 | |
+| `hill` | 1.2 | |
+| `mountain` | 1.4 | 行军慢、有非战斗减员 |
+| `marsh` | 1.1 | |
+| `water` | 1.6 | 只有海军能进 |
+| `urban` | 1.3 | |
 
-工事每级额外 +0.15。
+工事每级再 +0.15。
 
----
+`prototype` 是从战场推演里提炼的要点类型，目前只做标注：
+`ridge_line` / `river_ridge` / `pocket` / `isolated_height` / `village_node` /
+`road_cut` / `city_gate` / `beachhead` / `encircle_gap` / `retreat_fan`。
 
-## 邻接表怎么来（生成器）
-
-`tools/mapgen/gen.js` 是一份引导工具：给它"地名 + 经纬度 + 地形 + 归属"的清单，
-它用 **Delaunay 三角剖分**算出邻接，直接写出 `map.json`。
-
-为什么要用 Delaunay：前端把省份画成多边形用的是 Voronoi（见 `docs/04` 附录 B），
-而 **Voronoi 的邻接恰好就是 Delaunay 的边**。所以生成的邻接表和你在屏幕上看到的
-"这两块挨着"天然一致。手写邻接表做不到这一点，而且很容易 A 写了 B、B 忘了 A，
-触发 `map.asymmetric_neighbor`。
-
-```bash
-node tools/mapgen/gen.js --dry   # 只打印统计（省份数/边数/度数分布/警告）
-node tools/mapgen/gen.js         # 写入 nanxun_1938.imod/map.json
-```
-
-生成之后 `map.json` 就是唯一真相。后续手改省份**不必再跑它**——跑一次会覆盖手改。
-
-### 引擎对地图的两条硬约束
-
-1. **一个省最多容纳 3 个地面单位**（`systems::STACK_LIMIT`）。
-   省切得太少，部队会挤成一堆，地图上会出现"七个师在一个山头"。
-2. **邻接有敌军时不能占领**（`systems::enemy_adjacent`）。
-   所以"绕过守军去涂色"是不成立的。这也是为什么地图必须留出可以迂回的省份，
-   而不是一条从九江到南昌的直线。
-
-### 阵地（`positions`）
+### 阵地（positions）
 
 省是**作战**尺度（约 35 公里），阵地是**战术**尺度（2-5 公里）。
-一个省可以不写 `positions`（引擎自动生成一个，省名 + 省地形 + 全宽度），
-写了之后战斗、工事、调兵都在阵地粒度上进行。
+不写 `positions` 就自动生成一个（省名 + 省地形 + 全宽），所以小模块不用管。
 
 ```json
 {
   "id": 18, "name": "万家岭", "terrain": "mountain",
   "positions": [
     { "name": "张古山", "terrain": "mountain", "width": 0.4 },
-    { "name": "扁担山", "terrain": "mountain", "width": 0.6 },
-    { "name": "哔叽岭", "terrain": "mountain", "width": 0.5 }
+    { "name": "扁担山", "width": 0.6 },
+    { "name": "哔叽岭", "width": 0.5, "fort": 2 }
   ]
 }
 ```
 
 | 字段 | 说明 |
 |---|---|
-| `name` | 阵地名。会出现在单位牌、悬停卡片、战报里 |
-| `terrain` | 阵地地形，不写就沿用省地形 |
-| `width` | **展开正面 0.2-1.0**。每方战力先按 `width × 40 千人` 封顶，再乘地形与工事——多出来的兵只能当预备队。窄阵地 = 只能硬啃 |
-| `fort` | 初始工事 0-5，之后由「筑工事」命令提升 |
+| `name` | 阵地名。出现在单位牌、悬停卡、战报里 |
+| `terrain` | 不写就沿用省地形 |
+| `width` | **展开正面 0.2-1.0**。每方战力先按 `width × 40 千人` 封顶，多出来的只能当预备队。窄阵地 = 只能硬啃 |
+| `fort` | 初始工事 0-5，之后靠「筑工事」命令提升（三日一级） |
 
-什么时候该拆阵地：两个地名相距不到 10 公里，做成两个省会打不出"反复易手"，
-做成一个省的两个阵地才有意义。**省的数量由行军速度定，阵地的有无由战场形态定。**
+判断标准：**省的数量由行军速度定，阵地的有无由战场形态定。**
+两个地名相距不到 10 公里，做成两个省会打不出"反复易手"，做成一个省的两个阵地才有意义。
 
-### 三条原地命令（玩家侧）
+### 地图的四条硬约束（都直接影响玩法）
 
-| 命令 | 作用 |
-|---|---|
-| 筑工事 | 原地挖，三日一级，工事记在当前**阵地**上；敌军进同省自动停 |
-| 整补 | 原地恢复补给与士气 |
-| 换阵地 | 省内把部队从 A 阵地挪到 B 阵地，**不耗天数**——这是预备队的用法 |
+1. **一个省每方最多 3 个地面单位**（`STACK_LIMIT`）。省太少 → 部队挤成一堆。
+2. **邻接有敌军时不能占领**。所以"绕过守军去涂色"不成立。
+3. **地面部队不能在空省里穿行深入敌后**：进入敌占省要求这一省挨着本方控制区
+   （或者省里有敌军——那是进攻，不拦）。想深入就得一省一省占下来。
+4. **补给要从补给源沿己方省份走得到**，否则那个省里的部队直接断粮。
 
-玩家的命令会锁住该单位（`manual`），AI 不再覆盖；推进/进攻到点后自动交还 AI。
+→ 所以地图必须留出**可以迂回的省**，而不是一条从九江到南昌的直线。
 
-## oob.json
+---
+
+## 4 oob.json
 
 ```json
 {
@@ -215,11 +252,26 @@ node tools/mapgen/gen.js         # 写入 nanxun_1938.imod/map.json
       "name": "第106师团",
       "side": "jp",
       "parent": "第11军",
+      "kind": "infantry",
       "strength": 16.0,
       "position": 0,
-      "effectiveness": 2.5,
+      "stance": "attack",
+      "effectiveness": 1.5,
+      "supply_reach": 0.45,
       "estimated": true,
-      "note": "松浦淳六郎，史实约1.6万人"
+      "reform_days": 20,
+      "reform_ratio": 0.5,
+      "commander": {
+        "name": "松浦淳六郎",
+        "title": "第106师团长",
+        "obedience": 0.8,
+        "initiative": 0.5,
+        "aggression": 0.6,
+        "caution": 0.55,
+        "persona": "熊本人，做过第6师团旅团长，熟悉山地战……",
+        "agenda": "第106是新编师团，他急于一战立威，敢把部队往深山里带。"
+      },
+      "note": "史实约 1.6 万人"
     }
   ]
 }
@@ -228,24 +280,41 @@ node tools/mapgen/gen.js         # 写入 nanxun_1938.imod/map.json
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `id` | 是 | 模块内唯一 |
-| `name` | 是 | 显示名 |
+| `name` | 是 | 显示名。**玩家发电报就是点这个名字**，写番号不是人名 |
 | `side` | 是 | `cn` / `jp`，**双方都必须有单位** |
-| `strength` | 是 | **千人**。`16.0` = 16000 人。口径见下 |
+| `strength` | 是 | **千人**。`16.0` = 一万六千人；写 `16000` 就是一千六百万 |
 | `position` | 是 | 所在省 id |
-| `effectiveness` | 否 | 战斗力系数，默认 1.0。见下 |
-| `supply_reach` | 否 | 补给延伸能力 0-1，默认 0（纯人力）。见下 |
-| `commander` | 否 | 将领。留空则用完全服从的默认将领 |
-| `estimated` | 否 | 是否推断值。`false` 表示有确切记载 |
+| `kind` | 否 | `infantry`（默认）/ `armor` / `air` / `naval` |
+| `stance` | 否 | `attack`（默认）/ `defend`，见下 |
+| `effectiveness` | 否 | 战斗力系数，默认 1.0 |
+| `supply_reach` | 否 | 补给延伸能力 0-1，默认 0 |
 | `parent` | 否 | 上级番号，只做展示 |
-| `stance` | 否 | 作战姿态，默认 `attack`。见下 |
+| `estimated` | 否 | 是否推断值。`false` 表示有确切记载 |
+| `reform_days` | 否 | 覆灭后多少天可在后方重新成军。**0 = 不可重建** |
+| `reform_ratio` | 否 | 重建后补到满编的几成（0.5 = 五成） |
+| `recon_radius` | 否 | 航空侦察半径（跳数）。仅 `air` |
+| `strike_power` | 否 | 空中打击强度。仅 `air`，0 表示只侦察 |
+| `commander` | 否 | 将领。不写就是完全服从的默认将领 |
+| `note` | 否 | 出处备注 |
 
-### 关于 strength 的口径（1938 年国军）
+### stance：为什么防守方不会自己跑掉
 
-这一条踩过一个大坑：最初把国军的军写成 8–15 千，比日军一个师团还少，
-于是"中国兵多、装备差"这个基本事实在数据里是**反的**——国军比日军还少，
-怎么打都输，玩家一上手就发现没法玩。
+AI 默认"邻接有敌就进攻，没有就朝最近敌人推进"。给防守方也套这套逻辑，它会
+**主动放弃阵地去迎敌**——兵力再多也守不住，因为守军全在路上。
 
-史实口径（推演用近似值）：
+| 值 | 行为 |
+|---|---|
+| `attack`（默认） | 邻接有敌省就进攻；没有就朝最近的敌人推进。适合进攻方 |
+| `defend` | 守在原地、吃地形与工事加成；反攻交给玩家（或将领抗命） |
+
+**引擎不认国家，只认姿态。**"这一方该守"是史实知识与玩法设计，属于模块。
+
+### strength 的口径（最容易写错的一处）
+
+这条踩过一个大坑：最初把国军的军写成 8–15 千，比日军一个师团还少，于是
+"中国兵多、装备差"这个基本事实在数据里是**反的**——国军比日军还少，怎么打都输。
+
+史实近似值（推演用）：
 
 | 单位 | 实有兵力 |
 |---|---|
@@ -254,313 +323,150 @@ node tools/mapgen/gen.js         # 写入 nanxun_1938.imod/map.json
 | 日军一个常备师团 | 约 20–25 千 |
 | 日军一个支队/旅团 | 约 4–6 千 |
 
-所以**国军总兵力应当明显多于日军**（本模块 159.8 千 vs 96.5 千 = 1.66 倍），
-而单兵战斗力靠 `effectiveness` 拉开代差（国军 0.9–1.15，日军 1.4–1.7）。
-再加上国军 `supply_reach` 低（0.1–0.16，纯人力挑运）、日军高（0.45–0.5，汽车与铁路），
-才是"人多却打得极苦"的真实结构。
+所以**国军总兵力应当明显多于日军**（南浔线模块：159.8 千 vs 96.5 千 = 1.66 倍），
+代差靠 `effectiveness` 拉开。校验器在"可玩方兵力少于敌方"时报
+`balance.lopsided`——那不是引擎的平衡表，是给作者的体检提醒。
 
-校验器会在"可玩方兵力少于敌方"时报 `balance.lopsided` 警告——
-那不是引擎的平衡表，是给作者的体检提醒：多半是序列数据写错了。
+### effectiveness 与 supply_reach：两把不同的刀
 
-
-### 关于 stance（作战姿态）
-
-只影响 AI 怎么下命令，不影响战斗数值。**引擎不认国家，只认姿态**——
-"这一方该守"是史实知识与玩法设计，属于模块。
-
-| 值 | 行为 |
+| `effectiveness` | 建议 |
 |---|---|
-| `attack`（默认） | 邻接有敌省就进攻；没有就朝最近的敌人推进 |
-| `defend` | 守在原地不动，吃地形与工事加成。反攻交给玩家（或将领抗命） |
+| 日军常备师团 | 1.4–1.7 |
+| 日军支队 | 1.3–1.5 |
+| 国军中央军 | 0.9–1.15 |
+| 国军地方部队 | 0.6–0.8 |
 
-为什么要有这一条：AI 的默认逻辑是"朝最近的敌人走"。给防守方也套这套逻辑，
-它会主动放弃阵地去迎敌——**兵力再多也守不住**，因为守军全在路上。
-南浔线这个模块里，国军全部是 `defend`，日军全部是 `attack`。
-
-```json
-{ "id": "cn.74", "name": "第74军", "side": "cn", "stance": "defend", ... }
-```
-
-### 关于 supply_reach
-
-表示"把补给不足的缺口补上多少"。机械化、汽车运输、铁路网越强，值越高。
-
-| 部队 | 建议 |
+| `supply_reach` | 建议 |
 |---|---|
-| 日军（有汽车与铁路） | 0.40-0.50 |
-| 国军中央军 | 0.14-0.18 |
-| 国军地方部队 | 0.08-0.12 |
+| 日军（汽车 + 铁路 + 水路） | 0.45–0.50 |
+| 国军中央军（人力挑运） | 0.14–0.18 |
+| 国军地方部队 | 0.08–0.12 |
 
-这是武汉会战最关键的后勤不对称。**别让双方共用一套衰减**——那等于抹掉了机械化部队对人力挑夫的优势。
+`effectiveness` 是装备与训练的代差；`supply_reach` 是"能把补给缺口补上多少"。
+**别让双方共用一套补给衰减**——那等于抹掉了机械化部队对人力挑夫的优势。
 
-### 关于 commander（将领）
+⚠️ `effectiveness` 有阈值效应：调到某个点以下进攻方全灭，调上去就碾压，中间过渡很窄。
+这是战斗模型还浅导致的，别指望靠调参做出拉锯。
 
-这是"意图式指挥"的核心。上级（统帅部或玩家）给的是**意图**，将领做的是**解释**：
-
-```json
-"commander": {
-  "name": "波田重一",
-  "obedience": 0.70,
-  "initiative": 0.70,
-  "aggression": 0.85,
-  "caution": 0.25
-}
-```
+### 将领：四个数字 + 三段文本
 
 | 字段 | 含义 |
 |---|---|
 | `obedience` | 服从度。越低越可能抗命、打折扣 |
 | `initiative` | 主动性。越高越可能自行改变目标 |
 | `aggression` | 进攻倾向。高的人愿意强攻，低的人偏好稳守 |
-| `caution` | 谨慎。高的人在劣势时倾向保存实力 |
-| `title` | 职务（第106师团长）。只给 LLM 看 |
+| `caution` | 谨慎。高的人劣势时倾向保存实力 |
+| `title` | 职务。只给 LLM 看 |
 | `persona` | 人物志：出身、经历、用兵习惯。只给 LLM 看 |
 | `agenda` | 他图什么、怕什么。只给 LLM 看——**这是让将领有私心的关键** |
 
-`title` / `persona` / `agenda` 三段文本**不参与模拟**（不进 `state_hash`），
-只在接 LLM 时进提示词。没有它们，模型只能按四个小数臆想一个军官；
-有了它们，它才会自己想到"这是临时编成的师团，装备最差，不能当消耗品用"。
-
-```json
-"title": "第106师团长",
-"persona": "熊本人，做过第6师团旅团长，熟悉山地战。性好冒险，常说“山地里人少反而好办事”。",
-"agenda": "第106是新编师团，他急于一战立威，敢把部队往深山里带——这是他的贪，也是他的死穴。"
-```
+四个数字参与模拟（进 `state_hash`）；三段文本**不参与模拟**，只在接模型时进提示词。
+没有它们，模型只能按四个小数臆想一个军官；有了它们，它才会自己想到
+"这是临时编成的师团，装备最差，不能当消耗品用"。
 
 写法建议：`persona` 写"他是怎么打仗的人"，`agenda` 写"他为什么可能不听你的"。
-两条都要具体到能拿来权衡，不要写成性格形容词的堆砌。
+两条都要具体到能拿来权衡，别写成性格形容词的堆砌。
 
-**三条硬约束**（保证不会离谱）：
+三条硬约束：将领只能改方向、不会投敌；抗命只朝"更保守"或"更激进"偏；
+`obedience = 1.0` 的将领永不抗命。
 
-1. 将领只能改方向，不能改阵营——永远不会投敌。
-2. 抗命只会朝"更保守"或"更激进"偏，不会产生无意义动作。
-3. 抗命概率受 `obedience` 硬约束，服从度 1.0 的将领永不抗命。
+### 二次整编
 
-参考值：薛岳 / 波田重一这类攻击性将领，`aggression` 0.8+、`obedience` 0.6-0.7；张自忠这类执行型，`obedience` 0.9+；杂牌军将领 `obedience` 0.5 左右。
+部队覆灭（兵力打到 200 人以下，或战斗中被全歼）不会从编制簿上消失：
 
-### 关于 effectiveness
+- `reform_days > 0` → 过这么多天在本方**补给源**重新成军，兵力补到 `reform_ratio`；
+- `reform_days = 0` → 这个番号就没了（史实上有些部队打光就再没有了）。
 
-这是最重要的平衡参数。它是**玩法参数，不是历史换算**。
-
-建议起步值：
-
-| 部队 | 建议 |
-|---|---|
-| 日军常备师团 | 2.3-2.8 |
-| 日军支队 | 2.0-2.4 |
-| 国军中央军 | 1.0-1.2 |
-| 国军地方部队 | 0.6-0.8 |
-
-警告：**这个参数有阈值效应**。调到某个点以下，进攻方一定全灭；调上去，进攻方碾压。中间几乎没有过渡。这是当前战斗模型太浅导致的，不要指望靠调参做出拉锯——那需要后续的指挥层。
+将领会殉国/被俘（引擎掷骰），殉国的将领跟着番号一起进编制簿。
 
 ---
 
-
-## provinces_geo.json（可选：真实省界）
-
-模块可以带一份 `provinces_geo.json`，用真实行政区划边界当省份轮廓：
-
-```json
-{ "polygons": { "0": [[[lon, lat], ...]], "18": [[[lon, lat], ...]] } }
-```
-
-有它就用真形状，没有前端退回 Voronoi（所以小模块不用做这一步）。
-生成脚本见 `tools/mapgen/boundaries.js`（南浔线用 DataV 县界，75 个省 345 KB）。
-
-## scale 与 domains（声明这是什么尺度的战役）
-
-`module.json` 里声明，校验器据此决定严格程度。**引擎代码里不区分尺度**，只认省、阵地、单位。
-
-```json
-"scale": "siege",
-"domains": ["land"]
-```
-
-| `scale` | 建议省数 | 额外要求 |
-|---|---|---|
-| `theater`（默认） | ≥12 | — |
-| `battle` | 2-12 | 每省都要拆阵地 |
-| `siege` | 1-6 | 每省都要拆阵地 |
-| `naval` | ≥2 | 建议声明 `naval` 域 |
-
-`domains`：`land` / `naval` / `air`。声明了 `naval` 却没有海军单位或没有水域省份 → **加载报错**；
-声明了 `air` 却没有空军单位 → 警告。这样"模块说错了"在加载时就暴露，而不是玩到一半才发现。
-
-三个现成的例子：`nanxun_1938`（theater，陆海空）、`demo_1805`（battle，陆）、
-`siege_tianjiazhen`（siege，陆，要塞工事五级）。
-## 校验规则
-
-加载时会自动检查。**Error 级问题会拒绝加载**，Warning 只提示。
-
-| 代号 | 级别 | 含义 |
-|---|---|---|
-| `map.id_out_of_range` | Error | 省份 id 必须 0..n-1 |
-| `map.duplicate_id` | Error | id 重复 |
-| `map.neighbor_out_of_range` | Error | 邻接指向不存在的省 |
-| `map.asymmetric_neighbor` | Error | 邻接必须双向 |
-| `map.self_loop` | Error | 省不能邻接自己 |
-| `map.no_supply_source` | Error | 每方至少一个补给源 |
-| `map.unowned_province` | Error | 每个省必须有 owner |
-| `map.fort_range` | Error | fort 超出 0-5 |
-| `map.throughput_range` | Error | supply_throughput 超出 0-1 |
-| `map.owner_orphans` | Warning | 有己方省份从补给源不可达 |
-| `oob.position_out_of_range` | Error | 单位位置不存在 |
-| `oob.side_without_units` | Error | 某一方没有单位 |
-| `oob.strength_nonpositive` | Error | 兵力必须为正 |
-| `oob.unit_unreachable` | Warning | 单位开局即断补给 |
-| `engine.too_old` | Error | 引擎版本不足 |
-| `engine.too_new` | Warning | 引擎版本超出模块声明 |
-
----
-
-## 数据从哪来
-
-**别编。** 找不到就写 `"estimated": true` 并在 `note` 里说明推断依据。
-
-参考 `docs/03-史料核对-战斗序列.md`：武汉会战的中方编制已经落到师级+师长姓名，两源交叉，冲突处并列。但**几乎所有师的实有兵力都没有记载**——这不是你没找到，是史料就缺。
-
----
-
-## 常见错误
-
-**省份 id 不连续**：写了 0,1,2,5。引擎按索引访问，必须 0..n-1 连续。
-
-**邻接忘了一边**：A 里写了 B，B 里忘了 A。这是最常见的错误，校验器会明确指出来。
-
-**兵力写成人数**：`"strength": 16000` 表示 1600 万人。单位是千人，写 `16`。
-
-**没有补给源**：忘了给某一方标 `supply_source`，该方开局即断补给。
-
-**双方实力悬殊且没有过渡**：见上面 effectiveness 的说明。
-
----
-
-## scenario.json 加通信配置
-
-不同时代的战役，命令传回来的速度完全不同。这是**跨时代兼容**的核心配置：
-
-```json
-{
-  "id": "scen.mymod",
-  "name": "我的战役",
-  "start_date": "1805-10-21",
-  "days": 40,
-  "seed": 1,
-  "comms": { "preset": "courier" }
-}
-```
-
-| preset | 适用 | local | adjacent | air |
-|---|---|---|---|---|
-| `courier` | 前电报时代（骑兵传令） | 1 | 3 | — |
-| `wire_telegraph` | 有线电报（默认） | 0 | 1 | 1 |
-| `radio` | 无线电时代 | 0 | 1 | 0 |
-
-也可以直接写数字覆盖：
-
-```json
-"comms": { "local_delay": 0, "adjacent_delay": 2, "air_delay": 3 }
-```
-
-**含义**：情报被发现后，要经过这么久才能进入你的视野。在此之前，你（和你的将领）什么都不知道。
-
-**不要用年代名当配置。** 写延迟数字，不写 `"era": "ww2"`。引擎不认识年代，只认识天数。
-
----
-
-## 侦察相关字段（单位）
+## 5 scenario.json
 
 | 字段 | 说明 |
 |---|---|
-| `kind` | `infantry` / `armor` / `air` / `naval` |
-| `recon_radius` | 航空侦察半径（跳数）。仅 `air` 有效 |
-| `strike_power` | 空中打击强度。仅 `air` 有效 |
-
-```json
-{
-  "id": "jp.air3", "name": "第3飞行团", "side": "jp",
-  "kind": "air", "strength": 1.5, "position": 0,
-  "recon_radius": 2, "strike_power": 0.35
-}
-```
-
-空军**不占省、不参与地面战斗**，只做侦察。所以不要给它填很大的兵力——它只是个代表单位规模的数字。
+| `id` | 场景 id |
+| `name` | 场景名 |
+| `start_date` | 起始日期，只做展示 |
+| `days` | 战役长度。**到这一天战役结束并判定结局**，不是"只做展示" |
+| `seed` | 随机种子。省略或 0 时由模块 id 派生，保证同模块同结果 |
+| `comms` | 通信条件，见 §8 |
+| `rules` | 自定义规则，见 §7 |
+| `endings` | 结局，见 §6。**不写就只有"战役期满"一个默认结局** |
 
 ---
 
-## 自定义规则（让模块有引擎没有的机制）
+## 6 结局（endings）
 
-这是模块能力最强的一块：你可以在 `scenario.json` 里写规则，引擎会按固定时机执行。
-
-**不需要写代码，不需要改引擎。**
-
-### 基本结构
+引擎不认识"天炉""苦撑"这些词。它只认三件事：**指标、比较、优先级**。
+所以结局完全由内容决定：同一套引擎可以描述 1938 年的南浔线，也可以描述别的战役。
 
 ```json
-{
-  "rules": [
-    {
-      "id": "mountain_attrition",
-      "phase": "post_movement",
-      "priority": 0,
-      "when": { "terrain": "mountain" },
-      "then": [
-        { "modify_strength_pct": -0.004 },
-        { "log": "山地行军，部队出现非战斗减员" }
-      ]
-    }
-  ]
-}
+"endings": [
+  {
+    "id": "hold_the_line",
+    "name": "南浔线未破",
+    "text": "日军未能打通南浔线，德安仍在手里……",
+    "priority": 10,
+    "at_end_only": true,
+    "require": [
+      { "metric": "provinces", "side": "cn", "cmp": "ge", "value": 50 },
+      { "metric": "holds_province", "side": "cn", "province": "德安" }
+    ]
+  },
+  {
+    "id": "line_collapsed",
+    "name": "南浔线失守",
+    "text": "德安易手，南昌门户洞开……",
+    "priority": 5,
+    "at_end_only": false,
+    "require": [
+      { "metric": "holds_province", "side": "jp", "province": "德安" }
+    ]
+  }
+]
 ```
 
-这条规则的意思是：**每次移动结束后，凡是站在山地省的部队，损失 0.4% 兵力，并写一条战报。**
-
-### 阶段（phase）
-
-规则绑在哪个时间点执行。这个必须选对，否则行为不可预测。
-
-| phase | 时机 |
+| 字段 | 说明 |
 |---|---|
-| `pre_supply` | 补给计算之前 |
-| `post_supply` | 补给计算之后 |
-| `post_movement` | 移动之后、战斗之前 |
-| `pre_combat` | 战斗解算之前 |
-| `post_combat` | 战斗之后 |
-| `post_tick` | 整个 tick 结束 |
+| `id` / `name` / `text` | 结局标题与正文。正文是给玩家看的**历史评价**，不是比分 |
+| `priority` | 越小越先判。多条同时命中时取优先级最高的一条 |
+| `at_end_only` | `true`（默认）只在战役期满时判；`false` 每天都可以提前触发（崩盘、速溃） |
+| `require` | 全部满足才算命中。**留空 = 永远命中**，会被跳过 |
 
-### 条件（when）
+### 判定子句（Clause）
 
-| 写法 | 含义 |
+```json
+{ "metric": "provinces", "side": "cn", "cmp": "ge", "value": 50 }
+```
+
+| 字段 | 说明 |
 |---|---|
-| `{"always": true}` | 总是 |
-| `{"terrain": "mountain"}` | 所在省是山地 |
-| `{"unit_kind": "armor"}` | 单位是装甲 |
-| `{"strength_below": 0.35}` | 兵力低于编制的 35% |
-| `{"province_owner": "cn"}` | 所在省归中方 |
-| `{"all": [...]}` | 全部满足 |
-| `{"any": [...]}` | 任一满足 |
-| `{"not": {...}}` | 取反 |
+| `metric` | 见下表 |
+| `side` | `cn` / `jp`。`holds_province` 必须写 |
+| `cmp` | `ge`（默认）/ `gt` / `le` / `lt` |
+| `value` | 阈值 |
+| `province` | 仅 `holds_province` 用：**省名，必须和 map.json 里的 `name` 完全一致** |
 
-地形可选：`plain` / `hill` / `mountain` / `marsh` / `water` / `urban`
-兵种可选：`infantry` / `armor` / `air` / `naval`
-阵营可选：`cn` / `jp`
-
-### 动作（then）
-
-| 写法 | 含义 |
+| metric | 含义 |
 |---|---|
-| `{"modify_strength_pct": -0.02}` | 按当前兵力百分比增减 |
-| `{"modify_morale": 0.05}` | 士气增减（0-1） |
-| `{"modify_supply": -0.1}` | 补给增减（0-1） |
-| `{"log": "文本"}` | 写一条战报 |
+| `day` | 当前天数 |
+| `provinces` | 控制省数 |
+| `strength` | 总兵力（千） |
+| `losses` | 累计损失（千） |
+| `units_alive` | 在编单位数 |
+| `commanders_lost` | 殉国/被俘的将领数 |
+| `holds_province` | 是否控制某省（1/0），配合 `province` |
 
-### 三条约束
+**写结局的建议**：不要写"你赢了"。写 5–12 条不同走向，让同一个局面在不同判断下
+落到不同的历史上。这是这个引擎和别的战争游戏最大的不同。
 
-1. **规则不能有随机**。想随机只能靠引擎的确定性随机源——否则回放会崩。
-2. **执行顺序固定**：先按 phase，再按 priority（小的先），最后按 id 字典序。**不依赖你写的顺序。**
-3. **规则只能调用上面的动作**，不能直接改世界状态。
+---
 
-### 一个完整的例子
+## 7 自定义规则（rules）
+
+模块能力最强的一块：在 `scenario.json` 里声明规则，引擎按固定时机执行。
+**不需要写代码，不需要改引擎。**
 
 ```json
 "rules": [
@@ -574,18 +480,216 @@ node tools/mapgen/gen.js         # 写入 nanxun_1938.imod/map.json
       { "modify_morale": -0.05 },
       { "log": "装甲部队陷入沼泽，损失惨重" }
     ]
-  },
-  {
-    "id": "last_stand_bonus",
-    "phase": "pre_combat",
-    "priority": 0,
-    "when": { "all": [ { "strength_below": 0.3 }, { "province_owner": "cn" } ] },
-    "then": [ { "modify_morale": 0.15 } ]
   }
 ]
 ```
 
-第一条：装甲进沼泽，掉兵掉士气。
-第二条：中方残部在自己地盘上，士气回升（"哀兵必胜"）。
+### 阶段（phase）
 
-**这两条机制引擎里都没有**，是模块自己定义的。
+| phase | 时机 |
+|---|---|
+| `pre_supply` | 补给计算之前 |
+| `post_supply` | 补给计算之后、整编之前 |
+| `post_movement` | 移动之后、战斗之前 |
+| `pre_combat` | 战斗解算之前 |
+| `post_combat` | 战斗之后 |
+| `post_tick` | 整个 tick 结束 |
+
+### 条件（when）
+
+| 写法 | 含义 |
+|---|---|
+| `{"always": true}` | 总是 |
+| `{"never": true}` | 永不（调试用） |
+| `{"terrain": "mountain"}` | 所在省是山地 |
+| `{"unit_kind": "armor"}` | 单位是装甲 |
+| `{"strength_below": 0.35}` | 兵力低于编制的 35% |
+| `{"province_owner": "cn"}` | 所在省归中方 |
+| `{"all": [...]}` | 全部满足 |
+| `{"any": [...]}` | 任一满足 |
+| `{"not": {...}}` | 取反 |
+
+地形：`plain` / `hill` / `mountain` / `marsh` / `water` / `urban`
+兵种：`infantry` / `armor` / `air` / `naval`
+阵营：`cn` / `jp`
+
+### 动作（then）
+
+| 写法 | 含义 |
+|---|---|
+| `{"modify_strength_pct": -0.02}` | 按当前兵力百分比增减 |
+| `{"modify_morale": 0.05}` | 士气增减（0-1） |
+| `{"modify_supply": -0.1}` | 补给增减（0-1） |
+| `{"log": "文本"}` | 写一条战报 |
+
+### 三条约束
+
+1. **规则不能有随机**。要随机只能用引擎的确定性随机源——否则回放会崩。
+2. **执行顺序固定**：先 phase，再 priority（小的先），最后 id 字典序。**不依赖你写的顺序。**
+3. **规则只能调用上面的动作**，不能直接改世界状态。
+
+---
+
+## 8 通信（comms）
+
+引擎只认**延迟天数**，不认年代。不同时代的模块配不同数值——这是跨时代兼容的核心。
+
+```json
+"comms": { "preset": "radio" }
+```
+
+| preset | 适用 | `transmission` | `staff` | `order_delay` |
+|---|---|---|---|---|
+| `courier` | 前电报时代（骑兵传令） | 2 | 1 | 1 |
+| `wire_telegraph` | 有线电报（1930 年代） | 0 | 1 | 0 |
+| `radio` | 无线电时代 | 0 | 1 | 0 |
+
+不用预设时直接写三个数字：
+
+```json
+"comms": { "transmission": 0, "staff": 2, "order_delay": 1 }
+```
+
+| 字段 | 含义 |
+|---|---|
+| `transmission` | 技术传输延迟（天）。电报/无线电是 0，骑兵 2–3 |
+| `staff` | 参谋汇总、核实与决策延迟。**这才是 1938 年的真正瓶颈** |
+| `order_delay` | 命令逐级下达的额外延迟 |
+
+两条派生量：
+
+- **战报延迟** = `transmission + staff`（情报多久进入你的视野）；
+- **命令延迟** = `transmission + order_delay`（你的电报多久到达执行单位）。
+
+> ⚠️ **只有这三个键名有效。** `local_delay` / `adjacent_delay` / `air_delay` 这类
+> 按"远近"分档的写法**不存在**——写了会被静默忽略，你拿到的还是默认值。
+> （这条踩过：旧版本的手册就是这么写的，照着抄的人以为自己在改延迟。）
+
+**不要用年代名当配置**，只写天数。引擎不认识年代。
+
+---
+
+## 9 provinces_geo.json（可选：真实省界）
+
+```json
+{
+  "source": "DataV 行政区划（县界）",
+  "simplify": 0.008,
+  "polygons": {
+    "0":  [[[116.0829, 29.7612], [116.0725, 29.7607]]],
+    "18": [[["...每一环都是 [lon, lat] 数组"]]]
+  }
+}
+```
+
+- 键是**省份 id 的字符串**，值是若干条环（外环 + 空洞），每条环是 `[lon, lat]` 数组；
+- 有它就用真形状，没有前端退回抽象多边形（所以小模块不用做这一步）；
+- 生成脚本：`tools/mapgen/boundaries.js`（南浔线用 DataV 县界，87 个省 345 KB）。
+
+体积参考：**每省约 4 KB**。100 个省 ≈ 400 KB，可以接受；别塞到几 MB。
+
+---
+
+## 10 校验：加载时会挡下什么
+
+`Error` 级拒绝加载（游戏里表现为"加载失败"），`Warning` 只在控制台提示。
+
+| 代号 | 级别 | 含义 / 怎么改 |
+|---|---|---|
+| `meta.empty_id` | Error | `module.json` 的 `id` 不能为空 |
+| `meta.empty_engine_min` | Error | `engine.min` 不能为空 |
+| `meta.future_schema` | Error | `content_schema` 高于引擎支持值 |
+| `map.empty` | Error | 地图没有省份 |
+| `map.empty_name` | Error | 省份没写 `name` |
+| `map.duplicate_id` | Error | 省 id 重复 |
+| `map.id_out_of_range` | Error | 省 id 必须 0..n-1 连续 |
+| `map.fort_range` | Error | `fort` 超出 0-5 |
+| `map.throughput_range` | Error | `supply_throughput` 超出 0-1 |
+| `map.neighbor_out_of_range` | Error | 邻接指向不存在的省 |
+| `map.self_loop` | Error | 省不能邻接自己 |
+| `map.asymmetric_neighbor` | Error | **邻接必须双向**（A 写了 B，B 必须写 A） |
+| `map.too_many_neighbors` | Error | 一个省邻接超过 12 个 |
+| `map.no_supply_source` | Error | 某一方没有任何补给源 |
+| `map.unowned_province` | Error | 有省没写 `owner` |
+| `map.owner_orphans` | Warning | 有己方省份从补给源走不到（那里的部队会断粮） |
+| `oob.empty` | Error | `oob.json` 没有单位 |
+| `oob.duplicate_id` | Error | 单位 id 重复 |
+| `oob.strength_nonpositive` | Error | `strength` 必须 > 0 |
+| `oob.strength_extreme` | Warning | 兵力异常大/小，多半写错单位（千人 vs 人） |
+| `oob.position_out_of_range` | Error | `position` 指向不存在的省 |
+| `oob.starts_in_enemy_land` | Warning | 开局就站在敌方领土里，多半位置写错 |
+| `oob.side_without_units` | Error | 某一方没有任何单位 |
+| `oob.unit_unreachable` | Warning | 某个单位开局即断补给 |
+| `balance.lopsided` | Warning | 可玩方兵力明显少于敌方 |
+| `scale.too_few_provinces` | Warning | `battle`/`siege` 的省数太少 |
+| `scale.too_many_provinces` | Warning | `siege` 的省数太多 |
+| `scale.missing_positions` | Warning | 小尺度战役却没拆阵地 |
+| `domain.land_without_units` | Warning | 声明陆地域却没有地面单位 |
+| `domain.naval_without_units` | Error | 声明海军域却没有海军单位 |
+| `domain.naval_without_water` | Error | 声明海军域却没有任何水域省 |
+| `domain.air_without_units` | Warning | 声明空军域却没有空军单位 |
+| `engine.too_old` | Error | 引擎版本低于 `engine.min` |
+| `engine.too_new` | Warning | 引擎版本高于 `engine.max` |
+
+---
+
+## 11 平衡：先跑一局，别只看数字
+
+```powershell
+# 每 15 天打一次双方兵力与省数
+cargo run -q --release -p sim-testbed -- --module 路径\mymod.imod --ticks 77 --verbose
+```
+
+看三件事：
+
+1. **战线动没动**。77 天里地图颜色几乎不变 → AI 卡住了，多半是地形/邻接/姿态写错；
+2. **双方还活着没有**。一边归零说明 `effectiveness` 或兵力差得太远；
+3. **进攻方推得动但没有碾压**。兵力曲线应该缓慢下滑，不是断崖。
+
+再在游戏里玩一局（`新的战役 → 导入模块…`），确认：地图能读、番号能认、
+电报有回应、结局能触发。
+
+---
+
+## 12 发布前的清单
+
+- [ ] `id` 全局唯一，`engine.min` 填了
+- [ ] 每方至少一个 `supply_source`，且从补给源能走到本方所有省
+- [ ] 邻接双向、id 从 0 连续
+- [ ] 每个省有 `lon` / `lat`（否则地图摆不好）
+- [ ] `strength` 单位是千人
+- [ ] 双方都有单位，且可玩方兵力 ≥ 敌方
+- [ ] 写了 `endings`（至少 3 条不同走向），且都有 `require`
+- [ ] `sim-testbed --ticks 天数 --verbose` 跑通，战线在动
+- [ ] 游戏里导入一次，能开局、能推进、能出结局
+- [ ] 写清"哪些数字是史实、哪些是推断"（用 `note` / 模块文档）
+
+---
+
+## 13 数据从哪来
+
+**别编。** 找不到就写 `"estimated": true` 并在 `note` 里说明推断依据。
+
+参考模块仓库里 `docs/03-史料核对-战斗序列.md`：中方编制已经落到师级 + 师长姓名，
+两源交叉，冲突处并列。但**几乎所有师的实有兵力都没有记载**——这不是你没找到，
+是史料就缺。把缺口标出来，比编一个漂亮数字有用。
+
+地图数据（县界、高程、水系）的完整管线见 `docs/04-地图数据方案.md` 与
+`docs/16-真实地形.md`；`tools/mapgen/` 下的脚本可以直接用。
+
+---
+
+## 14 常见错误速查
+
+| 现象 | 原因 |
+|---|---|
+| 加载失败，说 `map.asymmetric_neighbor` | 邻接忘了一边。用 `gen.js` 生成就不会犯 |
+| 部队全挤在一个省 | 省太少，撞 `STACK_LIMIT`（每方 3 个） |
+| 地图上什么也没画 | 省缺 `lon`/`lat` |
+| 兵力写成 16000 | 单位是千人，写 `16` |
+| 开局就全军断粮 | 没给本方标 `supply_source`，或补给源与本方省份不连通 |
+| 敌人突然出现在后方 | 那一带有空省走廊。要么补省，要么留拒止部队——这是玩法问题不是 bug |
+| `comms` 里写的延迟没生效 | 键名写错了（只有 `transmission` / `staff` / `order_delay`） |
+| 结局永远不触发 | `require` 里的省名写错（必须和 `map.json` 的 `name` 完全一致） |
+| 压成 zip 改后缀 `.imod` 后加载不了 | **`.imod` 是目录**，引擎不读压缩包 |
+| 将领从不抗命 | `obedience` 全是 1.0，或没写 `persona` / `agenda`（模型没有抓手） |
