@@ -3406,7 +3406,20 @@ bind("btn-reset", "click", () => {
   selUnit = null; curProv = null; geom = null;
   api("/api/reset", {}).then(() => toast("已重开"));
 });
+// 这个监听器管的是"空格推进一天、回车推进到有事"这类全局快捷键。
+// 它必须**先让输入框吃饱**：正在打字时一个键都不许拦。
+//
+// 踩过的坑：首次设置页弹出时，这里对每个 keydown 都 preventDefault（本意是
+// "别让空格偷偷推进游戏"），结果地址/模型/密钥三个输入框**一个字都打不进去**——
+// 玩家看到的症状是"光标在里面，键盘没反应"。
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = (el.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  return !!el.isContentEditable;
+}
 document.addEventListener("keydown", (e) => {
+  if (isTypingTarget(e.target)) return; // 打字优先，任何模态都得让路
   // 首次设置没做完之前，键盘不该偷偷推进游戏
   if (Setup.isOpen()) { e.preventDefault(); return; }
   // 引导和首页优先吃掉键盘：否则按空格会在看引导的时候偷偷推一天。
