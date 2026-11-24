@@ -1401,6 +1401,34 @@ fn snapshot(w: &World) -> String {
     let viewer = Side::Cn;
     let intel = w.intel(viewer);
 
+    // 编制簿：已经覆灭的番号（我方）。
+    //
+    // 不能塞进 `provinces[].units`——地图上会凭空多出一个"0 千的部队方块"。
+    // 但也不能不告诉玩家：番号没了、军长殉国、还有多少天重建，
+    // 这些恰恰是"编制改变"这件事的全部内容。
+    let gone: Vec<serde_json::Value> = (0..w.units.len())
+        .filter(|&i| {
+            let u = &w.units[i];
+            u.side == viewer && u.ended_day.is_some()
+        })
+        .map(|i| {
+            let u = &w.units[i];
+            json!({
+                "index": i,
+                "name": u.name,
+                "formation": u.formation,
+                "commander": u.commander.name,
+                "fate": u.commander.fate.label(),
+                "fate_code": u.commander.fate.code(),
+                "ended_day": u.ended_day,
+                "reform_day": u.reform_day,
+                "reform_ratio": round2(u.reform_ratio.to_display_f64()),
+                "province": w.provinces.get(u.position as usize).map(|p| p.name.clone()),
+                "strength": round1(u.strength.to_display_f64()),
+            })
+        })
+        .collect();
+
     let mut provinces = Vec::new();
     for (i, p) in w.provinces.iter().enumerate() {
         let i_intel = intel.get(i).copied().unwrap_or_else(|| {
@@ -1436,6 +1464,12 @@ fn snapshot(w: &World) -> String {
                     "order_code": u.order.code().1,
                     "node": u.node,
                     "formation": u.formation,
+                    // 编制状态：覆灭日、将领结局、整编日。
+                    // 前端要能说清"这支部队已经没了 / 主官殉国 / 还有 12 天重建"。
+                    "ended_day": u.ended_day,
+                    "fate": u.commander.fate.label(),
+                    "fate_code": u.commander.fate.code(),
+                    "reform_day": u.reform_day,
                     // 距命令目标还有几天（每 tick 走一省）。远距离调动全靠它，
                     // 否则玩家看不出"这支部队正在路上"还是"根本没动"。
                     "march_hops": u.order.target().map(|t| {
@@ -1531,6 +1565,8 @@ fn snapshot(w: &World) -> String {
     json!({
         "tick": w.tick,
         "player": "cn",
+        // 已覆灭的番号（含殉国、整编倒计时）
+        "gone": gone,
         "side": {
             "strength": round1(cn_strength),
             "provinces": cn_provinces,

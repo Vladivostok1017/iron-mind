@@ -397,6 +397,15 @@ pub struct UnitDef {
     /// 将领。留空则用一个完全服从的默认将领。
     #[serde(default)]
     pub commander: Option<CommanderDef>,
+    /// 二次整编：覆灭后隔多少天可以在后方重新成军。0 = 不可重建。
+    ///
+    /// 由模块决定谁重建、谁不重建——1938 年国军有些师几个月里重建过两次，
+    /// 有些部队打光就再没有了。这是内容，不是引擎该猜的事。
+    #[serde(default)]
+    pub reform_days: u32,
+    /// 整编后补到满编的几成（0.4 = 四成）。
+    #[serde(default)]
+    pub reform_ratio: f64,
     #[serde(default)]
     pub note: String,
 }

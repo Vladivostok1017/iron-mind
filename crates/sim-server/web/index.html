@@ -1042,9 +1042,9 @@ async function sendTelegram() {
 // ---- 战报信箱 ----
 // 之前所有战报挤在右下角一个 200px 高的小窗口里，长句被截断、也分不清是哪一仗。
 // 现在：侧栏只显示最新一条，点「打开战报信箱」进入全屏列表，一封一封看。
-const KIND_CN = { combat: "战斗", occupy: "易手", dissent: "抗命", cmd: "将领", rule: "规则", intel: "情报", supply: "后勤", retreat: "撤退" };
+const KIND_CN = { combat: "战斗", occupy: "易手", dissent: "抗命", cmd: "将领", rule: "规则", intel: "情报", supply: "后勤", retreat: "撤退", oob: "编制" };
 // 默认只看"重要"：规则类（山地行军减员）每 tick 每个单位一条，会把真正的战况埋掉
-const MAIL_KEY = ["combat", "occupy", "dissent", "cmd"];
+const MAIL_KEY = ["combat", "occupy", "dissent", "cmd", "oob"];
 let mailFilter = "key";
 let mailSel = 0;
 
@@ -1074,7 +1074,7 @@ function renderMail() {
   $("mail-count").textContent = "共 " + items.length + " 条";
 
   // 分类筛选
-  const kinds = ["key", "all", "combat", "occupy", "dissent", "cmd", "rule"];
+  const kinds = ["key", "all", "combat", "occupy", "oob", "dissent", "cmd", "rule"];
   chips.innerHTML = "";
   for (const k of kinds) {
     const b = document.createElement("button");
@@ -1261,6 +1261,34 @@ function renderOutliner() {
       render();
     };
     box.appendChild(d);
+  }
+
+  // 编制簿：已经覆灭的番号。
+  // 番号没了、军长殉国、还有多少天重建——这就是"编制改变"的全部内容，
+  // 不摆出来，玩家只会以为部队"莫名其妙消失了"。
+  const gone = S.gone || [];
+  if (gone.length) {
+    const sep = document.createElement("div");
+    sep.className = "ol";
+    sep.style.cursor = "default";
+    sep.style.color = "#6f7a86";
+    sep.textContent = "— 已覆灭 —";
+    box.appendChild(sep);
+    for (const g of gone) {
+      const d = document.createElement("div");
+      d.className = "ol";
+      d.style.opacity = "0.6";
+      const left = document.createElement("span");
+      left.textContent = g.name + "　" + (g.province || "?") + "　" + g.fate;
+      const right = document.createElement("span");
+      right.className = "ol-r";
+      right.textContent = g.reform_day ? "第" + g.reform_day + "日整编" : "番号撤销";
+      d.appendChild(left);
+      d.appendChild(right);
+      d.title = g.commander + "·" + g.fate +
+        (g.reform_day ? "（整编后约 " + Math.round(g.reform_ratio * 100) + "% 兵力）" : "");
+      box.appendChild(d);
+    }
   }
 }
 // 侧栏显示将领大脑在用谁：真模型 / 模拟 / 规则

@@ -83,6 +83,8 @@ fn unit(id: &str, side: SideDef, strength: f64, pos: u32) -> UnitDef {
         supply_reach: 0.0,
         estimated: false,
         commander: None,
+        reform_days: 0,
+        reform_ratio: 0.0,
         note: String::new(),
     }
 }

@@ -73,7 +73,10 @@ fn golden_hash_is_stable() {
 /// - 状态哈希补进 `unit.node` 与 `unit.manual` 后重算。
 ///   动机：这两个字段会影响战斗结果与"谁在下令"；不进哈希就会出现
 ///   "两个不同状态算出同一哈希"，回放校验（/api/replay-check）就抓不到偏差。
-const GOLDEN_LAST_HASH: u64 = 0xfecb_71ee_3309_a9ee;
+/// - 状态哈希补进**编制变动**（`ended_day` / `reform_day` / `reform_ratio` /
+///   `commander.fate`）后重算。动机同上：覆灭日决定"还能不能被问策、能不能整编"，
+///   将领结局决定"这支部队还重建得起来吗"——不同结局必须算出不同哈希。
+const GOLDEN_LAST_HASH: u64 = 0xa3dc_9356_6254_9123;
 
 #[test]
 fn different_seeds_diverge() {

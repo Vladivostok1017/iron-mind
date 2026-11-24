@@ -215,6 +215,8 @@ pub fn tick(world: &mut World) {
     crate::ai::run_ai(world);
     crate::intel::run_intel(world);
     run_supply(world);
+    // 整编在补给之后：它要知道本方到底还控制着哪些补给源
+    run_reform(world);
     rules.run(world, Phase::PostSupply);
     run_movement(world);
     rules.run(world, Phase::PostMovement);
@@ -763,23 +765,131 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
             );
         }
 
-        // 兵力低于 1 人的单位撤销
+        // 兵力低于 1 千的单位：判定覆灭，并处理将领与编制。
         for &i in cn.iter().chain(jp.iter()) {
-            let u = &mut world.units[i as usize];
-            if u.strength < Fixed::ONE {
-                u.strength = Fixed::ZERO;
-                let name = u.name.clone();
-                let prov = world.provinces[p].name.clone();
-                world.report(
-                    crate::world::EventKind::Combat,
-                    format!("{name} 在 {prov} 被全歼"),
-                );
+            let i = i as usize;
+            if world.units[i].strength < Fixed::ONE && world.units[i].ended_day.is_none() {
+                world.units[i].strength = Fixed::ZERO;
+                end_unit(world, i, p as u32, now, seed);
             }
         }
 
         // 阵地归属由 tick 开头的占领结算按"阵地数过半"统一处理，
         // 这里不再直接改省的颜色：一个阵地打赢了不代表整省易手。
         }
+    }
+}
+
+// ---------------------------------------------------------------- 编制变动
+
+/// 一支部队打光了：记下场、定将领的结局、排定能不能二次整编。
+///
+/// 三件事必须一起做，否则会留下"兵没了但军长还在下命令"这种鬼状态——
+/// 之前就是这样：`strength` 归零，但将领、番号、命令全都原样保留，
+/// AI 还会继续问一个已经不存在的人"你要怎么打"。
+///
+/// 将领结局是**掷骰**决定的，不是写死：突围、阵亡、被俘、去职，
+/// 用独立的随机流（`stream::FATE`），所以同一种子必然同一结局。
+fn end_unit(world: &mut World, idx: usize, prov: u32, now: u32, seed: u64) {
+    use crate::world::{EventKind, Fate};
+
+    let name = world.units[idx].name.clone();
+    let side = world.units[idx].side;
+    let where_ = world.provinces[prov as usize].name.clone();
+    let general = world.units[idx].commander.name.clone();
+
+    // 掷将领的结局。序列固定 → 确定性。
+    let mut rng = Rng::derive(seed, stream::FATE, now, idx as u32);
+    let roll = rng.unit_fixed().to_display_f64();
+    let fate = if roll < 0.35 {
+        Fate::Killed
+    } else if roll < 0.50 {
+        Fate::Captured
+    } else if roll < 0.70 {
+        Fate::Relieved
+    } else {
+        Fate::Active // 突围生还
+    };
+    world.units[idx].commander.fate = fate;
+    world.units[idx].ended_day = Some(now);
+    world.units[idx].order = crate::world::Order::Hold;
+    world.units[idx].manual = false;
+    world.units[idx].dissent_reason = None;
+    world.units[idx].disobeyed = false;
+
+    // 全军覆没是战场上看得见的事：双方都能报。
+    world.report(EventKind::Combat, format!("{name} 在 {where_} 被全歼"));
+    // 将领的生死是内部消息：只报给本方（敌人不知道对面的军长死没死）。
+    let fate_line = match fate {
+        Fate::Killed => format!("{name}（{general}）全军覆没，{general} 殉国"),
+        Fate::Captured => format!("{name}（{general}）全军覆没，{general} 下落不明，恐已被俘"),
+        Fate::Relieved => format!("{name}（{general}）全军覆没，{general} 已去职"),
+        Fate::Active => format!("{name}（{general}）全军覆没，{general} 突围生还"),
+    };
+    world.report_for(EventKind::Oob, fate_line, side);
+
+    // 二次整编：模块声明过、且**还有将领活着**才排得上。
+    // 没有人的部队不会被"自动重建"——那需要干部、番号与补充兵。
+    if world.units[idx].reform_ratio.raw() > 0 && fate.can_lead() {
+        let days = world.units[idx].reform_days;
+        world.units[idx].reform_day = Some(now + days);
+        world.report_for(
+            EventKind::Oob,
+            format!("{name} 将于 {days} 日后在后方整编"),
+            side,
+        );
+    }
+}
+
+/// 二次整编：到日子了，就在本方控制的补给源重新成军。
+///
+/// 为什么放在补给源：整编要兵、要枪、要粮食，这些东西只在后方枢纽有。
+/// 也正因为如此，"后方被抄" 会真的影响重建速度——找不到补给源就一直等。
+fn run_reform(world: &mut World) {
+    use crate::world::{EventKind, Order};
+
+    let now = world.tick;
+    for idx in 0..world.units.len() {
+        let u = &world.units[idx];
+        let due = match u.reform_day {
+            Some(d) if d <= now => d,
+            _ => continue,
+        };
+        let _ = due;
+        let side = u.side;
+        let ratio = u.reform_ratio;
+        // 本方控制的补给源（下标最小的那个，确定）
+        let home = (0..world.provinces.len()).find(|&p| {
+            world.provinces[p].is_supply_source && world.provinces[p].owner == side
+        });
+        let Some(home) = home else {
+            continue; // 后方还没着落，明年再说
+        };
+
+        let home_name = world.provinces[home].name.clone();
+        let name = world.units[idx].name.clone();
+        let max = world.units[idx].max_strength;
+        let u = &mut world.units[idx];
+        u.strength = (max * ratio).clamp(Fixed::ZERO, max);
+        u.morale = Fixed::ratio(6, 10);
+        u.supply = Fixed::ratio(6, 10);
+        u.position = home as u32;
+        u.node = 0;
+        u.moving_to = None;
+        u.ended_day = None;
+        u.reform_day = None;
+        u.order = Order::Hold;
+        u.manual = false;
+        u.disobeyed = false;
+        u.dissent_reason = None;
+        world.report_for(
+            EventKind::Oob,
+            format!(
+                "{name} 在 {home_name} 整编完毕，补入新兵 {:.1} 千",
+                world.units[idx].strength.to_display_f64()
+            ),
+            side,
+        );
     }
 }
 
@@ -1064,6 +1174,8 @@ fn run_air(world: &mut World, now: u32) {
     }
     let _ = now;
 }
+
+
 
 
 

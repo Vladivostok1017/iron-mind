@@ -189,6 +189,8 @@ pub fn build_world(module: &LoadedModule) -> World {
             StanceDef::Defend => sim_core::world::Stance::Defend,
         };
         unit.strike_power = Fixed::from_f64_input(u.strike_power.max(0.0));
+        unit.reform_days = u.reform_days;
+        unit.reform_ratio = Fixed::from_f64_input(u.reform_ratio.clamp(0.0, 1.0));
         if let Some(c) = &u.commander {
             unit.commander = sim_core::world::Commander::new(
                 &c.name,

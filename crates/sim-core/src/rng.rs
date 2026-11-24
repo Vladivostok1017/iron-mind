@@ -17,6 +17,8 @@ pub mod stream {
     pub const MORALE: u64 = 4;
     pub const EVENTS: u64 = 5;
     pub const AI: u64 = 6;
+    /// 将领结局（殉国/被俘/去职/突围）。独立流，避免动一下编制就打乱战斗随机数。
+    pub const FATE: u64 = 7;
 }
 
 /// SplitMix64 状态。

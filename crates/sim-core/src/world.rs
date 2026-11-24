@@ -365,6 +365,11 @@ pub enum EventKind {
     Intel,
     /// 补给与工事。
     Supply,
+    /// 编制变动：全军覆没、将领殉国/被俘/去职、二次整编。
+    ///
+    /// 单独一类，是因为它和"今天打死了多少人"不是一回事：
+    /// 兵力可以补，番号没了就是没了。
+    Oob,
 }
 
 impl EventKind {
@@ -379,6 +384,7 @@ impl EventKind {
             EventKind::Dissent => "dissent",
             EventKind::Intel => "intel",
             EventKind::Supply => "supply",
+            EventKind::Oob => "oob",
         }
     }
 }
@@ -618,6 +624,50 @@ pub struct Commander {
     pub agenda: String,
     /// 职务。
     pub title: String,
+    /// 他的结局。殉国不是一句战报——它会改变这支部队还能不能重建。
+    pub fate: Fate,
+}
+
+/// 将领的结局。
+///
+/// 为什么要有它：部队被全歼时，军长可能阵亡、被俘、去职，也可能突围出来。
+/// 后果完全不同——**没有将领就没有人能把溃兵重新编起来**，
+/// 所以"二次整编"不是时间一到自动发生，它取决于那个人还在不在。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fate {
+    /// 在任（活着，也可能只是突围生还）
+    Active,
+    /// 阵亡 / 殉国
+    Killed,
+    /// 被俘
+    Captured,
+    /// 去职（撤职、调任、自请辞职）
+    Relieved,
+}
+
+impl Fate {
+    pub fn label(self) -> &'static str {
+        match self {
+            Fate::Active => "在任",
+            Fate::Killed => "殉国",
+            Fate::Captured => "被俘",
+            Fate::Relieved => "去职",
+        }
+    }
+
+    pub fn code(self) -> u32 {
+        match self {
+            Fate::Active => 0,
+            Fate::Killed => 1,
+            Fate::Captured => 2,
+            Fate::Relieved => 3,
+        }
+    }
+
+    /// 还有人带得动这支部队吗？
+    pub fn can_lead(self) -> bool {
+        self == Fate::Active
+    }
 }
 
 impl Commander {
@@ -632,6 +682,7 @@ impl Commander {
             persona: String::new(),
             agenda: String::new(),
             title: String::new(),
+            fate: Fate::Active,
         }
     }
 
@@ -645,6 +696,7 @@ impl Commander {
             persona: String::new(),
             agenda: String::new(),
             title: String::new(),
+            fate: Fate::Active,
         }
     }
 
@@ -788,9 +840,27 @@ pub struct Unit {
     pub dissent_reason: Option<String>,
     /// 累计抗命次数。太频繁会被撤换（后续实现）。
     pub dissent_count: u32,
+    /// 这支部队哪天没的（全军覆没）。`None` = 还在。
+    ///
+    /// 为什么要留一个"日期"而不是直接把单位从 `Vec` 里删掉：
+    /// 命令流、存档、前端快照全都按**单位下标**引用部队。删一个，
+    /// 后面所有下标都要挪一位，历史命令会指向别的部队，回放就废了。
+    /// 所以死亡是"状态"，不是"删除"。
+    pub ended_day: Option<u32>,
+    /// 预定整编完成日。只有模块声明了 `reform` 的部队才会有。
+    pub reform_day: Option<u32>,
+    /// 模块声明的整编天数（覆灭后隔多久能重建）。0 = 不可重建。
+    pub reform_days: u32,
+    /// 二次整编后的兵力比例（相对满编）。
+    pub reform_ratio: Fixed,
 }
 
 impl Unit {
+    /// 还在编成内：兵没打光，也没被判定覆灭。
+    pub fn in_being(&self) -> bool {
+        self.strength.raw() > 0 && self.ended_day.is_none()
+    }
+
     /// `strength_k` 是千人。`Unit::new(.., 16)` 表示 16000 人。
     pub fn new(name: &str, side: Side, position: u32, strength_k: i32) -> Self {
         let s = Fixed::from_int(strength_k);
@@ -818,6 +888,10 @@ impl Unit {
             dissent_reason: None,
             manual: false,
             dissent_count: 0,
+            ended_day: None,
+            reform_day: None,
+            reform_days: 0,
+            reform_ratio: Fixed::ZERO,
         }
     }
 
@@ -1038,6 +1112,12 @@ impl World {
             // 不进哈希的话两个不同状态会算出同一个哈希，回放校验就形同虚设。
             h.write_u32(u.node as u32);
             h.write_u32(u.manual as u32);
+            // 编制变动也要进哈希：覆灭日决定"还能不能被问策、能不能整编"，
+            // 将领结局决定"这支部队还重建得起来吗"。不同结局必须算出不同哈希。
+            h.write_u32(u.ended_day.map(|d| d + 1).unwrap_or(0));
+            h.write_u32(u.reform_day.map(|d| d + 1).unwrap_or(0));
+            h.write_i32(u.reform_ratio.raw());
+            h.write_u32(u.commander.fate.code());
         }
 
         // 情报也该进哈希：它会影响 AI 决策，不哈希就抓不到确定性漂移。
@@ -1110,6 +1190,7 @@ mod tests {
         assert!(fortified.defense_multiplier() > mountain.defense_multiplier());
     }
 }
+
 
 
 
