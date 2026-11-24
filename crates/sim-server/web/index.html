@@ -202,6 +202,20 @@
   .br-row.k-dissent .br-v { color: var(--gold); }
   .br-row.k-retreat .br-v { color: #a98b7a; }
   .br-row.k-supply .br-v { color: #9aa6b3; }
+  /* 晨报：一页读完全局的"今天" */
+  .mr-sec { font-size: 10.5px; letter-spacing: .16em; color: #79828e; margin: 14px 0 6px;
+    padding-bottom: 4px; border-bottom: 1px solid #1e2833; }
+  .mr-row { display: flex; gap: 12px; padding: 4px 0; font-size: 12.5px; line-height: 1.65; }
+  .mr-k { width: 132px; color: #8b95a1; flex-shrink: 0; }
+  .mr-v { color: #cfd8e3; }
+  .mr-row.warn .mr-v { color: var(--gold); }
+  .mr-row.bad .mr-v { color: #d08b7e; }
+  .mr-alarm { border-radius: 5px; padding: 9px 12px; margin-bottom: 6px; border: 1px solid #4a3f22;
+    background: #1b1710; }
+  .mr-alarm.bad { border-color: #5c322c; background: #1d1413; }
+  .mr-alarm-t { font-size: 13px; color: #e0d3b4; margin-bottom: 3px; font-weight: 600; }
+  .mr-alarm.bad .mr-alarm-t { color: #e3a99c; }
+  .mr-alarm-x { font-size: 11.5px; color: #a8b3c0; line-height: 1.8; }
   /* 指挥链：一行一环，把"我的电报变成了什么"摊开 */
   .ch-row { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed #232d38;
     font-size: 12px; }
@@ -489,6 +503,7 @@
     <div id="plan" title="本方司令部的作战方针（方向，不是命令）"></div>
     <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
     <!-- 有了首页之后，必须有一条路回到首页：桌面软件没有"地址栏"可以刷新 -->
+    <button class="btn" id="btn-morning" title="晨报：今天该看的三件事（晨报会自己在你推进前弹一次）">晨报</button>
     <button class="btn" id="btn-home" title="回到首页（存档/读档/换战役都在这儿）">菜单</button>
     <button class="btn" id="btn-save">存档</button>
     <button class="btn" id="btn-load">读档</button>
@@ -1991,9 +2006,9 @@ let suppressClick = false;
 bind("dp-send", "click", (ev) => { ev.stopPropagation(); sendTelegram(); });
 bind("open-mail", "click", () => openMail());
 bind("mail-close", "click", () => closeMail());
-bind("btn-1", "click", () => api("/api/tick", { days: 1 }));
-bind("btn-3", "click", () => api("/api/tick", { days: 3 }));
-bind("btn-next", "click", () => api("/api/advance", {}));
+bind("btn-1", "click", () => pushOn("tick", 1));
+bind("btn-3", "click", () => pushOn("tick", 3));
+bind("btn-next", "click", () => pushOn("advance", 0));
 
 /* ═══════════════════════════════════════════════════════════════════════
    从"一张能跑的地图"到"一个能装的游戏"，缺的是这几块：
@@ -2417,7 +2432,9 @@ const Briefing = (() => {
   function popup() {
     if (!S || !S.log || !S.log.length) return;
     const maxTick = S.log.reduce((m, e) => Math.max(m, e.tick), 0);
-    // 刚进游戏：如果有历史，把基线推到最新（不补弹旧战报）；`n    // 如果日志是空的（新开一局），别消耗掉基线——否则第一次推进的要闻就被吞了。`n    if (lastSeen === null) lastSeen = S.tick - 1;
+    // 刚进游戏：如果有历史，把基线推到最新（不补弹旧战报）；
+    // 如果日志是空的（新开一局），别消耗掉基线——否则第一次推进的要闻就被吞了。
+    if (lastSeen === null) lastSeen = S.tick - 1;
     if (maxTick <= lastSeen) return;
     // 取"上次之后的所有要闻"，不是"最新那一天的要闻"。
     // 踩过的坑：山地行军每个单位每 tick 打一条 rule，最新一天往往只有 rule，
@@ -2447,6 +2464,185 @@ const Briefing = (() => {
   }
   return { popup };
 })();
+
+// ── 晨报：推进之前该看的那一页 ──
+// 要闻解决"事后知道"，晨报解决"事前判断"。
+// 它不产生新数据——全是从快照里算得出来的：谁断粮、谁在打、命令卡在哪。
+// 只是把玩家本来要自己在侧栏拼起来的东西，摆成一页。
+const Morning = (() => {
+  let shownDay = -1;
+
+  function myUnits() {
+    return allUnits().filter((u) => u.mine);
+  }
+  function provOf(idx) {
+    for (const p of S.provinces) {
+      if ((p.units || []).some((u) => u.index === idx)) return p;
+    }
+    return null;
+  }
+
+  // 把一盘散沙的判断收成三档：要救的、要看的、要知道的
+  function collect() {
+    const o = { starving: [], hungry: [], lowMorale: [], marching: [], contested: [], alarms: [] };
+    for (const u of myUnits()) {
+      const p = provOf(u.index);
+      const where = p ? p.name : "行军途中";
+      const dead = u.encircled || u.supply < 0.15;
+      if (dead) o.starving.push({ u, where, why: u.encircled ? "补给断绝" : "断粮" });
+      else if (u.supply < 0.3) o.hungry.push({ u, where });
+      if (u.morale < 0.3) o.lowMorale.push({ u, where });
+      if (u.march_hops > 0) o.marching.push({ u, where });
+    }
+    for (const p of S.provinces) {
+      const us = (p.units || []).filter((u) => u.mine);
+      const them = (p.units || []).filter((u) => !u.mine);
+      if (us.length && them.length) o.contested.push({ p, us, them });
+    }
+    // 三件"今天先处理"的事，按急迫程度排
+    if (o.starving.length) {
+      const s = o.starving[0];
+      o.alarms.push({
+        tone: "bad",
+        title: s.where + " · " + s.u.name + " " + s.why,
+        text: "补给 " + s.u.supply.toFixed(2) + "，每天掉千分之一的兵。要么打通通往它的补给（守住那条走廊），要么把它撤回来。",
+      });
+    }
+    if (o.contested.length) {
+      const c = o.contested[0];
+      o.alarms.push({
+        tone: "warn",
+        title: c.p.name + " 正在交战",
+        text: "我军 " + c.us.length + " 部在此，当面敌军 " + c.them.length + " 部。" +
+          (c.us[0] ? "我方最强一股 " + c.us[0].strength.toFixed(1) + " 千，士气 " + c.us[0].morale.toFixed(2) + "。" : ""),
+      });
+    }
+    if (o.lowMorale.length) {
+      const l = o.lowMorale[0];
+      o.alarms.push({
+        tone: "warn",
+        title: l.u.name + " 士气 " + l.u.morale.toFixed(2),
+        text: "士气掉到 0.3 以下会溃退——那时候不归你决定。让它整补（发一封「就地整补、固守」）比逼它进攻划算。",
+      });
+    }
+    return o;
+  }
+
+  function hasAlarms(o) {
+    return o.starving.length > 0 || o.contested.length > 0 || o.lowMorale.length > 0;
+  }
+
+  async function open(manual) {
+    if (!S) return;
+    const o = collect();
+    let pendingReports = 0;
+    let enroute = 0, awaiting = 0;
+    try {
+      pendingReports = ((await getJson("/api/reports")).reports || [])
+        .filter((r) => r.status === "pending").length;
+    } catch (e) {}
+    try {
+      const ts = ((await getJson("/api/telegrams")).telegrams || []);
+      enroute = ts.filter((t) => t.status === "enroute").length;
+      awaiting = ts.filter((t) => t.status === "delivered" && !(t.traces || []).length).length;
+    } catch (e) {}
+    if (!manual) shownDay = S.tick;
+
+    const body = document.createElement("div");
+    const sec = (title) => Dlg.h("div", "mr-sec", body, title);
+    const line = (k, v, cls) => {
+      const row = Dlg.h("div", "mr-row" + (cls ? " " + cls : ""), body);
+      Dlg.h("span", "mr-k", row, k);
+      Dlg.h("span", "mr-v", row, v);
+    };
+
+    line("战役进度", "还剩 " + Math.max(0, (S.campaign_days || 0) - S.tick) + " 日 / 共 " + (S.campaign_days || 0) + " 日", "");
+    line("我军", S.side.strength.toFixed(1) + " 千 · " + S.side.provinces + " 省", "");
+    line("当面敌情", S.enemy.estimated_strength > 0
+      ? "约 " + S.enemy.estimated_strength.toFixed(1) + " 千（已查明 " + (S.enemy.known_provinces || 0) + " 处）"
+      : "未查明", "");
+
+    // 一、先处理
+    if (o.alarms.length) {
+      sec("先处理");
+      for (const a of o.alarms) {
+        const card = Dlg.h("div", "mr-alarm " + a.tone, body);
+        Dlg.h("div", "mr-alarm-t", card, a.title);
+        Dlg.h("div", "mr-alarm-x", card, a.text);
+      }
+    }
+
+    // 二、命令卡在哪
+    sec("命令");
+    line("在途电报", enroute ? enroute + " 封还在路上" : "没有", enroute ? "warn" : "");
+    line("等回电", awaiting ? awaiting + " 封送到了、将领还没交判断" : "没有", awaiting ? "warn" : "");
+    line("待批请示", pendingReports ? pendingReports + " 件" : "没有", pendingReports ? "warn" : "");
+
+    // 三、要救的部队
+    if (o.starving.length || o.hungry.length) {
+      sec("补给");
+      for (const s of o.starving) {
+        line(s.u.name + " · " + s.where, s.why + " · 补给 " + s.u.supply.toFixed(2), "bad");
+      }
+      // 缺粮的部队往往一大片（就地征发地板就是 0.25），全列出来会把要闻淹掉。
+      // 只列最差的三支，剩下的合并成一句。
+      const sorted = o.hungry.slice().sort((a, b) => a.u.supply - b.u.supply);
+      for (const h of sorted.slice(0, 3)) {
+        line(h.u.name + " · " + h.where, "缺粮 · 补给 " + h.u.supply.toFixed(2), "warn");
+      }
+      if (sorted.length > 3) {
+        line("另有 " + (sorted.length - 3) + " 部", "同样缺粮（补给 0.25 上下）", "");
+      }
+    }
+
+    // 四、在打的
+    if (o.contested.length) {
+      sec("交战");
+      for (const c of o.contested) {
+        line(c.p.name, "我 " + c.us.length + " 部 / 敌 " + c.them.length + " 部", "warn");
+      }
+    }
+
+    // 五、在路上的
+    if (o.marching.length) {
+      sec("行军");
+      for (const m of o.marching.slice(0, 6)) {
+        line(m.u.name, "→ " + (m.u.march_to || "?") + " · 还要 " + m.u.march_hops + " 日", "");
+      }
+    }
+
+    if (!o.alarms.length && !o.starving.length && !o.contested.length) {
+      Dlg.h("p", "dg-note", body, "今日无事。可以放心推进。");
+    }
+
+    Dlg.open({
+      title: "晨报 · 第 " + S.tick + " 日", body,
+      actions: [
+        { label: "推进到有事", keep: true, onClick: () => { Dlg.close(); api("/api/advance", {}); } },
+        { label: "推进 1 日", primary: true, keep: true, onClick: () => { Dlg.close(); api("/api/tick", { days: 1 }); } },
+        { label: "关闭" },
+      ],
+    });
+  }
+
+  // 只在"今天还没看过 + 确实有要紧事"时拦一下推进。
+  // 每天都拦就成了填表，玩家会开始无脑点关闭——那等于没有。
+  function gate() {
+    if (!S) return true;
+    if (shownDay === S.tick) return true;
+    if (!hasAlarms(collect())) return true;
+    open(false);
+    return false;
+  }
+
+  return { open, gate };
+})();
+
+// 所有"推进一天"的入口都走这里：晨报该拦就拦
+function pushOn(kind, days) {
+  try { if (!Morning.gate()) return; } catch (e) {}
+  api(kind === "advance" ? "/api/advance" : "/api/tick", kind === "advance" ? {} : { days });
+}
 
 // ── 首页 ──
 // 一进来先看到"这是个什么游戏"，而不是一张没有名字的地图。
@@ -2843,6 +3039,7 @@ bind("gd-skip", "click", () => Guide.finish());
 window.addEventListener("resize", () => Guide.reposition());
 
 // ── 首页菜单 ──
+bind("btn-morning", "click", () => Morning.open(true));
 bind("btn-home", "click", () => Home.show());
 bind("hm-continue", "click", async () => {
   const saves = await listSaves();
@@ -2966,8 +3163,8 @@ document.addEventListener("keydown", (e) => {
     if (e.code === "Escape") Dlg.close();
     return;
   }
-  if (e.code === "Space") { e.preventDefault(); api("/api/tick", { days: 1 }); }
-  if (e.code === "Enter") { e.preventDefault(); api("/api/advance", {}); }
+  if (e.code === "Space") { e.preventDefault(); pushOn("tick", 1); }
+  if (e.code === "Enter") { e.preventDefault(); pushOn("advance", 0); }
   if (e.code === "Escape") {
     selUnit = null; curProv = null;
     $("hint").textContent = "地图只作查看：点单位看详情；下命令请用右侧电报台";
