@@ -132,7 +132,16 @@ pwsh -File install.ps1 -Modules F:\dsh\nanxun-1938 -DefaultModule nanxun_1938.im
 `pwsh -File install.ps1 -Uninstall` 卸载，存档会先备份到「我的文档」。
 细节与已知限制见 [`docs/24-桌面版.md`](docs/24-桌面版.md)。
 
-### 开发（浏览器 + 随手改页面）
+### 开发：做模块（改完存盘就重载）
+
+```powershell
+pwsh -File tools/dev.ps1 -Module F:\dsh\nanxun-1938\nanxun_1938.imod
+```
+
+盯着模块目录，一存盘就重载、回到第 0 日；开着的页面 3 秒内自己换地图。
+存了一半的坏 JSON 只报错、不毁现场。重载会清空命令流（这是开发工具，不是读档）。
+
+### 开发：改引擎（浏览器 + 随手改页面）
 
 ```powershell
 $env:IRONMIND_MODULES = "F:\dsh\nanxun-1938"   # 模块仓库在哪

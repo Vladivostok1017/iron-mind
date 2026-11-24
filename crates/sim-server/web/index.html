@@ -752,6 +752,8 @@ async function loadGeo() {
 /* 省份是 Voronoi 切的，形状天然抽象；底下垫一层真实水系（长江、赣江、鄱阳湖），
    地图立刻就能读懂了。数据来自 Natural Earth 1:50m（公有领域），见 tools/mapgen/basemap.js */
 let BASEMAP = null;
+// 开发模式（sim-server --watch）下内核重载模块的代号；正式玩一局恒为 1
+let DEV_GEN = null;
 
 async function loadBasemap() {
   try {
@@ -1836,6 +1838,24 @@ async function refreshLlm() {
     const j = await (await fetch("/api/llm")).json();
     el.textContent = !j.enabled ? "规则 AI" : (j.model + " · " + j.calls + " 次");
     el.title = j.mode + (j.errors && j.errors.length ? "\n最近错误：" + j.errors[0] : "");
+    // 开发模式（--watch）：内核重载了模块，这里跟着换一张地图。
+    // 放在 /api/llm 里传是为了不额外发请求——它本来就每次状态刷新都拉一次。
+    if (typeof j.generation === "number") {
+      if (DEV_GEN === null) DEV_GEN = j.generation;
+      else if (j.generation !== DEV_GEN) {
+        DEV_GEN = j.generation;
+        S = null;
+        GEO = null;
+        BASEMAP = null;
+        selUnit = null; curProv = null; nodeProv = null; geom = null;
+        api("/api/state").then(() => {
+          loadModules();
+          loadBasemap();
+          loadGeo();
+          toast("模块已重载（第 0 日）");
+        });
+      }
+    }
   } catch (e) { el.textContent = "—"; }
 }
 
@@ -3199,6 +3219,10 @@ async function boot() {
   round();
 }
 boot();
+
+// 开发模式下内核会热重载模块，但玩家不动就没有请求——轮询一次 /api/llm 才能发现。
+// 3 秒一次、本地回环、只读，代价可以忽略；它顺带刷新"将领大脑"的调用次数。
+setInterval(() => { if (S) refreshLlm(); }, 3000);
 </script>
 </body>
 </html>

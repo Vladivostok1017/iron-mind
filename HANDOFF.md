@@ -45,6 +45,9 @@ pwsh -File install.ps1 -Uninstall          # 卸载（存档先备份到「我�
 # 战役模块现在住在**另一个仓库**（F:\dsh\nanxun-1938），告诉引擎去哪里找：
 $env:IRONMIND_MODULES = "F:\dsh\nanxun-1938"
 cargo run -p sim-server                    # 默认捡到南浔线
+
+# 做模块：一条命令进开发循环（改完存盘自动重载，页面自动换地图）
+pwsh -File tools/dev.ps1 -Module F:\dsh\nanxun-1938\nanxun_1938.imod
 # 或者显式指定：
 cargo run -p sim-server -- --module ../nanxun-1938/nanxun_1938.imod
 
