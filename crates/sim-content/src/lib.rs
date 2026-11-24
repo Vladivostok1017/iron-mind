@@ -13,6 +13,7 @@
 //! 校验有任何 Error 级问题就拒绝加载——宁可启动失败，也不要跑一个坏模块。
 
 pub mod error;
+pub mod migrate;
 pub mod model;
 pub mod validate;
 
@@ -23,6 +24,7 @@ use sim_core::fixed::Fixed;
 use sim_core::world::{Province, Side, Terrain, Unit, World};
 
 pub use error::{Issue, LoadError, Severity};
+pub use migrate::{ensure_schema, RawModule};
 pub use model::*;
 
 /// 加载成功的模块。
@@ -54,13 +56,90 @@ fn read_json<T: for<'de> serde::Deserialize<'de>>(path: &Path) -> Result<T, Load
     })
 }
 
+/// 去掉以 `_` 开头的键（`_comment` / `_note` 之类）。
+///
+/// JSON 没有注释语法，作者一定会想写点什么。约定：**下划线开头的键一律当注释忽略**。
+/// 这样两种模式都说得通——普通模式本来也读不到它们，严格模式不会因为
+/// 一句注释就报"未知字段"。想真正标注字段含义请用各省各单位的 `note`。
+fn strip_comment_keys(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(map) => {
+            map.retain(|k, _| !k.starts_with('_'));
+            for (_, child) in map.iter_mut() {
+                strip_comment_keys(child);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for child in arr.iter_mut() {
+                strip_comment_keys(child);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 反序列化一个已经迁移过的片段。错误里带上"哪一段不对"。
+fn from_value<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, String> {
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
 /// 从目录加载一个模块。
 pub fn load_module(dir: &Path) -> Result<LoadedModule, LoadError> {
     let base = dir.to_path_buf();
-    let meta: ModuleMeta = read_json(&base.join("module.json"))?;
-    let scenario: ScenarioDef = read_json(&base.join("scenario.json"))?;
-    let map: MapDef = read_json(&base.join("map.json"))?;
-    let oob: OobDef = read_json(&base.join("oob.json"))?;
+    // 先读成裸 JSON，再迁移，最后反序列化。
+    //
+    // 顺序很重要：迁移器改的是**结构**，它必须在 serde 之前跑。
+    // 如果先反序列化，"旧字段名"已经被默认值顶掉了，迁移器连看都看不到。
+    let mut raw_module: serde_json::Value = read_json(&base.join("module.json"))?;
+    let mut raw_scenario: serde_json::Value = read_json(&base.join("scenario.json"))?;
+    let mut raw_map: serde_json::Value = read_json(&base.join("map.json"))?;
+    let mut raw_oob: serde_json::Value = read_json(&base.join("oob.json"))?;
+    let migrated = {
+        let mut raw = migrate::RawModule {
+            module: &mut raw_module,
+            scenario: &mut raw_scenario,
+            map: &mut raw_map,
+            oob: &mut raw_oob,
+        };
+        migrate::ensure_schema(&mut raw, model::CURRENT_CONTENT_SCHEMA).map_err(|message| {
+            LoadError::Migration {
+                module: raw_module
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                message,
+            }
+        })?
+    };
+    strip_comment_keys(&mut raw_module);
+    strip_comment_keys(&mut raw_scenario);
+    strip_comment_keys(&mut raw_map);
+    strip_comment_keys(&mut raw_oob);
+    let meta: ModuleMeta = from_value(raw_module).map_err(|e| LoadError::Parse {
+        path: base.join("module.json"),
+        message: e,
+    })?;
+    let scenario: ScenarioDef = from_value(raw_scenario).map_err(|e| LoadError::Parse {
+        path: base.join("scenario.json"),
+        message: e,
+    })?;
+    let map: MapDef = from_value(raw_map).map_err(|e| LoadError::Parse {
+        path: base.join("map.json"),
+        message: e,
+    })?;
+    let oob: OobDef = from_value(raw_oob).map_err(|e| LoadError::Parse {
+        path: base.join("oob.json"),
+        message: e,
+    })?;
+    if !migrated.is_empty() {
+        println!(
+            "  迁移：模块格式 schema {} → {}（{} 步）",
+            migrated[0],
+            model::CURRENT_CONTENT_SCHEMA,
+            migrated.len()
+        );
+    }
 
     let issues = validate::validate(&meta, &map, &oob);
     let errors: Vec<Issue> = issues.iter().filter(|i| i.is_error()).cloned().collect();

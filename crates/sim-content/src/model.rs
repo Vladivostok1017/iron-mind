@@ -37,6 +37,7 @@ impl SideDef {
 
 /// `module.json`
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct ModuleMeta {
     pub id: String,
     pub name: String,
@@ -124,6 +125,7 @@ impl DomainDef {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct EngineReq {
     pub min: String,
     #[serde(default)]
@@ -132,6 +134,7 @@ pub struct EngineReq {
 
 /// `scenario.json`
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct ScenarioDef {
     pub id: String,
     pub name: String,
@@ -203,6 +206,7 @@ pub enum PrimitiveDef {
 
 /// 一条规则。
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct RuleDef {
     pub id: String,
     pub phase: PhaseDef,
@@ -225,6 +229,7 @@ pub struct RuleDef {
 ///
 /// 也可以不用预设，直接写三个延迟。
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct CommsDef {
     /// 预设：`courier` / `wire_telegraph` / `radio`。
     #[serde(default)]
@@ -242,6 +247,7 @@ pub struct CommsDef {
 
 /// `map.json`
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct MapDef {
     /// 西 / 南 / 东 / 北。
     #[serde(default)]
@@ -270,6 +276,7 @@ pub enum TerrainDef {
 /// 不写 `positions` 的省份自动得到一个阵地（省名 + 省地形，宽度全开），
 /// 所以老模块不用改。
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct PositionDef {
     /// 阵地名，出现在单位牌与战报里，例如「张古山」。
     pub name: String,
@@ -285,6 +292,7 @@ pub struct PositionDef {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct ProvinceDef {
     /// 本地索引。引擎内部按此排序，要求从 0 连续。
     pub id: u32,
@@ -340,6 +348,7 @@ pub struct ProvinceDef {
 /// 下具体命令——走的是**和玩家一样的通道**（电报 → 师团长判断 → 执行），
 /// 所以师团长照样可以抗命。
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct HqDef {
     /// 司令官姓名（岡村寧次）。
     pub name: String,
@@ -362,6 +371,7 @@ pub struct HqDef {
 /// 引擎不认识"天炉""苦撑"这些词，它只认三件事：指标、比较、优先级。
 /// 所以结局是**内容**：同一套引擎可以描述 1938 年的南浔线，也可以描述别的战役。
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct EndingDef {
     pub id: String,
     pub name: String,
@@ -381,6 +391,7 @@ pub struct EndingDef {
 
 /// 一条判定子句：`指标 [某方] 比较 阈值`。
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct ClauseDef {
     /// day / provinces / strength / losses / units_alive / commanders_lost / holds_province
     pub metric: String,
@@ -399,6 +410,7 @@ pub struct ClauseDef {
 
 /// `oob.json`（order of battle，战斗序列）
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct OobDef {
     pub units: Vec<UnitDef>,
 }
@@ -425,6 +437,7 @@ pub enum StanceDef {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct UnitDef {
     pub id: String,
     pub name: String,
@@ -491,6 +504,7 @@ pub struct UnitDef {
 ///
 /// 四项都是 0-1。它们不直接决定胜负，而是决定"上级意图被执行成什么样"。
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct CommanderDef {
     pub name: String,
     /// 服从度：越低越可能抗命、打折扣。

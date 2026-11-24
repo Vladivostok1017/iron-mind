@@ -14,7 +14,9 @@
 param(
   [string]$Module = "",
   [int]$Port = 8899,
-  [switch]$Build
+  [switch]$Build,
+  # 严格模式：未知字段直接报错。查"我是不是把字段名拼错了"时开它。
+  [switch]$Strict
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,10 +39,15 @@ if (-not $Module -or -not (Test-Path $Module)) {
 }
 
 $exe = Join-Path $repo "target\release\sim-server.exe"
-if ($Build -or -not (Test-Path $exe)) {
+if ($Build -or $Strict -or -not (Test-Path $exe)) {
   Write-Host "编译内核（release）……"
   $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-  cargo build --release -p sim-server
+  if ($Strict) {
+    Write-Host "严格模式：未知字段会直接报错"
+    cargo build --release -p sim-server --features sim-content/strict
+  } else {
+    cargo build --release -p sim-server
+  }
   if ($LASTEXITCODE -ne 0) { throw "编译失败" }
 }
 

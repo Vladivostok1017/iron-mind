@@ -8,3 +8,8 @@ license.workspace = true
 sim-core = { path = "../sim-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[features]
+# 严格模式：未知字段直接报错（作者自查字段名拼错用）。
+# 编译期开关：cargo build -p sim-server --features sim-content/strict
+strict = []

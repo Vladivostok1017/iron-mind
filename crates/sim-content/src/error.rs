@@ -74,6 +74,10 @@ pub enum LoadError {
         module: String,
         issues: Vec<Issue>,
     },
+    /// 模块格式迁移失败：版本比引擎新、缺迁移器、或迁移器明确拒绝。
+    ///
+    /// 单独一类而不是塞进 Parse：作者需要知道"这不是我写错了，是格式变了"。
+    Migration { module: String, message: String },
 }
 
 impl LoadError {
@@ -88,6 +92,9 @@ impl LoadError {
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            LoadError::Migration { module, message } => {
+                write!(f, "模块 {module} 格式不兼容：{message}")
+            }
             LoadError::Io { path, message } => {
                 write!(f, "读取失败 {}: {}", path.display(), message)
             }
