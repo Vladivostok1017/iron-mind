@@ -208,6 +208,41 @@ pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
     // ---------- 尺度与作战域 ----------
     issues.extend(check_scale(map, oob, meta));
 
+    // ---------- 兵力对比（内容体检，不是引擎的平衡表） ----------
+    issues.extend(check_balance(oob, meta));
+
+    issues
+}
+
+/// 兵力对比的体检。
+///
+/// **这不是引擎的平衡表**，而是给模块作者的一个提醒：1938 年的中国军队
+/// 人数远多于日军，靠的是装备与训练差一个代差才打成苦战。
+/// 如果某个模块写成"可玩方兵力比敌人还少"，这一局大概率没法玩——
+/// 引擎会照规则跑，但跑出来的是一个不可能赢的局面。
+///
+/// 所以这条只是**警告**，不阻止加载：作者可能就想做一场以少打多的仗。
+/// 但数字会写进提示里，让人一眼看到比例。
+fn check_balance(oob: &OobDef, meta: &ModuleMeta) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    let mut mine = 0.0f64;
+    let mut theirs = 0.0f64;
+    for u in &oob.units {
+        if u.side == meta.playable_side {
+            mine += u.strength;
+        } else {
+            theirs += u.strength;
+        }
+    }
+    if mine > 0.0 && theirs > 0.0 && mine < theirs {
+        issues.push(Issue::warn(
+            "balance.lopsided",
+            format!(
+                "可玩方总兵力 {mine:.0} 千，敌方 {theirs:.0} 千（{:.0}%）。若这一仗不是刻意设定为以少打多，那多半是序列数据写错了——1938 年的中国军队人数远多于日军，靠装备劣势才打成苦战。引擎会照跑，但局面本身可能不成立。",
+                mine / theirs * 100.0
+            ),
+        ));
+    }
     issues
 }
 
