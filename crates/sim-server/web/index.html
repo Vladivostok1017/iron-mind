@@ -1437,6 +1437,9 @@ bind("mod-sel", "change", async () => {
     });
     const j = await r.json();
     if (j.error) { toast(j.error); return; }
+    // 换模块会让引擎把世界代号 +1。这里已经亲手换过图了，把代号标成"待对齐"，
+    // 免得下一轮 refreshLlm 又按代号变化重来一遍（玩家会看到两次"已重载"）。
+    DEV_GEN = null;
     S = j;
     GEO = null;          // 省界跟着模块走
     if (BASEMAP) BASEMAP = null;
@@ -2843,6 +2846,7 @@ const Home = (() => {
       });
       const j = await r.json();
       if (j.error) { toast(j.error); return; }
+      DEV_GEN = null;   // 同上：图我们自己换了，别让轮询再换一次
       S = j;
       GEO = null;
       BASEMAP = null;
