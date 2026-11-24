@@ -612,6 +612,16 @@ fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) 
                     "{}走不到{}：陆路上不通（要跨水，得走水路或换个目标）",
                     w.units[unit_idx].name, w.provinces[t as usize].name
                 ));
+            } else if !is_ground
+                && u.kind == sim_core::UnitKind::Naval
+                && w.provinces[t as usize].terrain != Terrain::Water
+            {
+                // 舰队只在江面上活动。让它"开进城里"是毫无意义的命令，
+                // 静默忽略比报错更糟：玩家会以为命令生效了。
+                return Some(format!(
+                    "舰队只能沿水道移动，{}是陆地",
+                    w.provinces[t as usize].name
+                ));
             } else {
                 let dest = &w.provinces[t as usize];
                 if is_ground && dest.terrain == Terrain::Water {
@@ -1463,6 +1473,18 @@ fn snapshot(w: &World) -> String {
             // 模块没写就是 null，前端据此决定要不要显示。
             "elev": p.elev,
             "relief": p.relief,
+            // 舰炮支援倍率。江面上的舰船能让沿岸陆战好打，但玩家看不见这件事——
+            // 看不到就以为舰队是摆设，所以直接给前端一个数。
+            // 我方没有海军时是 1.00；敌方那一项只在侦察到该省时给出
+            // （"江上有日本军舰"这是看得见的情报，不是上帝视角）。
+            "naval_bonus": round2(
+                sim_core::systems::naval_support(w, i as u32, viewer).to_display_f64()
+            ),
+            "naval_bonus_enemy": if i_intel.is_known() {
+                round2(sim_core::systems::naval_support(w, i as u32, viewer.opponent()).to_display_f64())
+            } else {
+                1.0
+            },
             "positions": p.positions.iter().map(|x| json!({
                 "name": x.name,
                 "terrain": format!("{:?}", x.terrain).to_lowercase(),

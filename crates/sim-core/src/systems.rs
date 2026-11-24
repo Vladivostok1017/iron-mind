@@ -218,7 +218,7 @@ pub fn tick(world: &mut World) {
     rules.run(world, Phase::PostSupply);
     run_movement(world);
     rules.run(world, Phase::PostMovement);
-    run_air(world);
+    run_air(world, now);
     rules.run(world, Phase::PreCombat);
     run_combat(world, seed, now);
     rules.run(world, Phase::PostCombat);
@@ -335,7 +335,10 @@ fn run_movement(world: &mut World) {
 
     for i in 0..world.units.len() {
         let u = &world.units[i];
-        if !u.is_alive() || !u.kind.is_ground() {
+        // 舰队也能动——沿水道换段，舰炮支援才覆盖得到要打的那一仗。
+        // 空军不动：第一版空军是"固定基地出动"，转场还没做。
+        let can_move = u.kind.is_ground() || u.kind == UnitKind::Naval;
+        if !u.is_alive() || !can_move {
             continue;
         }
         let target = match u.order.target() {
@@ -880,7 +883,10 @@ mod tests {
 /// 每 1000 吨舰艇（以兵力千人近似）提供 5% 战斗力加成，上限 60%。
 ///
 /// 这是海军的第一个真实作用：它不占领、不登陆，但能让沿岸的陆战好打得多。
-fn naval_support(world: &World, province: u32, side: Side) -> Fixed {
+///
+/// 公开是因为前端要显示它。一个能改变战斗结果、但玩家完全看不见的东西，
+/// 等于不存在——玩家只会觉得"我有一支舰队，它什么都没干"。
+pub fn naval_support(world: &World, province: u32, side: Side) -> Fixed {
     let mut bonus = Fixed::ZERO;
     let neighbors = world.provinces[province as usize].neighbors.clone();
     for nb in neighbors {
@@ -899,39 +905,90 @@ fn naval_support(world: &World, province: u32, side: Side) -> Fixed {
 
 // ---------------------------------------------------------------- 空军打击
 
-/// 空中打击：`strike_power` 终于有用了。
+/// 空中打击。
 ///
-/// 每 tick，空军对侦察半径内**敌方控制省**的地面部队造成损耗。
-/// 损耗按对方兵力占比分配，强度与打击力、目标规模成正比。
+/// 每 tick，空军对**侦察半径内敌方控制省**的部队造成损耗：地面部队能炸，
+/// 江面上的舰船也能炸（1938 年日军飞机轰炸长江上的中国舰艇是常态）。
 ///
-/// 第一版没有制空权对抗、没有战损、没有架次限制。
-/// 这些都要等"空军对空军"的机制做出来才有意义。
-fn run_air(world: &mut World) {
-    let mut strikes: Vec<(usize, Fixed)> = Vec::new();
+/// 三条规则决定了"它到底能干什么"：
+///
+/// 1. **有目标就打目标**。将领下了"打某省"的命令（`Order::Attack`），
+///    就只打那一个省，集中力量；没有目标才自动在半径内挑敌控省。
+///    以前完全不看命令，于是电报对空军毫无意义——玩家只能看着它自己打。
+/// 2. **出击有损耗**。每打一天，机组与飞机折损 0.3%。命令里那句
+///    "飞机打一架少一架" 以前是假话（空军永不损失），现在是真的。
+/// 3. **打得动人**。系数 0.25：一个满编飞行团对单个目标约 0.13 千/日
+///    （一百多人），量级与一支师级部队一天的战斗减员相当。
+///    以前是 0.1，一天几十人，打一个月也看不出变化，等于没有。
+fn run_air(world: &mut World, now: u32) {
+    /// 空袭效率：`strike_power × 兵力 × 系数`
+    const EFF: (i32, i32) = (25, 100);
+    /// 每出击一天的兵力折损（机组与飞机）
+    const WEAR: (i32, i32) = (3, 1000);
 
-    for u in world.units.iter() {
-        if !u.is_alive() || u.kind != UnitKind::Air || u.strike_power.is_zero() {
+    // (攻击方, 省, 受击单位, 伤害)
+    let mut strikes: Vec<(usize, u32, usize, Fixed)> = Vec::new();
+    let mut worn: Vec<usize> = Vec::new();
+
+    for i in 0..world.units.len() {
+        let u = &world.units[i];
+        if !u.is_alive() || u.kind != UnitKind::Air || u.strength.is_zero() {
             continue;
         }
-        if u.strength.is_zero() {
+        if u.strike_power.is_zero() {
             continue;
         }
         let enemy = u.side.opponent();
         let power = u.strike_power * u.strength;
-        let reach = within_radius(world, u.position, u.recon_radius);
+        // 有明确目标就只打它；没有目标时**也只挑一个省**。
+        //
+        // 自动模式以前是"半径内所有敌控省一起炸"，于是一个飞行团能在同一天
+        // 同时压制三个省，加起来比一支师还能打。航空兵是要集中使用的：
+        // 挑一个最值得炸的地方——最好是正在打的仗——其余放掉。
+        let reach: Vec<u32> = match u.order.target() {
+            Some(t) if (t as usize) < world.provinces.len() => vec![t],
+            _ => within_radius(world, u.position, u.recon_radius)
+                .into_iter()
+                .filter(|&p| {
+                    (p as usize) < world.provinces.len()
+                        && world.provinces[p as usize].owner != u.side
+                        && world
+                            .units_in(p)
+                            .iter()
+                            .any(|&j| world.units[j as usize].side == enemy)
+                })
+                .max_by_key(|&p| {
+                    // 自己地面部队在场的省优先（那就是在打的仗），其次看敌军兵力
+                    let supporting = world
+                        .units_in(p)
+                        .iter()
+                        .any(|&j| world.units[j as usize].side == u.side);
+                    let mass: i32 = world
+                        .units_in(p)
+                        .iter()
+                        .filter(|&&j| world.units[j as usize].side == enemy)
+                        .map(|&j| (world.units[j as usize].strength.raw() >> 16).max(0))
+                        .sum();
+                    (supporting as i32, mass, -(p as i32))
+                })
+                .map(|p| vec![p])
+                .unwrap_or_default(),
+        };
 
         for p in reach {
             if world.provinces[p as usize].owner == u.side {
                 continue;
             }
-            // 只打地面部队
+            // 地面部队与舰船都能炸
             let targets: Vec<usize> = world
                 .units_in(p)
                 .into_iter()
                 .map(|x| x as usize)
                 .filter(|&j| {
                     let tj = &world.units[j];
-                    tj.side == enemy && tj.kind.is_ground() && tj.is_alive()
+                    tj.side == enemy
+                        && tj.is_alive()
+                        && (tj.kind.is_ground() || tj.kind == UnitKind::Naval)
                 })
                 .collect();
             if targets.is_empty() {
@@ -946,26 +1003,69 @@ fn run_air(world: &mut World) {
                 continue;
             }
 
+            let mut hit = false;
             for &j in &targets {
                 let share = world.units[j].strength / total;
-                // 0.1 是空袭效率系数：一个飞行团每天造成几十人伤亡的量级
-                let dmg = power * share * Fixed::ratio(1, 10);
-                strikes.push((j, dmg));
+                let dmg = power * share * Fixed::ratio(EFF.0, EFF.1);
+                strikes.push((i, p, j, dmg));
+                hit = true;
+            }
+            if hit && !worn.contains(&i) {
+                worn.push(i);
             }
         }
     }
 
-    for (j, dmg) in strikes {
-        let u = &mut world.units[j];
-        if !u.is_alive() {
+    // 按 (攻击方, 省) 汇总成一条战报：逐单位刷屏没人看得下去
+    let mut reports: Vec<(usize, u32, Fixed)> = Vec::new();
+    for (i, p, _, _) in &strikes {
+        match reports.iter_mut().find(|(a, b, _)| a == i && b == p) {
+            Some(_) => {}
+            None => reports.push((*i, *p, Fixed::ZERO)),
+        }
+    }
+
+    for (i, p, j, dmg) in strikes {
+        {
+            let u = &mut world.units[j];
+            if !u.is_alive() {
+                continue;
+            }
+            let actual = dmg.min(u.strength);
+            u.strength -= actual;
+            u.losses += actual;
+            u.morale -= Fixed::ratio(1, 100);
+            u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
+        }
+        if let Some(r) = reports.iter_mut().find(|(a, b, _)| *a == i && *b == p) {
+            r.2 += dmg;
+        }
+    }
+
+    // 出击损耗
+    for i in worn {
+        let u = &mut world.units[i];
+        let wear = u.strength * Fixed::ratio(WEAR.0, WEAR.1);
+        u.strength -= wear;
+        u.losses += wear;
+    }
+
+    // 战报：双方都看得见（天上过的飞机不是秘密）
+    for (i, p, dmg) in reports {
+        if dmg.is_zero() {
             continue;
         }
-        let actual = dmg.min(u.strength);
-        u.strength -= actual;
-        u.losses += actual;
-        u.morale -= Fixed::ratio(1, 100);
-        u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
+        let who = world.units[i].name.clone();
+        let where_ = world.provinces[p as usize].name.clone();
+        world.report(
+            crate::world::EventKind::Combat,
+            format!("{who} 空袭 {where_}：敌军损失 {:.2} 千", dmg.to_display_f64()),
+        );
     }
+    let _ = now;
 }
+
+
+
 
 

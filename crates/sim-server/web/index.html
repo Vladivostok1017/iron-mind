@@ -1280,6 +1280,16 @@ function showTip(ev, p) {
   rows.push("<div class='t-row'>地形：<b>" + (TERRAIN_CN[p.terrain] || p.terrain) + "</b>" +
     (p.elev != null ? "<span style='color:#7d8794'>　海拔 " + p.elev + " 米 · 高差 " + p.relief + " 米</span>" : "") +
     (p.fort ? "　工事：<b>" + p.fort + "</b>" : "") + "</div>");
+  // 舰炮支援：舰队唯一"看得见"的作用。不显示的话，玩家只会觉得它是摆设。
+  if (p.naval_bonus && p.naval_bonus > 1.005) {
+    rows.push("<div class='t-row'>舰炮支援：<b>×" + p.naval_bonus.toFixed(2) + "</b>" +
+      "<span style='color:#7d8794'>　江面舰船压制</span></div>");
+  }
+  // 敌方的舰炮支援：这才是玩家真正要看到的——"九江为什么守不住"
+  if (p.naval_bonus_enemy && p.naval_bonus_enemy > 1.005) {
+    rows.push("<div class='t-row'>敌舰炮支援：<b>×" + p.naval_bonus_enemy.toFixed(2) + "</b>" +
+      "<span style='color:#7d8794'>　江面被封锁</span></div>");
+  }
   rows.push("<div class='t-row'>归属：<b>" + (p.mine ? "我方" : (p.owner_known ? "敌方" : "未知")) + "</b></div>");
   if (p.supply_source) rows.push("<div class='t-row'>补给源</div>");
   // 阵地：多阵地省把每个阵地的宽度与工事列出来，
