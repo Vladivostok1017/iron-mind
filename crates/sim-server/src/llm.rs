@@ -488,11 +488,15 @@ pub struct Job {
     pub unit: usize,
     pub day: u32,
     pub ask: Ask,
+    /// 这封判断是被哪封电报问出来的（None = 例行问询）。
+    /// 带上它，回电才能准确挂到"那封"电报上，而不是挂到最近一封。
+    pub telegram: Option<u32>,
 }
 
 pub struct Ready {
     pub day: u32,
     pub judgement: Judgement,
+    pub telegram: Option<u32>,
 }
 
 impl Broker {
@@ -511,9 +515,10 @@ impl Broker {
                 match ask(&cfg, &job.ask) {
                     Ok(j) => {
                         *c2.lock().unwrap() += 1;
-                        r2.lock()
-                            .unwrap()
-                            .insert(job.unit, Ready { day: job.day, judgement: j });
+                        r2.lock().unwrap().insert(
+                            job.unit,
+                            Ready { day: job.day, judgement: j, telegram: job.telegram },
+                        );
                     }
                     Err(e) => {
                         let mut ev = e2.lock().unwrap();

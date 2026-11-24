@@ -877,7 +877,7 @@ fn deliver_telegrams(state: &Arc<ServerState>, w: &World, day: u32) -> Vec<Strin
         targets.truncate(6);
         for idx in &targets {
             if let Some(ask) = build_ask(state, w, *idx, &text) {
-                state.brain.submit(llm::Job { unit: *idx, day, ask });
+                state.brain.submit(llm::Job { unit: *idx, day, ask, telegram: Some(id) });
             }
         }
         {
@@ -1106,19 +1106,19 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         // 模型自己也认为与命令不一致时，即使结果同向也标出来：那是"有异议但照办了"
         let misgiving = j.dissent && same;
 
-        // 回电挂到这封电报上（照办与抗命都要挂，否则玩家看不到他的回话）
+        // 回电挂到**被问的那封**电报上（照办与抗命都要挂）。
+        // 以前按"该番号最近一封"找，连发两封电报时回电会串到错的那封上。
         if !j.reply.is_empty() {
-            let form = w.units[idx].formation.clone();
+            let who = w.units[idx].commander.name.clone();
             let mut list = state.telegrams.lock().unwrap();
-            if let Some(t) = list
-                .iter_mut()
-                .rev()
-                .find(|t| t.to == form && t.status == "delivered")
-            {
+            let target = match ready.telegram {
+                Some(id) => list.iter_mut().find(|t| t.id == id),
+                None => None,
+            };
+            if let Some(t) = target {
                 if !t.reply.is_empty() {
                     t.reply.push('\n');
                 }
-                let who = w.units[idx].commander.name.clone();
                 t.reply.push_str(&format!("{who}：{}", j.reply));
             }
         }
@@ -1282,7 +1282,7 @@ fn request_due(state: &Arc<ServerState>, w: &World) {
             break;
         }
         if let Some(ask) = build_ask(state, w, idx, "") {
-            state.brain.submit(llm::Job { unit: idx, day, ask });
+            state.brain.submit(llm::Job { unit: idx, day, ask, telegram: None });
             trace(format!("   问询 unit#{idx}（第{day}日）"));
             budget -= 1;
         }

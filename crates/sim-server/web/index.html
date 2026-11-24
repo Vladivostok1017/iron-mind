@@ -866,12 +866,16 @@ async function sendTelegram() {
 // 之前所有战报挤在右下角一个 200px 高的小窗口里，长句被截断、也分不清是哪一仗。
 // 现在：侧栏只显示最新一条，点「打开战报信箱」进入全屏列表，一封一封看。
 const KIND_CN = { combat: "战斗", occupy: "易手", dissent: "抗命", cmd: "将领", rule: "规则", intel: "情报", supply: "后勤", retreat: "撤退" };
-let mailFilter = "all";
+// 默认只看"重要"：规则类（山地行军减员）每 tick 每个单位一条，会把真正的战况埋掉
+const MAIL_KEY = ["combat", "occupy", "dissent", "cmd"];
+let mailFilter = "key";
 let mailSel = 0;
 
 function mailItems() {
   const all = (S && S.log) || [];
-  return mailFilter === "all" ? all : all.filter((e) => e.kind === mailFilter);
+  if (mailFilter === "all") return all;
+  if (mailFilter === "key") return all.filter((e) => MAIL_KEY.includes(e.kind));
+  return all.filter((e) => e.kind === mailFilter);
 }
 
 function openMail() {
@@ -893,12 +897,12 @@ function renderMail() {
   $("mail-count").textContent = "共 " + items.length + " 条";
 
   // 分类筛选
-  const kinds = ["all", "combat", "occupy", "dissent", "cmd", "rule"];
+  const kinds = ["key", "all", "combat", "occupy", "dissent", "cmd", "rule"];
   chips.innerHTML = "";
   for (const k of kinds) {
     const b = document.createElement("button");
     b.className = "m-chip" + (mailFilter === k ? " on" : "");
-    b.textContent = k === "all" ? "全部" : (KIND_CN[k] || k);
+    b.textContent = k === "key" ? "重要" : (k === "all" ? "全部" : (KIND_CN[k] || k));
     b.onclick = () => { mailFilter = k; mailSel = 0; renderMail(); };
     chips.appendChild(b);
   }
