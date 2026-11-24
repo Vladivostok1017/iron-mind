@@ -8,5 +8,11 @@
     "min": "0.1.0"
   },
   "content_schema": 1,
-  "playable_side": "cn"
+  "playable_side": "cn",
+  "scale": "theater",
+  "domains": [
+    "land",
+    "naval",
+    "air"
+  ]
 }

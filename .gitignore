@@ -30,3 +30,6 @@ Thumbs.db
 /groups/
 /strips/
 /_ref/
+
+# Natural Earth 原始数据缓存（只在重新生成 basemap.json 时需要，产物已入库）
+/tools/mapgen/_geo/

@@ -1,0 +1,20 @@
+{
+  "units": [
+    { "id": "cn.fort", "name": "要塞守备队", "side": "cn", "parent": "田家镇守备司令部", "strength": 4.0, "position": 0, "stance": "defend", "effectiveness": 1.1, "supply_reach": 0.1, "estimated": true,
+      "commander": { "name": "张守备", "obedience": 0.9, "initiative": 0.3, "aggression": 0.3, "caution": 0.8,
+        "title": "要塞守备司令", "persona": "工兵出身，把要塞当自己的房子修，一寸一寸算工事厚度。", "agenda": "守住主堡就是全部功绩；他不敢野战，但肯死守。" },
+      "note": "演示数据" },
+    { "id": "cn.198", "name": "第198师", "side": "cn", "parent": "田家镇守备司令部", "strength": 6.0, "position": 2, "stance": "defend", "effectiveness": 0.95, "supply_reach": 0.1, "estimated": true,
+      "commander": { "name": "李师长", "obedience": 0.7, "initiative": 0.6, "aggression": 0.5, "caution": 0.6,
+        "title": "第198师师长", "persona": "杂牌出身，打仗先算退路，不肯把部队填进死角。", "agenda": "保住这个师才有番号；丢了半壁山还能退，丢了师就什么都没了。" },
+      "note": "演示数据" },
+    { "id": "jp.6", "name": "第6师团今村支队", "side": "jp", "parent": "第11军", "strength": 9.0, "position": 1, "effectiveness": 1.7, "supply_reach": 0.45, "estimated": true,
+      "commander": { "name": "今村均", "obedience": 0.8, "initiative": 0.6, "aggression": 0.8, "caution": 0.4,
+        "title": "支队长", "persona": "攻坚派出身，信'炮火准备到位就没有攻不下的堡垒'，不怕伤亡，怕拖时间。", "agenda": "要塞必须在他手里拿下；拖久了功劳会被别的部队接走。" },
+      "note": "演示数据" },
+    { "id": "jp.arm", "name": "独立山炮兵联队", "side": "jp", "parent": "第11军", "strength": 3.0, "position": 1, "effectiveness": 1.5, "supply_reach": 0.4, "estimated": true,
+      "commander": { "name": "炮队指挥", "obedience": 0.85, "initiative": 0.4, "aggression": 0.6, "caution": 0.5,
+        "title": "联队长", "persona": "炮兵本位，只关心射界与弹药，讨厌被要求抵近射击。", "agenda": "把炮保住，别让步兵指挥官把炮推到要塞炮口下面。" },
+      "note": "演示数据" }
+  ]
+}

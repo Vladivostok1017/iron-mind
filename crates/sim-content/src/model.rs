@@ -51,10 +51,69 @@ pub struct ModuleMeta {
     /// 玩家可操作的一方。当前引擎只支持单方可玩。
     #[serde(default = "default_playable")]
     pub playable_side: SideDef,
+    /// 战役尺度。决定"这张图是什么"，也决定校验规则。
+    ///
+    /// - `theater` 战役级：几十到上百个省，师级单位，数天一级的时间颗粒
+    /// - `battle` 战斗级：几个省，每个省拆阵地，逐点争夺
+    /// - `siege` 攻坚：一到两个省，工事与突破口是主角
+    /// - `naval` 海战/江防：水域省份占大头，舰炮与登陆
+    ///
+    /// 引擎代码里**不区分**这些尺度（它只认省、阵地、单位），
+    /// 尺度只影响校验的严格程度与默认值的取舍。
+    #[serde(default)]
+    pub scale: ScaleDef,
+    /// 本战役涉及哪些作战域。声明了却没单位、或有单位却没声明，都会告警。
+    #[serde(default)]
+    pub domains: Vec<DomainDef>,
 }
 
 fn default_playable() -> SideDef {
     SideDef::Cn
+}
+
+/// 战役尺度。见 `ModuleMeta::scale`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ScaleDef {
+    /// 战役级（默认）
+    #[default]
+    Theater,
+    /// 战斗级
+    Battle,
+    /// 攻坚
+    Siege,
+    /// 海战/江防
+    Naval,
+}
+
+impl ScaleDef {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScaleDef::Theater => "theater",
+            ScaleDef::Battle => "battle",
+            ScaleDef::Siege => "siege",
+            ScaleDef::Naval => "naval",
+        }
+    }
+}
+
+/// 作战域。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DomainDef {
+    Land,
+    Naval,
+    Air,
+}
+
+impl DomainDef {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DomainDef::Land => "land",
+            DomainDef::Naval => "naval",
+            DomainDef::Air => "air",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

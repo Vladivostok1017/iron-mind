@@ -1,0 +1,37 @@
+{
+  "bbox": [115.30, 29.85, 115.65, 30.10],
+  "projection": "wgs84",
+  "provinces": [
+    {
+      "id": 0, "name": "田家镇要塞", "terrain": "urban", "owner": "cn", "fort": 5,
+      "supply_source": true, "supply_throughput": 1.0, "neighbors": [1, 2],
+      "victory_points": 5, "lon": 115.47, "lat": 29.93,
+      "note": "长江北岸要塞，工事五级。守军的全部价值就在这里",
+      "positions": [
+        { "name": "主堡", "terrain": "urban", "width": 0.3, "fort": 5 },
+        { "name": "东炮台", "terrain": "mountain", "width": 0.4, "fort": 4 },
+        { "name": "江边码头", "terrain": "marsh", "width": 0.5, "fort": 2 }
+      ]
+    },
+    {
+      "id": 1, "name": "富池口", "terrain": "hill", "owner": "jp", "fort": 1,
+      "supply_source": true, "supply_throughput": 0.8, "neighbors": [0, 2],
+      "lon": 115.43, "lat": 29.84,
+      "note": "富水入江口，日军进攻出发地",
+      "positions": [
+        { "name": "富水桥", "terrain": "plain", "width": 0.8, "fort": 0 },
+        { "name": "北高地", "terrain": "hill", "width": 0.5, "fort": 1 }
+      ]
+    },
+    {
+      "id": 2, "name": "半壁山", "terrain": "mountain", "owner": "cn", "fort": 0,
+      "supply_throughput": 0.6, "neighbors": [0, 1],
+      "lon": 115.54, "lat": 30.02,
+      "note": "要塞侧翼制高点，丢了则主堡被瞰制",
+      "positions": [
+        { "name": "主峰", "terrain": "mountain", "width": 0.4, "fort": 0 },
+        { "name": "南麓", "terrain": "hill", "width": 0.7, "fort": 0 }
+      ]
+    }
+  ]
+}

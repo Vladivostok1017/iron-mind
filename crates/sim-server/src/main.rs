@@ -197,6 +197,9 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let text: Vec<String> = tail.into_iter().rev().map(|s| s.to_string()).collect();
             respond(&mut stream, 200, "text/plain; charset=utf-8", &text.join("\n"))
         }
+        ("GET", "/basemap.json") => {
+            respond(&mut stream, 200, "application/json", BASEMAP)
+        }
         ("GET", "/api/state") => {
             let json = {
                 let w = state.world.lock().unwrap();
@@ -1503,6 +1506,10 @@ fn respond(
 
 /// 前端页面（内嵌，避免额外文件依赖）。
 const PAGE: &str = include_str!("../web/index.html");
+
+/// 真实地理底图（海岸线/河流/湖泊）。按 docs/04 的分层，G0 全球底图归引擎，
+/// 所以它属于服务端，不属于任何模块——换战役不用重画。
+const BASEMAP: &str = include_str!("../web/basemap.json");
 
 
 

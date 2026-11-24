@@ -1,0 +1,24 @@
+{
+  "id": "scen.tianjiazhen",
+  "name": "田家镇要塞攻坚",
+  "start_date": "1938-09-15",
+  "days": 20,
+  "seed": 20251001,
+  "comms": { "preset": "field_telephone" },
+  "rules": [
+    {
+      "phase": "post_combat",
+      "id": "fortress_last_stand",
+      "when": { "all": [ { "province_owner": "cn" }, { "terrain": "urban" } ] },
+      "then": [ { "modify_morale": 0.02 } ],
+      "priority": 0
+    },
+    {
+      "phase": "post_movement",
+      "id": "river_mud",
+      "when": { "terrain": "marsh" },
+      "then": [ { "modify_supply": -0.02 }, { "log": "沼泽泥泞，辎重难行" } ],
+      "priority": 0
+    }
+  ]
+}

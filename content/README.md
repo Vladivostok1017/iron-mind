@@ -331,6 +331,28 @@ node tools/mapgen/gen.js         # 写入 nanxun_1938.imod/map.json
 
 ---
 
+
+## scale 与 domains（声明这是什么尺度的战役）
+
+`module.json` 里声明，校验器据此决定严格程度。**引擎代码里不区分尺度**，只认省、阵地、单位。
+
+```json
+"scale": "siege",
+"domains": ["land"]
+```
+
+| `scale` | 建议省数 | 额外要求 |
+|---|---|---|
+| `theater`（默认） | ≥12 | — |
+| `battle` | 2-12 | 每省都要拆阵地 |
+| `siege` | 1-6 | 每省都要拆阵地 |
+| `naval` | ≥2 | 建议声明 `naval` 域 |
+
+`domains`：`land` / `naval` / `air`。声明了 `naval` 却没有海军单位或没有水域省份 → **加载报错**；
+声明了 `air` 却没有空军单位 → 警告。这样"模块说错了"在加载时就暴露，而不是玩到一半才发现。
+
+三个现成的例子：`nanxun_1938`（theater，陆海空）、`demo_1805`（battle，陆）、
+`siege_tianjiazhen`（siege，陆，要塞工事五级）。
 ## 校验规则
 
 加载时会自动检查。**Error 级问题会拒绝加载**，Warning 只提示。

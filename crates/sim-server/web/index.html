@@ -352,6 +352,56 @@ function project() {
   };
 }
 
+/* ---------- 真实地理底图 ---------- */
+/* 省份是 Voronoi 切的，形状天然抽象；底下垫一层真实水系（长江、赣江、鄱阳湖），
+   地图立刻就能读懂了。数据来自 Natural Earth 1:50m（公有领域），见 tools/mapgen/basemap.js */
+let BASEMAP = null;
+
+async function loadBasemap() {
+  try {
+    const j = await (await fetch("/basemap.json")).json();
+    BASEMAP = j;
+    if (geom) render();
+  } catch (e) { console.warn("底图加载失败", e); }
+}
+
+function drawBasemap(svg) {
+  if (!BASEMAP || !geom || !geom.proj) return;
+  const proj = geom.proj;
+  const g = el("g", { class: "basemap", opacity: ".9" }, svg);
+
+  const toPath = (line, close) => {
+    let d = "";
+    for (let i = 0; i < line.length; i++) {
+      const [x, y] = proj.pt(line[i][0], line[i][1]);
+      d += (i ? "L" : "M") + x.toFixed(1) + "," + y.toFixed(1);
+    }
+    return close ? d + "Z" : d;
+  };
+
+  const lakes = (BASEMAP.layers && BASEMAP.layers.lakes) || [];
+  for (const ring of lakes) {
+    el("path", {
+      // 湖泊只做淡淡的底+清楚的边：填太实会和"水域省份"混淆
+      d: toPath(ring, true), fill: "#1b3b4d", "fill-opacity": ".3",
+      stroke: "#2f6480", "stroke-width": 1,
+    }, g);
+  }
+  const rivers = (BASEMAP.layers && BASEMAP.layers.rivers) || [];
+  for (const line of rivers) {
+    el("path", {
+      d: toPath(line, false), fill: "none", stroke: "#3d7fa3",
+      "stroke-width": 1.1, "stroke-opacity": ".85", "stroke-linecap": "round",
+    }, g);
+  }
+  const coast = (BASEMAP.layers && BASEMAP.layers.coast) || [];
+  for (const line of coast) {
+    el("path", {
+      d: toPath(line, false), fill: "none", stroke: "#4a6a80",
+      "stroke-width": 1.4, "stroke-opacity": ".9",
+    }, g);
+  }
+}
 /* ---------- Voronoi：半平面裁剪 ---------- */
 /* 每个省从整个地图矩形开始，依次用它与其他省的中垂线切割，
    只保留靠近自己的一侧。切完就是这个省的多边形。
@@ -409,7 +459,7 @@ function buildGeom() {
       centroids[id] = [cx / (6 * area), cy / (6 * area)];
     }
   }
-  geom = { cells, centroids, box };
+  geom = { cells, centroids, box, proj };
 }
 
 function ptsToPath(poly) {
@@ -673,6 +723,9 @@ function renderMap() {
       hit.addEventListener("mouseleave", hideTip);
     }
   }
+
+  // 真实水系压在最上面：省色是"归属"，河湖是"地理"，两层叠起来才像地图
+  drawBasemap(svg);
 
   // 名称与标记（画在多边形之上，避免被覆盖）
   for (const p of S.provinces) {
@@ -1288,6 +1341,7 @@ document.addEventListener("keydown", (e) => {
 // 之前会永远停在一块空白界面上，看起来像坏了。
 async function boot() {
   await api("/api/state");
+  if (!BASEMAP) loadBasemap();
   if (!S) setTimeout(boot, 2000);
 }
 boot();

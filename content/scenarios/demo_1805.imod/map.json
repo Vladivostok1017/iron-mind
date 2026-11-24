@@ -3,19 +3,71 @@
   "projection": "wgs84",
   "provinces": [
     {
-      "id": 0, "name": "北营", "terrain": "plain", "owner": "cn",
-      "supply_source": true, "supply_throughput": 1.0,
-      "neighbors": [1], "note": "演示用，非史实"
+      "id": 0,
+      "name": "北营",
+      "terrain": "plain",
+      "owner": "cn",
+      "supply_source": true,
+      "supply_throughput": 1,
+      "neighbors": [
+        1
+      ],
+      "note": "演示用，非史实",
+      "positions": [
+        {
+          "name": "北营栅栏",
+          "terrain": "plain",
+          "width": 0.7,
+          "fort": 1
+        }
+      ]
     },
     {
-      "id": 1, "name": "中间高地", "terrain": "hill", "owner": "cn",
-      "supply_throughput": 0.7, "neighbors": [0, 2],
-      "prototype": "ridge_line", "note": "争夺要点"
+      "id": 1,
+      "name": "中间高地",
+      "terrain": "hill",
+      "owner": "cn",
+      "supply_throughput": 0.7,
+      "neighbors": [
+        0,
+        2
+      ],
+      "prototype": "ridge_line",
+      "note": "争夺要点",
+      "positions": [
+        {
+          "name": "高地正面",
+          "terrain": "hill",
+          "width": 0.5,
+          "fort": 1
+        },
+        {
+          "name": "西侧林线",
+          "terrain": "hill",
+          "width": 0.6,
+          "fort": 0
+        }
+      ]
     },
     {
-      "id": 2, "name": "南营", "terrain": "plain", "owner": "jp",
-      "supply_source": true, "supply_throughput": 1.0,
-      "neighbors": [1], "note": "演示用，非史实"
+      "id": 2,
+      "name": "南营",
+      "terrain": "plain",
+      "owner": "jp",
+      "supply_source": true,
+      "supply_throughput": 1,
+      "neighbors": [
+        1
+      ],
+      "note": "演示用，非史实",
+      "positions": [
+        {
+          "name": "南营栅栏",
+          "terrain": "plain",
+          "width": 0.7,
+          "fort": 1
+        }
+      ]
     }
   ]
 }

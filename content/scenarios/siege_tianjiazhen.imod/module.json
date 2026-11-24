@@ -1,0 +1,12 @@
+{
+  "id": "org.ironmind.siege_tianjiazhen",
+  "name": "田家镇要塞 · 攻坚",
+  "version": "0.1.0",
+  "author": "iron-mind",
+  "description": "尺度=攻坚：只有三个省，胜负在阵地与工事上。田家镇要塞（国军，工事五级）顶住富池口方向来的日军。用来验证同一套引擎能跑战斗级/攻坚级模块。",
+  "engine": { "min": "0.1.0" },
+  "content_schema": 1,
+  "playable_side": "cn",
+  "scale": "siege",
+  "domains": ["land"]
+}

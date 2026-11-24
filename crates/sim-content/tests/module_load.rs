@@ -29,6 +29,8 @@ fn meta(id: &str) -> ModuleMeta {
         },
         content_schema: 1,
         playable_side: SideDef::Cn,
+        scale: ScaleDef::Theater,
+        domains: vec![DomainDef::Land],
     }
 }
 

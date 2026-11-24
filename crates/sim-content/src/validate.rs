@@ -11,7 +11,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::error::Issue;
-use crate::model::{MapDef, ModuleMeta, OobDef, SideDef};
+use crate::model::{DomainDef, MapDef, ModuleMeta, OobDef, ScaleDef, SideDef, TerrainDef, UnitKindDef};
 
 /// 对整个模块做静态校验。返回全部问题（含 Warning）。
 pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
@@ -205,9 +205,108 @@ pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
     // ---------- 连通性 ----------
     issues.extend(check_reachability(map, oob));
 
+    // ---------- 尺度与作战域 ----------
+    issues.extend(check_scale(map, oob, meta));
+
     issues
 }
 
+/// 尺度与作战域的校验。
+///
+/// 这一层的意思是：**同一个引擎，不同尺度的模块必须说自己是什么**，
+/// 校验器据此决定严格程度。比如攻坚图里没有阵地就等于没做战术层，
+/// 战役图里只有三个省则根本打不出战役。
+fn check_scale(map: &MapDef, oob: &OobDef, meta: &ModuleMeta) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    let n = map.provinces.len();
+
+    // 按尺度检查图的规模与阵地
+    let (min_p, max_p) = match meta.scale {
+        ScaleDef::Theater => (12, usize::MAX),
+        ScaleDef::Battle => (2, 12),
+        ScaleDef::Siege => (1, 6),
+        ScaleDef::Naval => (2, usize::MAX),
+    };
+    if n < min_p {
+        issues.push(Issue::warn(
+            "scale.too_few_provinces",
+            format!(
+                "scale={} 只有 {} 个省，偏小（建议 ≥{}）",
+                meta.scale.as_str(),
+                n,
+                min_p
+            ),
+        ));
+    }
+    if n > max_p {
+        issues.push(Issue::warn(
+            "scale.too_many_provinces",
+            format!(
+                "scale={} 有 {} 个省，偏大（建议 ≤{}）",
+                meta.scale.as_str(),
+                n,
+                max_p
+            ),
+        ));
+    }
+    // 战斗级/攻坚级必须拆阵地，否则玩家没有可争夺的战术点
+    if matches!(meta.scale, ScaleDef::Battle | ScaleDef::Siege) {
+        let without: Vec<&str> = map
+            .provinces
+            .iter()
+            .filter(|p| p.positions.is_empty())
+            .map(|p| p.name.as_str())
+            .collect();
+        if !without.is_empty() {
+            issues.push(Issue::warn(
+                "scale.missing_positions",
+                format!(
+                    "scale={} 但以下省份没拆阵地，战术层等于没有：{}",
+                    meta.scale.as_str(),
+                    without.join("、")
+                ),
+            ));
+        }
+    }
+
+    // 声明了某域却没有对应单位
+    let has = |k: UnitKindDef| oob.units.iter().any(|u| u.kind == k);
+    for d in &meta.domains {
+        match d {
+            DomainDef::Land => {
+                if !has(UnitKindDef::Infantry) && !has(UnitKindDef::Armor) {
+                    issues.push(Issue::error(
+                        "domain.land_without_units",
+                        "声明了 land 域，但没有任何地面单位".to_string(),
+                    ));
+                }
+            }
+            DomainDef::Naval => {
+                if !has(UnitKindDef::Naval) {
+                    issues.push(Issue::error(
+                        "domain.naval_without_units",
+                        "声明了 naval 域，但没有任何海军单位".to_string(),
+                    ));
+                }
+                if !map.provinces.iter().any(|p| p.terrain == TerrainDef::Water) {
+                    issues.push(Issue::error(
+                        "domain.naval_without_water",
+                        "声明了 naval 域，但地图没有任何水域省份".to_string(),
+                    ));
+                }
+            }
+            DomainDef::Air => {
+                if !has(UnitKindDef::Air) {
+                    issues.push(Issue::warn(
+                        "domain.air_without_units",
+                        "声明了 air 域，但没有任何空军单位".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    issues
+}
 /// 从每方补给源出发，检查其控制省与单位是否可达。
 fn check_reachability(map: &MapDef, oob: &OobDef) -> Vec<Issue> {
     let mut issues = Vec::new();
