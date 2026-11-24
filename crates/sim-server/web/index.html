@@ -291,6 +291,8 @@
       <button class="mode" data-view="terrain">地形</button>
     </div>
     <div class="sep"></div>
+    <!-- 模块 = 这一仗的剧本。游戏只提供框架，剧本由玩家自己写，所以必须能在这儿换。 -->
+    <select id="mod-sel" title="切换模块（会重开一局）" style="font-size:11.5px;background:#141b23;color:#c3ccd6;border:1px solid #2d3947;border-radius:4px;padding:5px 6px;max-width:190px"></select>
     <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
     <button class="btn" id="btn-save">存档</button>
     <button class="btn" id="btn-load">读档</button>
@@ -1003,6 +1005,51 @@ function showOutcome() {
   box.classList.add("on");
 }
 
+// 模块选择器：列出 content/scenarios/*.imod，切换 = 重开一局。
+// 切完要重新拉省界（每个模块的 provinces_geo.json 不一样），
+// 否则地图还是上一局的多边形。
+async function loadModules() {
+  const sel = $("mod-sel");
+  if (!sel) return;
+  try {
+    const j = await (await fetch("/api/modules")).json();
+    sel.innerHTML = "";
+    for (const m of j.modules || []) {
+      const o = document.createElement("option");
+      o.value = m.path;
+      o.textContent = m.name + (m.scale ? "（" + m.scale + "）" : "");
+      if (m.current) o.selected = true;
+      sel.appendChild(o);
+    }
+  } catch (e) { /* 服务还没起来，boot 会重试 */ }
+}
+
+bind("mod-sel", "change", async () => {
+  const path = $("mod-sel").value;
+  if (!path) return;
+  if (S && S.tick > 0 && !confirm("切换模块会重开一局，当前进度不保存。继续？")) {
+    loadModules();
+    return;
+  }
+  try {
+    const r = await fetch("/api/module", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const j = await r.json();
+    if (j.error) { toast(j.error); return; }
+    S = j;
+    GEO = null;          // 省界跟着模块走
+    if (BASEMAP) BASEMAP = null;
+    await loadGeo();
+    if (!BASEMAP) loadBasemap();
+    selUnit = null; curProv = null; nodeProv = null;
+    document.getElementById("outcome").classList.remove("on");
+    render();
+    toast("已切换到 " + path.split("/").pop());
+  } catch (e) { toast("切换失败：连不上服务"); }
+});
+
 async function api(path, body) {
   const opt = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
   try {
@@ -1591,6 +1638,7 @@ document.addEventListener("keydown", (e) => {
 // 之前会永远停在一块空白界面上，看起来像坏了。
 async function boot() {
   await api("/api/state");
+  loadModules();
   if (!BASEMAP) loadBasemap();
   if (!GEO) loadGeo();
   if (!S) setTimeout(boot, 2000);

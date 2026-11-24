@@ -66,20 +66,21 @@ fn main() {
     println!("  将领大脑：{}", llm_cfg.describe());
 
     let state = Arc::new(ServerState {
-        module,
+        module: std::sync::Mutex::new(module),
+        module_path: std::sync::Mutex::new(module_path.clone()),
         world: std::sync::Mutex::new(None),
         commands: std::sync::Mutex::new(Vec::new()),
         llm: llm_cfg.clone(),
         brain: llm::Broker::new(llm_cfg),
         reports: std::sync::Mutex::new(Vec::new()),
         next_report_id: std::sync::atomic::AtomicU32::new(1),
-        provinces_geo,
+        provinces_geo: std::sync::Mutex::new(provinces_geo),
         telegrams: std::sync::Mutex::new(Vec::new()),
         next_telegram_id: std::sync::atomic::AtomicU32::new(1),
     });
     {
         let mut w = state.world.lock().unwrap();
-        let mut world = build_world(&state.module);
+        let mut world = build_world(&state.module.lock().unwrap());
         // 开局先做一次侦察，否则玩家看到的是一片全黑
         sim_core::intel::run_intel(&mut world);
         *w = Some(world);
@@ -125,7 +126,10 @@ fn main() {
 }
 
 struct ServerState {
-    module: LoadedModule,
+    /// 当前模块。切模块时会整体替换，所以放在 Mutex 后面。
+    module: std::sync::Mutex<LoadedModule>,
+    /// 模块目录（切换时用）。
+    module_path: std::sync::Mutex<String>,
     world: std::sync::Mutex<Option<World>>,
     /// 玩家命令流。`(模块, 种子, 命令流)` 就是一份完整存档。
     commands: std::sync::Mutex<Vec<CmdRecord>>,
@@ -136,7 +140,7 @@ struct ServerState {
     reports: std::sync::Mutex<Vec<Report>>,
     next_report_id: std::sync::atomic::AtomicU32,
     /// 模块自带的真实省界（provinces_geo.json）。没有就退回前端 Voronoi。
-    provinces_geo: Option<String>,
+    provinces_geo: std::sync::Mutex<Option<String>>,
     /// 在途与已送达的电报
     telegrams: std::sync::Mutex<Vec<Telegram>>,
     next_telegram_id: std::sync::atomic::AtomicU32,
@@ -207,7 +211,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let text: Vec<String> = tail.into_iter().rev().map(|s| s.to_string()).collect();
             respond(&mut stream, 200, "text/plain; charset=utf-8", &text.join("\n"))
         }
-        ("GET", "/provinces_geo.json") => match &state.provinces_geo {
+        ("GET", "/provinces_geo.json") => match &*state.provinces_geo.lock().unwrap() {
             Some(s) => respond(&mut stream, 200, "application/json", s),
             None => respond(&mut stream, 404, "text/plain", "this module has no provinces_geo.json"),
         },
@@ -367,10 +371,73 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 (w.state_hash(), w.tick)
             };
             let cmds = state.commands.lock().unwrap().clone();
-            let json = replay_check(&state.module, live_hash, live_tick, &cmds);
+            let json = replay_check(&state.module.lock().unwrap(), live_hash, live_tick, &cmds);
             respond(&mut stream, 200, "application/json", &json)
         }
-        ("GET", "/api/llm") => {
+        // 模块列表：`content/scenarios/*.imod`，读每个的 module.json 取名字。
+        //
+        // 这个游戏只提供框架，模块由玩家自己开发——那就不该让他们改命令行重启。
+        ("GET", "/api/modules") => {
+            use serde_json::json;
+            // 路径比较要抹平分隔符：命令行给的是 `/`，read_dir 在 Windows 上给的是 `\`
+            let cur = state.module_path.lock().unwrap().replace('\\', "/");
+            let mut list = Vec::new();
+            if let Ok(rd) = std::fs::read_dir("content/scenarios") {
+                let mut dirs: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+                dirs.sort();
+                for p in dirs {
+                    if !p.is_dir() || p.extension().and_then(|x| x.to_str()) != Some("imod") {
+                        continue;
+                    }
+                    let meta = std::fs::read_to_string(p.join("module.json"))
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+                    let path = p.to_string_lossy().replace('\\', "/");
+                    list.push(json!({
+                        "path": path,
+                        "name": meta.as_ref().and_then(|m| m.get("name")).and_then(|v| v.as_str()).unwrap_or("?"),
+                        "scale": meta.as_ref().and_then(|m| m.get("scale")).and_then(|v| v.as_str()).unwrap_or(""),
+                        "current": path == cur,
+                    }));
+                }
+            }
+            respond(&mut stream, 200, "application/json", &json!({ "modules": list }).to_string())
+        }
+        // 切换模块：整体替换世界，清空命令流/电报/公文。
+        ("POST", "/api/module") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            // 只允许 content/scenarios 下的 .imod，别让一个网页把服务器指向任意目录
+            let ok_path = path.starts_with("content/scenarios")
+                && path.ends_with(".imod")
+                && !path.contains("..");
+            if !ok_path {
+                let _ = respond(&mut stream, 400, "application/json", "{\"error\":\"模块路径不合法\"}");
+                return Ok(());
+            }
+            let loaded = match load_module(&PathBuf::from(&path)) {
+                Ok(m) => m,
+                Err(e) => {
+                    let msg = json!({ "error": format!("加载失败：{e}") });
+                    let _ = respond(&mut stream, 400, "application/json", &msg.to_string());
+                    return Ok(());
+                }
+            };
+            let geo = std::fs::read_to_string(std::path::Path::new(&path).join("provinces_geo.json")).ok();
+            let mut world = build_world(&loaded);
+            sim_core::intel::run_intel(&mut world);
+            *state.module.lock().unwrap() = loaded;
+            *state.module_path.lock().unwrap() = path.clone();
+            *state.provinces_geo.lock().unwrap() = geo;
+            *state.world.lock().unwrap() = Some(world);
+            state.commands.lock().unwrap().clear();
+            state.reports.lock().unwrap().clear();
+            state.telegrams.lock().unwrap().clear();
+            trace(format!("   切换模块 → {path}"));
+            let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap());
+            respond(&mut stream, 200, "application/json", &snap)
+        }        ("GET", "/api/llm") => {
             use serde_json::json;
             let body = json!({
                 "enabled": state.llm.enabled,
@@ -495,8 +562,8 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     .collect();
                 let payload = SaveFile {
                     v: 1,
-                    module_id: state.module.meta.id.clone(),
-                    module_version: state.module.meta.version.clone(),
+                    module_id: state.module.lock().unwrap().meta.id.clone(),
+                    module_version: state.module.lock().unwrap().meta.version.clone(),
                     seed: w.seed,
                     day: w.tick,
                     state_hash: format!("{:016x}", w.state_hash()),
@@ -548,15 +615,15 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let parsed: Result<SaveFile, _> = serde_json::from_str(&text);
             match parsed {
                 Ok(sv) => {
-                    if sv.module_id != state.module.meta.id {
+                    if sv.module_id != state.module.lock().unwrap().meta.id {
                         let msg = json!({
                             "ok": false,
-                            "error": format!("存档属于模块 {}，当前是 {}", sv.module_id, state.module.meta.id),
+                            "error": format!("存档属于模块 {}，当前是 {}", sv.module_id, state.module.lock().unwrap().meta.id),
                         })
                         .to_string();
                         return respond(&mut stream, 200, "application/json", &msg);
                     }
-                    let world = rebuild(&state.module, &sv.commands, sv.day);
+                    let world = rebuild(&state.module.lock().unwrap(), &sv.commands, sv.day);
                     let hash = world.state_hash();
                     let expect = u64::from_str_radix(sv.state_hash.trim(), 16).unwrap_or(0);
                     let matched = hash == expect;
@@ -594,7 +661,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
         ("POST", "/api/reset") => {
             let json = {
                 let mut guard = state.world.lock().unwrap();
-                let mut nw = build_world(&state.module);
+                let mut nw = build_world(&state.module.lock().unwrap());
                 sim_core::intel::run_intel(&mut nw);
                 *guard = Some(nw);
                 // 重开 = 清空命令流，否则回放会带着上一局的命令
