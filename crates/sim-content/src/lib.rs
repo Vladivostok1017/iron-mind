@@ -180,6 +180,7 @@ pub fn build_world(module: &LoadedModule) -> World {
             UnitKindDef::Air => sim_core::UnitKind::Air,
             UnitKindDef::Naval => sim_core::UnitKind::Naval,
         };
+        unit.formation = u.parent.clone().unwrap_or_default();
         unit.recon_radius = u.recon_radius;
         unit.stance = match u.stance {
             StanceDef::Attack => sim_core::world::Stance::Attack,

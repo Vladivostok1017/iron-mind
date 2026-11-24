@@ -705,6 +705,9 @@ pub struct Unit {
     pub position: u32,
     /// 所在省份内的阵地索引。见 [`Position`]。
     pub node: u8,
+    /// 上级番号（第1兵团 / 第11军…）。玩家发电报时的收件人。
+    /// 只做展示与路由，不进状态哈希。
+    pub formation: String,
     /// 补给 0-1。
     pub supply: Fixed,
     /// 士气 0-1。
@@ -763,6 +766,7 @@ impl Unit {
             max_strength: s,
             position,
             node: 0,
+            formation: String::new(),
             supply: Fixed::ONE,
             morale: Fixed::ONE,
             moving_to: None,

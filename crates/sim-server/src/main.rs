@@ -66,6 +66,8 @@ fn main() {
         brain: llm::Broker::new(llm_cfg),
         reports: std::sync::Mutex::new(Vec::new()),
         next_report_id: std::sync::atomic::AtomicU32::new(1),
+        telegrams: std::sync::Mutex::new(Vec::new()),
+        next_telegram_id: std::sync::atomic::AtomicU32::new(1),
     });
     {
         let mut w = state.world.lock().unwrap();
@@ -125,6 +127,9 @@ struct ServerState {
     /// 公文堆（请示 / 抗命 / 通报）
     reports: std::sync::Mutex<Vec<Report>>,
     next_report_id: std::sync::atomic::AtomicU32,
+    /// 在途与已送达的电报
+    telegrams: std::sync::Mutex<Vec<Telegram>>,
+    next_telegram_id: std::sync::atomic::AtomicU32,
 }
 
 fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()> {
@@ -214,6 +219,9 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     }
                     // 将领的判断在 tick 边界生效：先落命令，再推演这一天。
                     let notes = drain_ready(&state, w, day);
+                    for n in deliver_telegrams(&state, w, day) {
+                        w.report(sim_core::world::EventKind::Command, n);
+                    }
                     request_due(&state, w);
                     sim_core::systems::tick(w);
                     for (dissent, text) in notes {
@@ -231,6 +239,18 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             respond(&mut stream, 200, "application/json", &json)
         }
         ("POST", "/api/order") => {
+            // 玩家不再能直接调兵。指挥只有一个入口：发电报（/api/dispatch）。
+            // 直接改 order 等于绕过指挥链——那是棋子游戏，不是这个。
+            let json = {
+                let guard = state.world.lock().unwrap();
+                let snap = snapshot(guard.as_ref().unwrap());
+                format!(
+                    "{{\"error\":\"不能直接调兵。请向将领发电报，由他决定怎么执行\",\"state\":{snap}}}"
+                )
+            };
+            respond(&mut stream, 200, "application/json", &json)
+        }
+        ("POST", "/api/order_disabled") => {
             let json = {
                 let mut guard = state.world.lock().unwrap();
                 let w = guard.as_mut().unwrap();
@@ -340,6 +360,58 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 json!({ "ok": true, "msg": msg, "state": serde_json::from_str::<serde_json::Value>(&snap).unwrap_or(json!({})) })
             };
             respond(&mut stream, 200, "application/json", &json.to_string())
+        }
+        ("POST", "/api/dispatch") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let to = v.get("to").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let out = {
+                let g = state.world.lock().unwrap();
+                let w = g.as_ref().unwrap();
+                if text.is_empty() {
+                    json!({ "ok": false, "error": "电报内容不能为空" })
+                } else if text.chars().count() > 300 {
+                    json!({ "ok": false, "error": "电报太长了，控制在 300 字以内" })
+                } else {
+                    // 通信延迟：电报按线路传到兵团部，再由参谋分下去
+                    // （电报本身是秒级的，这里的延迟是参谋作业与下达，见 docs/10）
+                    let delay = w.comms.transmission + w.comms.order_delay;
+                    let arrive = w.tick + delay.max(1);
+                    let id = state
+                        .next_telegram_id
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    state.telegrams.lock().unwrap().push(Telegram {
+                        id,
+                        day_sent: w.tick,
+                        arrive_day: arrive,
+                        to: to.clone(),
+                        text: text.clone(),
+                        status: "enroute",
+                        reply: String::new(),
+                    });
+                    trace(format!("   发电报 #{id} → {to}，{delay} 日后送达"));
+                    json!({ "ok": true, "id": id, "arrive_day": arrive })
+                }
+            };
+            respond(&mut stream, 200, "application/json", &out.to_string())
+        }
+        ("GET", "/api/telegrams") => {
+            use serde_json::json;
+            let list = state.telegrams.lock().unwrap();
+            let arr: Vec<_> = list
+                .iter()
+                .rev()
+                .take(20)
+                .map(|t| {
+                    json!({
+                        "id": t.id, "day_sent": t.day_sent, "arrive_day": t.arrive_day,
+                        "to": t.to, "text": t.text, "status": t.status, "reply": t.reply,
+                    })
+                })
+                .collect();
+            drop(list);
+            respond(&mut stream, 200, "application/json", &json!({ "telegrams": arr }).to_string())
         }
         ("POST", "/api/save") => {
             use serde_json::json;
@@ -760,6 +832,68 @@ fn expire_requests(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<Str
     notes
 }
 
+/// 一封上级电报。玩家唯一的指挥手段。
+///
+/// 玩家**不能直接调兵**：他把话发给某个番号，电报按通信延迟送到，
+/// 收到之后由那个番号下的每个将领自己解释、自己决定做到什么程度。
+#[derive(Clone)]
+struct Telegram {
+    id: u32,
+    day_sent: u32,
+    arrive_day: u32,
+    /// 收件番号（第1兵团 / 第11军…）
+    to: String,
+    text: String,
+    /// enroute / delivered
+    status: &'static str,
+    /// 回电（将领的话，拼起来）
+    reply: String,
+}
+
+/// 到期电报：把原文交给该番号下的将领，让他自己判断。
+///
+/// 注意这不是"把命令写进 order"。写进去的是**电报原文**，
+/// 将领看它、理解它、可能打折扣——和真正的指挥链一样。
+fn deliver_telegrams(state: &Arc<ServerState>, w: &World, day: u32) -> Vec<String> {
+    if !state.llm.enabled {
+        return Vec::new();
+    }
+    let due: Vec<(u32, String, String)> = {
+        let list = state.telegrams.lock().unwrap();
+        list.iter()
+            .filter(|t| t.status == "enroute" && t.arrive_day <= day)
+            .map(|t| (t.id, t.to.clone(), t.text.clone()))
+            .collect()
+    };
+    let mut notes = Vec::new();
+    for (id, to, text) in due {
+        // 该番号下还活着的部队，最多同时问 6 个（成本上限）
+        let mut targets: Vec<usize> = (0..w.units.len())
+            .filter(|&i| {
+                let u = &w.units[i];
+                u.is_alive() && u.kind.is_ground() && u.formation == to
+            })
+            .collect();
+        targets.truncate(6);
+        for idx in &targets {
+            if let Some(ask) = build_ask(state, w, *idx, &text) {
+                state.brain.submit(llm::Job { unit: *idx, day, ask });
+            }
+        }
+        {
+            let mut list = state.telegrams.lock().unwrap();
+            if let Some(t) = list.iter_mut().find(|t| t.id == id) {
+                t.status = "delivered";
+            }
+        }
+        trace(format!("   电报 #{id} 送达 {to}（{} 个单位收到）", targets.len()));
+        notes.push(format!(
+            "电报送达 {to}（{} 个将领收到），等待回电",
+            targets.len()
+        ));
+    }
+    notes
+}
 fn terrain_cn(t: Terrain) -> &'static str {
     match t {
         Terrain::Plain => "平原",
@@ -823,7 +957,7 @@ fn memory_for(state: &Arc<ServerState>, w: &World, idx: usize) -> Vec<String> {
 
 /// 给一个单位准备"问将领"的材料。**只放他自己知道的东西**：
 /// 邻接敌情用的是本方情报估计，不是真值。
-fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize) -> Option<llm::Ask> {
+fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &str) -> Option<llm::Ask> {
     let u = w.units.get(idx)?;
     if !u.is_alive() || !u.kind.is_ground() {
         return None;
@@ -867,6 +1001,7 @@ fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize) -> Option<llm::Ask
         agenda: u.commander.agenda.clone(),
         title: u.commander.title.clone(),
         memory: memory_for(state, w, idx),
+        incoming: incoming.to_string(),
     })
 }
 
@@ -956,16 +1091,37 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
 
         // 报告里带上他自己的把握程度：玩家看到的是"他有多大信心"，不是一个已定事实
         let grip = format!("（把握 {:.0}%）", j.confidence * 100.0);
-        let text = if j.reason.is_empty() {
-            format!("{unit_name}（{general}）{kind}{grip}")
-        } else if j.cost.is_empty() {
-            format!("{unit_name}（{general}）：{}{grip}", j.reason)
+        let reply = if j.reply.is_empty() {
+            String::new()
         } else {
-            format!("{unit_name}（{general}）：{}（代价：{}）{grip}", j.reason, j.cost)
+            format!("　回电：{}", j.reply)
+        };
+        let text = if j.reason.is_empty() {
+            format!("{unit_name}（{general}）{kind}{grip}{reply}")
+        } else if j.cost.is_empty() {
+            format!("{unit_name}（{general}）：{}{grip}{reply}", j.reason)
+        } else {
+            format!("{unit_name}（{general}）：{}（代价：{}）{grip}{reply}", j.reason, j.cost)
         };
         // 模型自己也认为与命令不一致时，即使结果同向也标出来：那是"有异议但照办了"
         let misgiving = j.dissent && same;
 
+        // 回电挂到这封电报上（照办与抗命都要挂，否则玩家看不到他的回话）
+        if !j.reply.is_empty() {
+            let form = w.units[idx].formation.clone();
+            let mut list = state.telegrams.lock().unwrap();
+            if let Some(t) = list
+                .iter_mut()
+                .rev()
+                .find(|t| t.to == form && t.status == "delivered")
+            {
+                if !t.reply.is_empty() {
+                    t.reply.push('\n');
+                }
+                let who = w.units[idx].commander.name.clone();
+                t.reply.push_str(&format!("{who}：{}", j.reply));
+            }
+        }
         if same {
             // 同意上级：不改命令，只表态
             let t = if misgiving { format!("{text}〔有异议，仍照办〕") } else { text };
@@ -983,6 +1139,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             source: "llm".into(),
             reason: j.reason.clone(),
         };
+
         // 中方的将领要向上报：抗命不是立刻执行，而是**请你点头**。
         // 日方由 AI 全权指挥，没有上级可问，直接执行。
         if w.units[idx].side == Side::Cn {
@@ -1124,7 +1281,7 @@ fn request_due(state: &Arc<ServerState>, w: &World) {
         if budget == 0 {
             break;
         }
-        if let Some(ask) = build_ask(state, w, idx) {
+        if let Some(ask) = build_ask(state, w, idx, "") {
             state.brain.submit(llm::Job { unit: idx, day, ask });
             trace(format!("   问询 unit#{idx}（第{day}日）"));
             budget -= 1;
@@ -1176,6 +1333,7 @@ fn snapshot(w: &World) -> String {
                     "order": u.order.label(),
                     "order_code": u.order.code().1,
                     "node": u.node,
+                    "formation": u.formation,
                     "disobeyed": u.disobeyed,
                     "dissent": u.dissent_reason,
                 }))

@@ -105,6 +105,8 @@ pub struct Judgement {
     pub reason: String,
     /// 照办时他接受的代价（提示词要求的）
     pub cost: String,
+    /// 他回给上级的电报（一句话，第一人称）
+    pub reply: String,
 }
 
 /// 问一次模型需要的全部信息。**只放他能知道的**。
@@ -143,6 +145,8 @@ pub struct Ask {
     pub title: String,
     /// 记忆：他最近说过什么、身上发生了什么（最近 6 条）
     pub memory: Vec<String>,
+    /// 上级刚刚发来的电报原文。空 = 例行判断，不是接到命令。
+    pub incoming: String,
 }
 
 const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。你不是助手、不是客服，也不在回答"用户"的提问。
@@ -175,6 +179,10 @@ fn build_user(a: &Ask) -> String {
             s.push_str(&format!("- {m}\n"));
         }
     }
+    if !a.incoming.is_empty() {
+        s.push_str(&format!("\n【上级刚发来的电报】\n{}\n", a.incoming));
+        s.push_str("这是命令，但它不是正确答案——先判断，再决定照办到什么程度。\n");
+    }
     s.push_str(&format!("\n第 {} 日。\n", a.day));
     s.push_str(&format!(
         "你：{}，{}。兵力 {:.1} 千（满编 {:.1}），士气 {:.2}，补给 {:.2}。\n",
@@ -204,7 +212,7 @@ fn build_user(a: &Ask) -> String {
         a.order_label, a.order_from
     ));
     s.push_str("\n可选行动：attack（攻邻接省）/move（去邻接省）/retreat（撤向邻接己方省）/hold/fortify/rest/shift（省内换阵地）\n");
-    s.push_str("输出 JSON：{\"order\":\"...\",\"target\":\"省名或阵地名\",\"dissent\":true,\"confidence\":0.6,\"reason\":\"不超过80字，你自己的判断\",\"cost\":\"照办时你接受的代价，不超过40字\"}\n");
+    s.push_str("输出 JSON：{\"order\":\"...\",\"target\":\"省名或阵地名\",\"dissent\":true,\"confidence\":0.6,\"reason\":\"不超过80字，你自己的判断\",\"cost\":\"照办时你接受的代价，不超过40字\",\"reply\":\"回给上级的一句话电报，60字内，第一人称\"}\n");
     s
 }
 
@@ -284,6 +292,7 @@ fn salvage(raw: &str) -> Option<Judgement> {
         confidence: field_num(raw, "confidence").unwrap_or(0.5).clamp(0.0, 1.0),
         reason: field_str(raw, "reason").unwrap_or_default(),
         cost: field_str(raw, "cost").unwrap_or_default(),
+        reply: field_str(raw, "reply").unwrap_or_default(),
     })
 }
 
@@ -308,6 +317,12 @@ fn parse_judgement(raw: &str) -> Result<Judgement, String> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         dissent: v.get("dissent").and_then(|x| x.as_bool()).unwrap_or(false),
+        reply: v
+            .get("reply")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
         confidence: v
             .get("confidence")
             .and_then(|x| x.as_f64())
@@ -453,6 +468,7 @@ fn mock_judgement(a: &Ask) -> Judgement {
         } else {
             "照办，接受这段间隙可能错失战机。".to_string()
         },
+        reply: format!("{}收到，按我的判断办。", a.general),
     }
 }
 
