@@ -5,6 +5,7 @@ members = [
     "crates/sim-content",
     "crates/sim-testbed",
     "crates/sim-server",
+    "crates/sim-desktop",
 ]
 
 [workspace.package]

@@ -405,14 +405,36 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     .ok()
                     .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
                 let path = p.to_string_lossy().replace('\\', "/");
+                // 首页要拿这些字段把"战役卡"填起来：名字、规模、这仗在讲什么、
+                // 你替哪一边打。模块写什么就显示什么，引擎不替它编。
+                let g = |k: &str| {
+                    meta.as_ref()
+                        .and_then(|m| m.get(k))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
                 list.push(json!({
                     "path": path,
                     "name": meta.as_ref().and_then(|m| m.get("name")).and_then(|v| v.as_str()).unwrap_or("?"),
                     "scale": meta.as_ref().and_then(|m| m.get("scale")).and_then(|v| v.as_str()).unwrap_or(""),
                     "current": path == cur,
+                    "description": g("description"),
+                    "playable_side": g("playable_side"),
+                    "version": g("version"),
+                    "domains": meta.as_ref().and_then(|m| m.get("domains")).cloned().unwrap_or(json!([])),
                 }));
             }
-            respond(&mut stream, 200, "application/json", &json!({ "modules": list }).to_string())
+            let roots: Vec<String> = module_roots()
+                .iter()
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .collect();
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({ "modules": list, "roots": roots }).to_string(),
+            )
         }
         // 切换模块：整体替换世界，清空命令流/电报/公文。
         ("POST", "/api/module") => {
@@ -457,6 +479,16 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             trace(format!("   切换模块 → {path}"));
             let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap());
             respond(&mut stream, 200, "application/json", &snap)
+        }
+        // 首页要显示"引擎是什么版本"。玩家的 bug 报告里有没有这一行，差别很大。
+        ("GET", "/api/version") => {
+            use serde_json::json;
+            let body = json!({
+                "engine": env!("CARGO_PKG_VERSION"),
+                "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            })
+            .to_string();
+            respond(&mut stream, 200, "application/json", &body)
         }        ("GET", "/api/llm") => {
             use serde_json::json;
             let body = json!({

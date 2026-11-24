@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>钢心 · 南浔线 1938</title>
+<title>钢心 · Iron Mind</title>
 <style>
   :root {
     --bg: #0b0e12; --sea: #0a1119; --panel: #12161c; --panel-hi: #171d25;
@@ -203,15 +203,128 @@
     color: #8b95a1; padding: 3px 0; border-bottom: 1px dashed #232d38; }
   #outcome .mrow b { color: #cdd6e0; font-weight: 500; }
   #outcome .foot { margin-top: 18px; font-size: 11.5px; color: #6f7a86; }
+
+  /* ── 通用模态框：桌面级软件不该用 prompt() ──
+     之前存档/读档是 prompt()，在独立窗口里它就是一条浏览器告警条，
+     一眼就能看出"这是个网页"。所有需要输入的地方统一走这里。 */
+  #dlg { position: fixed; inset: 0; z-index: 130; display: none; align-items: center;
+    justify-content: center; background: rgba(6,9,12,.66); }
+  #dlg.on { display: flex; }
+  #dlg .dg-box { width: 540px; max-width: 92vw; max-height: 84vh; display: flex;
+    flex-direction: column; background: #12181f; border: 1px solid #33414f; border-radius: 8px;
+    box-shadow: 0 26px 74px rgba(0,0,0,.74); }
+  #dlg .dg-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid #1e2833; font-size: 13px; font-weight: 600; color: #dfe7ef; }
+  #dlg .dg-head .dg-x { margin-left: auto; padding: 3px 9px; font-size: 14px; line-height: 1.2;
+    background: transparent; color: #79828e; border: 1px solid #2a3542; border-radius: 3px; cursor: pointer; }
+  #dlg .dg-head .dg-x:hover { color: #cfd8e3; border-color: #3d5a7a; }
+  #dlg .dg-body { padding: 14px 16px; overflow-y: auto; font-size: 12.5px; color: #b6c0cc;
+    line-height: 1.75; }
+  #dlg .dg-body p { margin: 0 0 10px; }
+  #dlg .dg-body .dg-note { color: #79828e; font-size: 11.5px; }
+  #dlg .dg-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px;
+    border-top: 1px solid #1e2833; }
+  #dlg input[type=text] { width: 100%; background: #0f151b; color: #cfd8e3; border: 1px solid #2a3542;
+    border-radius: 4px; padding: 7px 9px; font-size: 12.5px; font-family: inherit; }
+  #dlg input[type=text]:focus { outline: none; border-color: #3d5a7a; }
+  .dg-list { margin-top: 10px; display: flex; flex-direction: column; gap: 3px; }
+  .dg-row { display: flex; align-items: center; gap: 10px; padding: 8px 11px; border-radius: 4px;
+    border: 1px solid #222b36; background: #141b23; cursor: pointer; font-size: 12px; }
+  .dg-row:hover { background: #1b2430; border-color: #3d5a7a; }
+  .dg-row .r-main { color: #d5dee8; }
+  .dg-row .r-dim { color: #79828e; font-size: 11px; }
+  .dg-row .r-act { margin-left: auto; color: #6f7a86; white-space: nowrap; }
+  .dg-row.dg-empty { cursor: default; color: #6f7a86; justify-content: center; }
+  .dg-row.dg-empty:hover { background: #141b23; border-color: #222b36; }
+
+  /* ── 首页 ──
+     双击 exe 之后第一眼看到的必须是"这是一个游戏"，不是一张没名字的地图。
+     它会盖住整个 #app，所以引擎没就绪也照样有东西可看。 */
+  #home { position: fixed; inset: 0; z-index: 110; display: none; overflow: hidden;
+    background:
+      radial-gradient(1200px 700px at 16% 28%, #17222e 0%, rgba(11,14,18,0) 62%),
+      radial-gradient(900px 620px at 86% 80%, #1c1511 0%, rgba(11,14,18,0) 58%),
+      #0b0e12;
+  }
+  #home.on { display: grid; grid-template-rows: auto 1fr auto; }
+  /* 等高线：重复径向渐变当假地形图，比塞一张位图轻得多 */
+  #home::before { content: ""; position: absolute; inset: -25%; pointer-events: none;
+    background:
+      repeating-radial-gradient(circle at 28% 44%, rgba(120,152,178,.06) 0 1px, transparent 1px 48px),
+      repeating-radial-gradient(circle at 72% 60%, rgba(200,168,116,.05) 0 1px, transparent 1px 66px);
+    transform: rotate(-7deg); }
+  #home > * { position: relative; }
+  #home .h-top { display: flex; align-items: center; gap: 13px; padding: 22px 32px 6px; }
+  #home .h-mark { width: 36px; height: 36px; border-radius: 4px; display: grid; place-items: center;
+    background: linear-gradient(135deg, #dcaa55, #8d5f1e); color: #1a1206;
+    font: 700 18px/1 "Segoe UI", "Microsoft YaHei", sans-serif;
+    box-shadow: 0 3px 16px rgba(216,162,74,.3); }
+  #home .h-title { font-size: 21px; font-weight: 600; letter-spacing: .18em; color: #e8eef6; }
+  #home .h-title span { font-size: 11.5px; letter-spacing: .22em; color: #8d6f3a; margin-left: 10px;
+    font-weight: 500; }
+  #home .h-sub { font-size: 11.5px; color: #6f7a86; letter-spacing: .04em; margin-top: 2px; }
+  #home .h-ver { margin-left: auto; text-align: right; font-size: 11px; color: #5d6672; line-height: 1.7; }
+  #home .h-mid { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(400px, 470px);
+    gap: 34px; align-items: center; padding: 8px 32px 10px; min-height: 0; }
+  #home .h-menu { display: flex; flex-direction: column; gap: 5px; max-width: 460px; }
+  .h-item { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: baseline;
+    padding: 11px 14px 11px 10px; border-radius: 5px; cursor: pointer;
+    border: 1px solid transparent; background: transparent; text-align: left;
+    font-family: inherit; color: inherit; }
+  .h-item:hover, .h-item.kb { background: #171f28; border-color: #2b3745; }
+  .h-item:disabled { opacity: .38; cursor: default; }
+  .h-item:disabled:hover { background: transparent; border-color: transparent; }
+  .h-item .i-k { font-size: 11px; color: #6f7a86; font-variant-numeric: tabular-nums; text-align: right; }
+  .h-item .i-t { font-size: 15px; color: #dde5ee; letter-spacing: .06em; }
+  .h-item.primary .i-t { color: var(--gold); }
+  .h-item .i-d { font-size: 11.5px; color: #6f7a86; margin-top: 2px; letter-spacing: .01em; }
+  .h-card { border: 1px solid #2a3441; border-radius: 6px; background: rgba(16,22,29,.78);
+    padding: 16px 18px; }
+  .h-card .c-tag { font-size: 10px; letter-spacing: .2em; color: #7c8794; }
+  .h-card .c-name { font-size: 17px; color: #e6edf5; margin: 5px 0 3px; font-weight: 600; }
+  .h-card .c-meta { font-size: 11.5px; color: #79828e; }
+  .h-card .c-desc { font-size: 12px; color: #9aa6b3; line-height: 1.85; margin-top: 11px;
+    border-top: 1px dashed #26313d; padding-top: 11px; }
+  .h-card .c-stats { display: flex; gap: 22px; margin-top: 12px; }
+  .h-card .c-stat b { display: block; font-size: 16px; color: #d8e2ec; font-variant-numeric: tabular-nums; }
+  .h-card .c-stat span { font-size: 10px; color: #6f7a86; letter-spacing: .08em; }
+  #home .h-bot { display: flex; align-items: center; gap: 18px; padding: 12px 32px 18px;
+    font-size: 11px; color: #5d6672; border-top: 1px solid #1a212a; }
+  #home .h-bot b { color: #8b95a1; font-weight: 500; }
+  #home .h-bot .ok { color: #7f9a86; }
+  #home .h-bot .warn { color: #b08a52; }
+
+  /* ── 新手引导 ──
+     不遮挡目标元素：靠一圈巨大的 box-shadow 当遮罩，挖出一个洞。
+     这样"点这里推进一天"那一步玩家真的能点到。 */
+  #guide { position: fixed; inset: 0; z-index: 150; display: none; }
+  #guide.on { display: block; }
+  #gd-hole { position: absolute; border-radius: 5px; pointer-events: none;
+    border: 1px solid rgba(227,176,75,.6); box-shadow: 0 0 0 9999px rgba(5,8,11,.76);
+    transition: left .2s ease, top .2s ease, width .2s ease, height .2s ease; }
+  #gd-card { position: absolute; width: 350px; background: #12181f; border: 1px solid #3a4a5a;
+    border-radius: 7px; padding: 14px 17px 13px; box-shadow: 0 22px 60px rgba(0,0,0,.72);
+    transition: left .2s ease, top .2s ease; }
+  #gd-card .g-step { font-size: 10px; letter-spacing: .2em; color: #8d6f3a; }
+  #gd-card h4 { font-size: 14.5px; color: #e6edf5; margin: 5px 0 7px; font-weight: 600; }
+  #gd-card p { font-size: 12px; color: #a8b3c0; line-height: 1.85; margin: 0; }
+  #gd-card .g-act { display: flex; align-items: center; gap: 8px; margin-top: 13px; }
+  #gd-card .g-act .g-skip { margin-right: auto; background: transparent; border: none;
+    color: #6f7a86; font-size: 11.5px; cursor: pointer; font-family: inherit; padding: 0; }
+  #gd-card .g-act .g-skip:hover { color: #a8b3c0; }
+  #gd-card .g-dots { display: flex; gap: 4px; margin-right: auto; }
+  #gd-card .g-dots i { width: 5px; height: 5px; border-radius: 50%; background: #2a3542; }
+  #gd-card .g-dots i.on { background: var(--gold); }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="top">
-    <div class="crest">中</div>
+    <!-- 国名、战区名都是**模块的内容**，不是引擎的。这里只放占位，由模块填。 -->
+    <div class="crest" id="t-crest">钢</div>
     <div>
-      <div class="nation">中华民国 · 第九战区</div>
-      <div class="sub">南浔线 · 第 1 兵团</div>
+      <div class="nation" id="t-name">钢心</div>
+      <div class="sub" id="t-sub">内核启动中</div>
     </div>
     <div class="stat"><b id="s-str">—</b><span>我军兵力</span></div>
     <div class="stat"><b id="s-prov">—</b><span>控制省份</span></div>
@@ -296,7 +409,11 @@
     <div class="sep"></div>
     <!-- 模块 = 这一仗的剧本。游戏只提供框架，剧本由玩家自己写，所以必须能在这儿换。 -->
     <select id="mod-sel" title="切换模块（会重开一局）" style="font-size:11.5px;background:#141b23;color:#c3ccd6;border:1px solid #2d3947;border-radius:4px;padding:5px 6px;max-width:190px"></select>
-    <!-- 本方统帅部的作战方针：玩家该知道自己司令部的方向，再决定要不要越级 -->`n    <div id="plan" title="本方司令部的作战方针（方向，不是命令）"></div>`n    <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
+    <!-- 本方统帅部的作战方针：玩家该知道自己司令部的方向，再决定要不要越级 -->
+    <div id="plan" title="本方司令部的作战方针（方向，不是命令）"></div>
+    <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
+    <!-- 有了首页之后，必须有一条路回到首页：桌面软件没有"地址栏"可以刷新 -->
+    <button class="btn" id="btn-home" title="回到首页（存档/读档/换战役都在这儿）">菜单</button>
     <button class="btn" id="btn-save">存档</button>
     <button class="btn" id="btn-load">读档</button>
     <button class="btn" id="btn-reset">重开</button>
@@ -312,7 +429,99 @@
       <h2 id="oc-name"></h2>
       <p id="oc-text"></p>
       <div id="oc-metrics"></div>
-      <div class="foot">这一局结束了。刷新页面可以重开。</div>
+      <div class="foot" style="display:flex;align-items:center;gap:10px">
+        <span style="flex:1">这一局结束了。换一种判断，会是另一个局面。</span>
+        <button class="btn" id="oc-home">回到首页</button>
+        <button class="btn primary" id="oc-again">再来一局</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 首页：启动即显示，不等引擎；引擎没就绪时按钮是灰的，状态栏会说实话。 -->
+<div id="home">
+  <div class="h-top">
+    <div class="h-mark">钢</div>
+    <div>
+      <div class="h-title">钢心<span>IRON MIND</span></div>
+      <div class="h-sub">一个只有框架的大战略 / 战役游戏：地图、地形、编制、结局，都由模块决定</div>
+    </div>
+    <div class="h-ver">
+      <div id="h-ver">引擎 —</div>
+      <div id="h-mod">模块 —</div>
+    </div>
+  </div>
+
+  <div class="h-mid">
+    <div class="h-menu" id="h-menu">
+      <button class="h-item primary" id="hm-continue">
+        <div class="i-k">↵</div>
+        <div><div class="i-t">继续</div><div class="i-d" id="hm-continue-d">读最近的一份存档</div></div>
+      </button>
+      <button class="h-item" id="hm-new">
+        <div class="i-k">N</div>
+        <div><div class="i-t">新的战役</div><div class="i-d">选一个模块，从第一日开始</div></div>
+      </button>
+      <button class="h-item" id="hm-load">
+        <div class="i-k">L</div>
+        <div><div class="i-t">读取存档</div><div class="i-d">存档存的是命令流，读档会核对哈希</div></div>
+      </button>
+      <button class="h-item" id="hm-guide">
+        <div class="i-k">T</div>
+        <div><div class="i-t">上手引导</div><div class="i-d">五分钟：怎么发电报、为什么会抗命</div></div>
+      </button>
+      <button class="h-item" id="hm-set">
+        <div class="i-k">S</div>
+        <div><div class="i-t">设置</div><div class="i-d">将领大脑、模块目录、结局判定</div></div>
+      </button>
+      <button class="h-item" id="hm-about">
+        <div class="i-k">A</div>
+        <div><div class="i-t">关于</div><div class="i-d">这个引擎想做成什么样，以及它不做什么</div></div>
+      </button>
+    </div>
+
+    <div class="h-card">
+      <div class="c-tag">当前战役</div>
+      <div class="c-name" id="hc-name">—</div>
+      <div class="c-meta" id="hc-meta">—</div>
+      <div class="c-desc" id="hc-desc">引擎正在启动……</div>
+      <div class="c-stats">
+        <div class="c-stat"><b id="hc-day">—</b><span>当前日期</span></div>
+        <div class="c-stat"><b id="hc-own">—</b><span>我军兵力</span></div>
+        <div class="c-stat"><b id="hc-foe">—</b><span>敌军估计</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="h-bot">
+    <div>内核 <b id="hb-core">连接中</b></div>
+    <div>将领大脑 <b id="hb-llm">—</b></div>
+    <div>模块目录 <b id="hb-roots">—</b></div>
+    <div style="margin-left:auto">↑↓ 选择 · ↵ 确认</div>
+  </div>
+</div>
+
+<!-- 通用模态框 -->
+<div id="dlg">
+  <div class="dg-box">
+    <div class="dg-head"><span id="dlg-title"></span><button class="dg-x" id="dlg-x">✕</button></div>
+    <div class="dg-body" id="dlg-body"></div>
+    <div class="dg-foot" id="dlg-foot"></div>
+  </div>
+</div>
+
+<!-- 新手引导 -->
+<div id="guide">
+  <div id="gd-hole"></div>
+  <div id="gd-card">
+    <div class="g-step" id="gd-step"></div>
+    <h4 id="gd-title"></h4>
+    <p id="gd-text"></p>
+    <div class="g-act">
+      <button class="g-skip" id="gd-skip">跳过引导</button>
+      <div class="g-dots" id="gd-dots"></div>
+      <button class="btn" id="gd-prev">上一步</button>
+      <button class="btn primary" id="gd-next">下一步</button>
     </div>
   </div>
 </div>
@@ -703,7 +912,9 @@ function renderTop() {
   } catch (e) { }
   $("s-str").textContent = S.side.strength.toFixed(1) + " 千";
   $("s-prov").textContent = S.side.provinces + " / " + S.provinces.length;
-  $("s-enemy").textContent = S.enemy.estimated_strength.toFixed(1) + " 千";
+  $("s-enemy").textContent = S.enemy.estimated_strength > 0
+    ? S.enemy.estimated_strength.toFixed(1) + " 千"
+    : "未查明";
   $("clock").textContent = "第 " + S.tick + " 日";
   const pend = S.side.pending_reports;
   const pe = $("pending");
@@ -977,6 +1188,24 @@ function el(tag, attrs, parent) {
   return e;
 }
 
+// 顶栏不写死国名与战区名：那是**模块的内容**，不是引擎的。
+// 引擎只负责把模块自己声明的名字显示出来——否则换一场战役，
+// 左上角还挂着上一场仗的番号。
+function paintTop(m) {
+  if (!m) return;
+  const nm = (m.name || "钢心").trim();
+  if ($("t-crest")) $("t-crest").textContent = nm.slice(0, 1);
+  if ($("t-name")) $("t-name").textContent = nm;
+  if ($("t-sub")) {
+    const bits = [];
+    if (m.scale) bits.push(m.scale);
+    if (m.playable_side) bits.push("扮演 " + String(m.playable_side).toUpperCase());
+    if (m.version) bits.push("v" + m.version);
+    $("t-sub").textContent = bits.join(" · ") || "模块";
+  }
+  document.title = "钢心 · " + nm;
+}
+
 function toast(m) {
   const t = $("toast");
   t.textContent = m; t.classList.add("show");
@@ -1026,7 +1255,9 @@ async function loadModules() {
   try {
     const j = await (await fetch("/api/modules")).json();
     sel.innerHTML = "";
-    for (const m of j.modules || []) {
+    const list = j.modules || [];
+    paintTop(list.find((m) => m.current) || list[0]);
+    for (const m of list) {
       const o = document.createElement("option");
       o.value = m.path;
       o.textContent = m.name + (m.scale ? "（" + m.scale + "）" : "");
@@ -1611,37 +1842,490 @@ bind("btn-1", "click", () => api("/api/tick", { days: 1 }));
 bind("btn-3", "click", () => api("/api/tick", { days: 3 }));
 bind("btn-next", "click", () => api("/api/advance", {}));
 
+/* ═══════════════════════════════════════════════════════════════════════
+   从"一张能跑的地图"到"一个能装的游戏"，缺的是这几块：
+   模态框、首页、引导。全是前端的东西，不碰内核——
+   规则、地形、编制跟窗口在不在没关系。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+// ── 模态框 ──
+// 为什么要有：以前存档/读档用 prompt()，在独立窗口里它就是一条浏览器告警条，
+// 一眼就被看穿"这其实是个网页"。所有需要输入的地方统一走这里。
+const Dlg = (() => {
+  function h(tag, cls, parent, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function close() {
+    const d = $("dlg");
+    if (!d) return;
+    d.classList.remove("on");
+    $("dlg-body").replaceChildren();
+    $("dlg-foot").replaceChildren();
+  }
+  function open(o) {
+    $("dlg-title").textContent = o.title || "";
+    const body = $("dlg-body");
+    body.replaceChildren();
+    if (typeof o.body === "string") body.innerHTML = o.body;
+    else if (o.body) body.appendChild(o.body);
+    const foot = $("dlg-foot");
+    foot.replaceChildren();
+    for (const a of o.actions || []) {
+      const b = h("button", "btn" + (a.primary ? " primary" : ""), foot, a.label);
+      b.addEventListener("click", () => {
+        if (a.onClick && a.onClick() === false) return;
+        if (!a.keep) close();
+      });
+    }
+    $("dlg").classList.add("on");
+    if (o.focus) {
+      setTimeout(() => {
+        const t = $(o.focus);
+        if (t) { t.focus(); if (t.select) t.select(); }
+      }, 40);
+    }
+  }
+  return { open, close, h };
+})();
+bind("dlg-x", "click", () => Dlg.close());
+if ($("dlg")) $("dlg").addEventListener("click", (e) => { if (e.target.id === "dlg") Dlg.close(); });
+
+async function getJson(path) {
+  try { return await (await fetch(path)).json(); } catch (e) { return null; }
+}
+async function listSaves() { const j = await getJson("/api/saves"); return (j && j.saves) || []; }
+async function listModules() {
+  const j = await getJson("/api/modules");
+  return { mods: (j && j.modules) || [], roots: (j && j.roots) || [] };
+}
+function fmtWhen(sec) {
+  if (!sec) return "";
+  const d = new Date(sec * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+function shortPath(p) {
+  const seg = String(p).split("/").filter(Boolean);
+  return seg.slice(-2).join("/") || p;
+}
+
+// ── 首页 ──
+// 一进来先看到"这是个什么游戏"，而不是一张没有名字的地图。
+// 内核没就绪也不耽误：按钮是灰的，状态栏如实说"连接中"。
+const Home = (() => {
+  let mods = [], saves = [], roots = [], idx = 0, open = false, autoGuided = false;
+
+  function items() {
+    return [...document.querySelectorAll("#h-menu .h-item")].filter((b) => !b.disabled);
+  }
+  function paintSel() {
+    items().forEach((b, i) => b.classList.toggle("kb", i === idx));
+  }
+  function move(d) {
+    const n = items().length;
+    if (!n) return;
+    idx = (idx + d + n) % n;
+    paintSel();
+  }
+  function show() {
+    open = true;
+    $("home").classList.add("on");
+    idx = 0;
+    paintSel();
+    refresh();
+  }
+  function hide() {
+    open = false;
+    $("home").classList.remove("on");
+    // 第一次真正进游戏时把引导跑一遍。跳过也算看过，之后不再打扰。
+    if (!localStorage.getItem("im_onboarded") && !autoGuided) {
+      autoGuided = true;
+      setTimeout(() => Guide.start(), 300);
+    }
+  }
+  function isOpen() { return open; }
+
+  // 战役卡的数字。没有 state 就什么都不编。
+  function applyState() {
+    const core = $("hb-core");
+    if (!S) {
+      if (core) { core.textContent = "连接中……"; core.className = "warn"; }
+      return;
+    }
+    if (core) { core.textContent = "已就绪"; core.className = "ok"; }
+    if ($("hc-day")) $("hc-day").textContent = "第 " + S.tick + " 日";
+    if ($("hc-own")) $("hc-own").textContent = S.side.strength.toFixed(1) + " 千";
+    // 敌情是情报，不是事实：一点都没侦察到时写"未查明"，
+    // 写"约 0.0 千"等于在骗人说敌人不存在。
+    if ($("hc-foe")) {
+      $("hc-foe").textContent = S.enemy.estimated_strength > 0
+        ? "约 " + S.enemy.estimated_strength.toFixed(1) + " 千"
+        : "未查明";
+    }
+  }
+
+  async function refresh() {
+    const m = await listModules();
+    mods = m.mods;
+    roots = m.roots;
+    saves = await listSaves();
+    const cur = mods.find((x) => x.current) || mods[0] || null;
+    const v = await getJson("/api/version");
+    if ($("h-ver")) {
+      $("h-ver").textContent = "引擎 " + ((v && v.engine) || "0.1.0") +
+        (v && v.profile ? " · " + v.profile : "");
+    }
+    if ($("h-mod")) $("h-mod").textContent = cur ? cur.name : "（没有找到模块）";
+    if ($("hc-name")) $("hc-name").textContent = cur ? cur.name : "（没有找到模块）";
+    const bits = [];
+    if (cur && cur.scale) bits.push(cur.scale);
+    if (cur && cur.version) bits.push("v" + cur.version);
+    if (cur && cur.playable_side) bits.push("扮演 " + String(cur.playable_side).toUpperCase());
+    if ($("hc-meta")) $("hc-meta").textContent = bits.join(" · ") || "—";
+    if ($("hc-desc")) $("hc-desc").textContent = (cur && cur.description) || "这个模块没有写描述。";
+    if ($("hb-roots")) {
+      $("hb-roots").textContent = roots.length ? roots.map(shortPath).join("，") : "引擎自带";
+    }
+    const cont = $("hm-continue");
+    if (cont) {
+      cont.disabled = !saves.length;
+      if ($("hm-continue-d")) {
+        $("hm-continue-d").textContent = saves.length
+          ? ("最近：" + saves[0].slot + "（第 " + saves[0].day + " 日）")
+          : "还没有存档";
+      }
+      // 没有存档时，主角应该是"新的战役"，而不是一个点不动的"继续"
+      const nb = $("hm-new");
+      if (nb) {
+        cont.classList.toggle("primary", saves.length > 0);
+        nb.classList.toggle("primary", saves.length === 0);
+      }
+    }
+    const llm = await getJson("/api/llm");
+    if ($("hb-llm")) {
+      $("hb-llm").textContent = llm
+        ? (llm.enabled ? String(llm.mode) : "关 · 本地模拟判断")
+        : "—";
+    }
+    applyState();
+    paintSel();
+  }
+
+  async function newCampaign() {
+    const m = await listModules();
+    mods = m.mods;
+    const body = document.createElement("div");
+    Dlg.h("p", null, body,
+      "模块就是这一仗的剧本：地图、地形、编制、将领、规则、结局，全在模块里。换个模块 = 换一场战争。");
+    const list = Dlg.h("div", "dg-list", body);
+    if (!mods.length) Dlg.h("div", "dg-row dg-empty", list, "没有找到任何模块");
+    for (const x of mods) {
+      const row = Dlg.h("div", "dg-row", list);
+      Dlg.h("span", "r-main", row, x.name + (x.scale ? "（" + x.scale + "）" : ""));
+      Dlg.h("span", "r-dim", row, shortPath(x.path));
+      Dlg.h("span", "r-act", row, x.current ? "当前" : "开始");
+      row.addEventListener("click", () => startModule(x.path));
+    }
+    Dlg.open({ title: "新的战役", body, actions: [{ label: "取消" }] });
+  }
+
+  async function startModule(path) {
+    if (S && S.tick > 0 && !confirm("换战役会丢掉当前进度（除非先存档）。继续？")) return;
+    try {
+      const r = await fetch("/api/module", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const j = await r.json();
+      if (j.error) { toast(j.error); return; }
+      S = j;
+      GEO = null;
+      BASEMAP = null;
+      selUnit = null; curProv = null; nodeProv = null; geom = null;
+      Dlg.close();
+      const oc = document.getElementById("outcome");
+      if (oc) oc.classList.remove("on");
+      await loadGeo();
+      loadBasemap();
+      loadModules();
+      render();
+      hide();
+      toast("开新战役：" + path.split("/").pop());
+    } catch (e) { toast("切换失败：连不上内核"); }
+  }
+
+  async function settings() {
+    const llm = await getJson("/api/llm");
+    const body = document.createElement("div");
+    const row = (k, v) => {
+      const r = Dlg.h("div", "dg-row", body);
+      Dlg.h("span", "r-main", r, k);
+      Dlg.h("span", "r-act", r, v);
+    };
+    Dlg.h("p", null, body, "这一版还没有“在界面里改配置”的入口：内核的开关都在环境变量里，改完重启游戏生效。");
+    row("将领大脑", llm ? (llm.enabled ? "开 · " + llm.mode : "关 · 本地模拟判断") : "未知");
+    row("模型", llm && llm.model ? String(llm.model) : "—");
+    row("司令部会商间隔", llm && llm.interval_days ? llm.interval_days + " 日" : "—");
+    row("模型调用", llm ? llm.calls + " 次" : "—");
+    row("待送达判断", llm ? llm.ready + " 条" : "—");
+    row("模块目录", roots.length ? roots.map(shortPath).join("，") : "引擎自带 content/scenarios");
+    row("存档目录", "saves/（与内核工作目录同层）");
+    if (llm && llm.errors && llm.errors.length) {
+      Dlg.h("p", "dg-note", body, "最近的模型错误：" + llm.errors.slice(-3).join("　/　"));
+    }
+    Dlg.h("p", "dg-note", body,
+      "IRONMIND_LLM=off|mock 关掉模型；IRONMIND_API_KEY / IRONMIND_MODEL 配真实模型；" +
+      "IRONMIND_MODULES 指定模块仓库；IRONMIND_HQ_INTERVAL 改敌方统帅部会商节奏。");
+    Dlg.open({ title: "设置", body, actions: [{ label: "关闭" }] });
+  }
+
+  function about() {
+    const body = document.createElement("div");
+    Dlg.h("p", null, body, "钢心 / Iron Mind 是一个“只提供框架”的大战略引擎：它自己不认识任何一场战争。");
+    Dlg.h("p", null, body, "几件它刻意坚持的事：");
+    const ul = Dlg.h("div", "dg-list", body);
+    for (const t of [
+      "引擎里不出现年份、国名、番号。地图、编制、将领、规则、结局，全部由模块声明。",
+      "你不能拖动部队。你只有电报：一句话发下去，将领按自己的判断执行，可能追问，可能抗命。",
+      "信息是有延迟、有误差的。战报会迟到，敌情是估计值，番号要第二次接触才对得上。",
+      "没有“你赢了”。战役结束给出的是一条结局与它的依据，换一种判断会走向另一条。",
+      "同一模块、同一种子、同一串命令，重跑得到同一个局面——所以存档存的是命令流，读档会核对哈希。",
+      "敌方也有一个“玩家”：一个 LLM 统帅部，按自己的方针给师团长发报，那些师团长同样可以不听它的。",
+    ]) { Dlg.h("div", "dg-row", ul, t); }
+    Dlg.h("p", "dg-note", body, "引擎与模块是两个独立仓库：换战役不需要重新编译引擎。");
+    Dlg.open({ title: "关于", body, actions: [{ label: "关闭" }] });
+  }
+
+  // 首页的键盘操作：↑↓ 选，↵ 确认，Esc 关掉（在游戏里就是回地图）
+  function key(e) {
+    if (!open) return false;
+    if (e.code === "ArrowDown") { move(1); return true; }
+    if (e.code === "ArrowUp") { move(-1); return true; }
+    if (e.code === "Enter") {
+      const b = items()[idx];
+      if (b) b.click();
+      return true;
+    }
+    if (e.code === "Escape" && S) { hide(); return true; }
+    return false;
+  }
+
+  return { show, hide, isOpen, refresh, applyState, newCampaign, settings, about, key, startModule };
+})();
+
+// ── 引导 ──
+// 只讲"这个游戏和别人不一样的地方"：你不能直接动部队、命令会走样、没有胜负。
+// 所以它只有六步，而且每一步都指着一个真实存在的控件。
+const Guide = (() => {
+  let i = 0, steps = [];
+
+  function build() {
+    return [
+      { sel: "#stage", title: "这是地图，不是棋盘",
+        text: "地形是真的：高程、河网、铁路都来自模块给的数据。点省份看它的地形、补给、归属；拖动平移，双击复位视角。" },
+      { sel: "#dispatch-sec", title: "你唯一的下令方式是电报",
+        text: "你不能拖动任何一支部队。选一个收报人（兵团、军、师都行），用一句话把意图说清楚——「守住德安，工事加厚，不许拿部队去拼消耗」。" },
+      { sel: "#dossier-sec", title: "将军会请示，也会抗命",
+        text: "将领有自己的判断：看不懂的命令会追问，觉得是送死会抗命。抗命的结果同样进战报，不会悄悄消失。" },
+      { sel: "#btn-1", title: "一天一天地推",
+        text: "空格 = 推进一天，回车 = 推进到有事发生。时间是最贵的东西：补给它要时间，工事也要时间。" },
+      { sel: "#open-mail", title: "战报会迟到",
+        text: "通信有延迟：命令不是当天生效，战报也不是当天到手上。你要预判，而不是反应。" },
+      { sel: null, title: "没有「你赢了」",
+        text: "战役结束给出的是一条结局和它的依据：守住、退守、被合围……同一个局面，换一种判断会走向另一条。现在，去发第一封电报。" },
+    ];
+  }
+
+  function place(step) {
+    const hole = $("gd-hole"), card = $("gd-card");
+    if (!hole || !card) return;
+    const W = window.innerWidth, H = window.innerHeight;
+    const CW = 350, CH = card.offsetHeight || 200;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+    if (!step.sel) {
+      hole.style.left = (W / 2 - 70) + "px";
+      hole.style.top = (H / 2 - 70) + "px";
+      hole.style.width = "140px";
+      hole.style.height = "140px";
+      card.style.left = clamp(W / 2 - CW / 2, 16, W - CW - 16) + "px";
+      card.style.top = clamp(H / 2 + 90, 16, H - CH - 16) + "px";
+      return;
+    }
+    const t = document.querySelector(step.sel);
+    if (!t || !t.getBoundingClientRect().width) {
+      hole.style.left = "-9999px";
+      hole.style.width = "0px";
+      hole.style.height = "0px";
+      card.style.left = (W / 2 - CW / 2) + "px";
+      card.style.top = (H / 2 - CH / 2) + "px";
+      return;
+    }
+    const r = t.getBoundingClientRect();
+    const pad = 6;
+    hole.style.left = (r.left - pad) + "px";
+    hole.style.top = (r.top - pad) + "px";
+    hole.style.width = (r.width + pad * 2) + "px";
+    hole.style.height = (r.height + pad * 2) + "px";
+    // 横向：优先右边，其次左边，都被挤满才压到目标上方/下方
+    let left;
+    if (W - r.right >= CW + 34) left = r.right + 22;
+    else if (r.left >= CW + 34) left = r.left - CW - 22;
+    else left = clamp(r.left + r.width / 2 - CW / 2, 16, W - CW - 16);
+    // 纵向：下面放得下就放下面，否则翻到上面。
+    // 底栏那些按钮就在屏幕最下沿，卡片必须往上翻，否则正好盖住要高亮的东西。
+    const top = (H - r.bottom >= CH + 20) ? r.bottom + 16 : r.top - CH - 16;
+    card.style.left = left + "px";
+    card.style.top = clamp(top, 16, H - CH - 16) + "px";
+  }
+
+  function paintStep() {
+    const s = steps[i];
+    if (!s) return;
+    if ($("gd-step")) $("gd-step").textContent = "第 " + (i + 1) + " / " + steps.length + " 步";
+    if ($("gd-title")) $("gd-title").textContent = s.title;
+    if ($("gd-text")) $("gd-text").textContent = s.text;
+    if ($("gd-prev")) $("gd-prev").disabled = i === 0;
+    if ($("gd-next")) $("gd-next").textContent = i === steps.length - 1 ? "开始指挥" : "下一步";
+    const dots = $("gd-dots");
+    if (dots) {
+      dots.replaceChildren();
+      for (let k = 0; k < steps.length; k++) {
+        const d = document.createElement("i");
+        if (k === i) d.className = "on";
+        dots.appendChild(d);
+      }
+    }
+    // 卡片内容先落地再量高度，否则位置会差一行
+    requestAnimationFrame(() => place(s));
+  }
+
+  function start() {
+    steps = build();
+    i = 0;
+    const g = $("guide");
+    if (!g) return;
+    g.classList.add("on");
+    paintStep();
+  }
+  function finish() {
+    const g = $("guide");
+    if (g) g.classList.remove("on");
+    localStorage.setItem("im_onboarded", "1");
+  }
+  function next() {
+    if (i >= steps.length - 1) { finish(); return; }
+    i++;
+    paintStep();
+  }
+  function prev() {
+    if (i === 0) return;
+    i--;
+    paintStep();
+  }
+  function isOn() { const g = $("guide"); return !!(g && g.classList.contains("on")); }
+  // 窗口尺寸变了要重新贴位置，否则高亮框会飘在原地
+  function reposition() { if (isOn() && steps[i]) place(steps[i]); }
+
+  return { start, finish, next, prev, isOn, reposition };
+})();
+
+bind("gd-next", "click", () => Guide.next());
+bind("gd-prev", "click", () => Guide.prev());
+bind("gd-skip", "click", () => Guide.finish());
+window.addEventListener("resize", () => Guide.reposition());
+
+// ── 首页菜单 ──
+bind("btn-home", "click", () => Home.show());
+bind("hm-continue", "click", async () => {
+  const saves = await listSaves();
+  if (!saves.length) { toast("还没有存档"); return; }
+  loadGame(saves[0].slot);
+});
+bind("hm-new", "click", () => Home.newCampaign());
+bind("hm-load", "click", () => loadGame());
+bind("hm-guide", "click", () => { Home.hide(); Guide.start(); });
+bind("hm-set", "click", () => Home.settings());
+bind("hm-about", "click", () => Home.about());
+bind("oc-home", "click", () => {
+  const oc = document.getElementById("outcome");
+  if (oc) oc.classList.remove("on");
+  Home.show();
+});
+bind("oc-again", "click", () => {
+  const oc = document.getElementById("outcome");
+  if (oc) oc.classList.remove("on");
+  selUnit = null; curProv = null; geom = null;
+  api("/api/reset", {}).then(() => toast("已重开"));
+});
+
 // 存档 / 读档。
 // 存的是命令流而不是世界快照：读档时服务端用 (模块, 种子, 命令流) 重跑一遍，
 // 并核对哈希——对得上才说明这一局可复现（见 docs/11）。
-// 存档：可以起名字（槽位）。名字只留字母数字与 - _，由服务端再消毒一次。
-bind("btn-save", "click", async () => {
-  const slot = prompt("存档名（留空 = 按时间戳）", "第" + ((S && S.tick) || 0) + "日");
-  if (slot === null) return;
-  try {
-    const r = await fetch("/api/save", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slot: slot || undefined }),
-    });
-    const j = await r.json();
-    toast(j.ok ? "已存档 " + (j.path || "") + "（第 " + j.day + " 日，" + j.commands + " 条命令）" : (j.error || "存档失败"));
-  } catch (e) { toast("存档失败：连不上服务"); }
-});
-// 读档：先列槽位，选一个读。空输入 = 读最新的一份。
-bind("btn-load", "click", async () => {
-  let slot = null;
-  try {
-    const j = await (await fetch("/api/saves")).json();
-    const list = j.saves || [];
-    if (list.length) {
-      const menu = list.map((s, i) =>
-        (i + 1) + ". " + s.slot + "　第" + s.day + "日 · " + s.commands + " 条命令").join("\n");
-      const pick = prompt("读哪一份？（输入序号，留空 = 最新）\n\n" + menu, "");
-      if (pick === null) return;
-      const idx = parseInt(pick, 10);
-      if (!isNaN(idx) && list[idx - 1]) slot = list[idx - 1].slot;
+async function saveGame() {
+  const saves = await listSaves();
+  const body = document.createElement("div");
+  Dlg.h("p", null, body,
+    "存档记的是这一局的命令流，不是世界快照。读档时内核用同一模块、同一随机种子把命令重跑一遍，再核对状态哈希。");
+  Dlg.h("p", "dg-note", body, "名字只保留字母、数字、汉字与 - _；同名会覆盖。");
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.id = "sv-name";
+  inp.maxLength = 60;
+  inp.value = "第" + ((S && S.tick) || 0) + "日";
+  body.appendChild(inp);
+  if (saves.length) {
+    const list = Dlg.h("div", "dg-list", body);
+    for (const s of saves.slice(0, 10)) {
+      const row = Dlg.h("div", "dg-row", list);
+      Dlg.h("span", "r-main", row, s.slot);
+      Dlg.h("span", "r-dim", row, "第 " + s.day + " 日 · " + s.commands + " 条命令");
+      Dlg.h("span", "r-act", row, fmtWhen(s.modified));
+      row.addEventListener("click", () => { inp.value = s.slot; inp.focus(); });
     }
-  } catch (e) { /* 列不出来就直接读最新的 */ }
+  }
+  async function doSave() {
+    const slot = (inp.value || "").trim();
+    try {
+      const r = await fetch("/api/save", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slot: slot || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { toast(j.error || "存档失败"); return; }
+      Dlg.close();
+      toast("已存档 " + (j.path || "") + "（第 " + j.day + " 日，" + j.commands + " 条命令）");
+      Home.refresh();
+    } catch (e) { toast("存档失败：连不上内核"); }
+  }
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") doSave(); });
+  Dlg.open({
+    title: "存档", body, focus: "sv-name",
+    actions: [{ label: "取消" }, { label: "存档", primary: true, keep: true, onClick: doSave }],
+  });
+}
+
+async function loadGame(slot) {
+  if (slot) return applyLoad(slot);
+  const saves = await listSaves();
+  if (!saves.length) { toast("还没有存档"); return; }
+  const body = document.createElement("div");
+  const list = Dlg.h("div", "dg-list", body);
+  for (const s of saves) {
+    const row = Dlg.h("div", "dg-row", list);
+    Dlg.h("span", "r-main", row, s.slot);
+    Dlg.h("span", "r-dim", row, "第 " + s.day + " 日 · " + s.commands + " 条命令");
+    Dlg.h("span", "r-act", row, fmtWhen(s.modified));
+    row.addEventListener("click", () => applyLoad(s.slot));
+  }
+  Dlg.open({ title: "读取存档", body, actions: [{ label: "取消" }] });
+}
+
+async function applyLoad(slot) {
   try {
     const r = await fetch("/api/load", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1651,15 +2335,32 @@ bind("btn-load", "click", async () => {
     if (!j.ok) { toast(j.error || "读档失败"); return; }
     S = j.state;
     selUnit = null; curProv = null; nodeProv = null; geom = null;
+    Dlg.close();
+    Home.hide();
     render();
     toast("读档到第 " + j.day + " 日" + (j.hash_matched ? "（哈希一致）" : "，⚠ 哈希不一致"));
-  } catch (e) { toast("读档失败：连不上服务"); }
-});
+  } catch (e) { toast("读档失败：连不上内核"); }
+}
+
+bind("btn-save", "click", () => saveGame());
+bind("btn-load", "click", () => loadGame());
 bind("btn-reset", "click", () => {
   selUnit = null; curProv = null; geom = null;
   api("/api/reset", {}).then(() => toast("已重开"));
 });
 document.addEventListener("keydown", (e) => {
+  // 引导和首页优先吃掉键盘：否则按空格会在看引导的时候偷偷推一天。
+  if (Guide.isOn()) {
+    if (e.code === "ArrowRight" || e.code === "Enter") { e.preventDefault(); Guide.next(); return; }
+    if (e.code === "ArrowLeft") { e.preventDefault(); Guide.prev(); return; }
+    if (e.code === "Escape") { e.preventDefault(); Guide.finish(); return; }
+    return;
+  }
+  if (Home.key(e)) { e.preventDefault(); return; }
+  if ($("dlg") && $("dlg").classList.contains("on")) {
+    if (e.code === "Escape") Dlg.close();
+    return;
+  }
   if (e.code === "Space") { e.preventDefault(); api("/api/tick", { days: 1 }); }
   if (e.code === "Enter") { e.preventDefault(); api("/api/advance", {}); }
   if (e.code === "Escape") {
@@ -1669,14 +2370,24 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// 启动：拿不到状态就每 2 秒重试。服务重启/刷新时序不对时，
-// 之前会永远停在一块空白界面上，看起来像坏了。
+// 启动：首页先出来，内核在后面追。拿不到状态就每 2 秒重试——
+// 服务重启/刷新时序不对时，以前会永远停在一块空白界面上，看起来像坏了。
 async function boot() {
-  await api("/api/state");
-  loadModules();
-  if (!BASEMAP) loadBasemap();
-  if (!GEO) loadGeo();
-  if (!S) setTimeout(boot, 2000);
+  let first = true;
+  async function round() {
+    if (first) { Home.show(); first = false; }
+    await api("/api/state");
+    loadModules();
+    if (!BASEMAP) loadBasemap();
+    if (!GEO) loadGeo();
+    if (S) {
+      Home.applyState();
+      // 内核可能比首页慢一步：状态到手后再刷一次卡片，否则会停在"没有找到模块"
+      if (Home.isOpen()) Home.refresh();
+    }
+    if (!S) setTimeout(round, 2000);
+  }
+  round();
 }
 boot();
 </script>

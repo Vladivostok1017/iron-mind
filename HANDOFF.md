@@ -36,7 +36,12 @@ cd F:\dsh\iron-mind
 # 全部测试（121 个；南浔线那几条找不到模块时会明确跳过）
 cargo test --workspace
 
-# 玩：启动服务，然后浏览器打开 http://127.0.0.1:8899/
+# 装成桌面程序（原生窗口 + 开始菜单 + 可卸载，不需要管理员）
+# 引擎自带两个演示模块；南浔线在隔壁仓库，用 -Modules 指过去
+pwsh -File install.ps1 -Modules F:\dsh\nanxun-1938 -DefaultModule nanxun_1938.imod
+pwsh -File install.ps1 -Uninstall          # 卸载（存档先备份到「我的文档」）
+
+# 玩（开发模式）：启动服务，然后浏览器打开 http://127.0.0.1:8899/
 # 战役模块现在住在**另一个仓库**（F:\dsh\nanxun-1938），告诉引擎去哪里找：
 $env:IRONMIND_MODULES = "F:\dsh\nanxun-1938"
 cargo run -p sim-server                    # 默认捡到南浔线
@@ -56,11 +61,18 @@ node tools/mapgen/gen.js --dry
 node tools/mapgen/terrain.js stat     # 只出表，不改文件
 node tools/mapgen/terrain.js build
 
+# 重新生成桌面图标（窗口图标 raw RGBA + 快捷方式 .ico，同一段画图代码）
+pwsh -File tools/make-icon.ps1
+
 # 无头截图验收界面（每次新 profile + no-cache，避开"看到旧页面"）
 node tools/shot.js --url http://127.0.0.1:8899/ --out tools/_shots/x.png --wait 1400
 ```
 
-**端口**：默认 8899。8765 被本机的 clash 占着，别用。
+**桌面版的分工**（`docs/24`）：`crates/sim-desktop` 只是一个外壳——
+挑空闲端口、拉起 `sim-server` 子进程、关窗杀进程、读 `settings.env` 当环境变量。
+它不含任何战役逻辑，改界面/规则都不用碰它。
+
+**端口**：桌面版用随机空闲端口（不跟开发时的 8899 抢）；开发模式默认 8899。8765 被本机的 clash 占着，别用。
 
 **操作**：地图**只能看**。指挥只有一个入口——右侧「电报台」：选收件人、写一句人话、
 发出，电报在路上要走 1 天以上，将领自己决定怎么执行（`docs/14`）。
@@ -90,8 +102,13 @@ crates/sim-content/src/       模块加载
 └─ lib.rs         加载 → 校验 → 构建 World
 
 crates/sim-server/            HTTP 服务 + 前端
-├─ src/main.rs    手写 HTTP（无框架），5 条路由（首页 + 4 个 API）
-└─ web/index.html 单文件前端（Voronoi 地图 + 交互）
+├─ src/main.rs    手写 HTTP（无框架），路由见 docs/24 与文件内的 match 表
+└─ web/index.html 单文件前端（地图 + 首页 + 引导 + 各面板）
+
+crates/sim-desktop/           桌面外壳（原生窗口，见 docs/24）
+└─ src/main.rs    挑空闲端口 → 拉起 sim-server 子进程 → WebView2 窗口 → 关窗杀进程
+
+install.ps1                   装成桌面程序：拷贝产物/模块、建快捷方式、登记卸载
 
 crates/sim-testbed/           无头跑批 CLI
 

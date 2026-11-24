@@ -20,6 +20,8 @@ fn meta(playable: SideDef) -> ModuleMeta {
         engine: EngineReq { min: "0.1.0".into(), max: None },
         content_schema: 1,
         playable_side: playable,
+        // 兵力对比与敌方有没有统帅部无关，这里不声明
+        hq: None,
         scale: ScaleDef::Theater,
         domains: vec![DomainDef::Land],
     }

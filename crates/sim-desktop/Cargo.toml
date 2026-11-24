@@ -1,0 +1,20 @@
+[package]
+name = "sim-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "钢心 / Iron Mind —— 桌面外壳：把本地服务装进一个原生窗口"
+
+[dependencies]
+tao = "0.37.3"
+wry = "0.57.3"
+
+# Job 对象：外壳被硬杀（任务管理器/崩溃）时，内核子进程跟着死。
+# 只为了这一个 API 引入，所以按平台限定。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
