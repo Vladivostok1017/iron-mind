@@ -60,7 +60,15 @@ impl Config {
         let mock = mode == "mock";
         let off = mode == "off";
         Self {
-            enabled: !off && (mock || !key.trim().is_empty()),
+            // 没有 key ≠ 关掉指挥链。
+            //
+            // 踩过的坑：以前这里是 `!off && (mock || 有key)`，于是没配 key 时
+            // enabled=false，而 deliver_telegrams / request_due / hq_due 都以它
+            // 为闸门直接 return——玩家发了 8 封电报、推了 39 天，**一封都没送达**，
+            // 日志里连一行"送达"都没有，界面上却写着"将领大脑：规则 AI"，
+            // 看起来像将领不听令，其实是命令根本没进指挥链。
+            // 现在只有显式 IRONMIND_LLM=off 才关；没 key 时由本地规则判断顶上。
+            enabled: !off,
             mock,
             base: std::env::var("IRONMIND_API_BASE")
                 .unwrap_or_else(|_| "https://api.deepseek.com/v1".into()),
@@ -77,11 +85,18 @@ impl Config {
         }
     }
 
+    /// 这次判断该不该真的调模型。
+    /// false 时用本地规则判断（`mock_judgement` / `mock_hq`）——同样的
+    /// 判断结构，只是不联网。
+    pub fn uses_model(&self) -> bool {
+        self.enabled && !self.mock && !self.key.trim().is_empty()
+    }
+
     pub fn describe(&self) -> String {
         if !self.enabled {
-            "规则 AI（未配置 IRONMIND_API_KEY）".into()
-        } else if self.mock {
-            "模拟模型（IRONMIND_LLM=mock）".into()
+            "已关闭（IRONMIND_LLM=off）".into()
+        } else if !self.uses_model() {
+            "规则 AI（本地判断，未接模型）".into()
         } else {
             format!(
                 "{} @ {} · 每 {} 日一问",
@@ -369,11 +384,10 @@ fn parse_judgement(raw: &str) -> Result<Judgement, String> {
 
 /// 调一次模型（同步，可能几秒）。
 pub fn ask(cfg: &Config, a: &Ask) -> Result<Judgement, String> {
-    if cfg.mock {
+    // 不联网时用本地规则判断，而不是报错。
+    // 报错等于"将领沉默"——玩家看到的是一封电报发出去、石沉大海。
+    if !cfg.uses_model() {
         return Ok(mock_judgement(a));
-    }
-    if cfg.key.trim().is_empty() {
-        return Err("没有 IRONMIND_API_KEY".into());
     }
 
     let body = serde_json::json!({
@@ -485,6 +499,28 @@ fn mock_judgement(a: &Ask) -> Judgement {
             }
         }
         if let Some((name, mine)) = hit {
+            // 本地判断也要能抗命——但要抗得有道理。
+            // 让一支只剩几成、将领又谨慎的残部去打敌占城池，是有理由不听的；
+            // 其它情况照办。以前这里的 dissent 是 `order_label != 新命令`，
+            // 也就是"只要和你上次的命令不一样就算抗命"——于是每次换命令都是抗命，
+            // 战报里全是"（黄维）：我的判断也是应当去" 却被标成抗命。
+            let weak = a.strength < a.max_strength * 0.45;
+            if !mine && weak && a.caution > 0.55 {
+                return Judgement {
+                    order: "fortify".into(),
+                    target: None,
+                    dissent: true,
+                    confidence: 0.4,
+                    reason: format!(
+                        "{}不能打：部队只剩 {} 成，{}又在敌手，我不能拿它去碰。",
+                        a.general,
+                        (a.strength / a.max_strength * 10.0).round() as i32,
+                        name
+                    ),
+                    cost: "不听令要担责任，也会拖住整个方向。".into(),
+                    reply: format!("{}：职部兵力不足，未敢向{}，乞示。", a.general, name),
+                };
+            }
             return Judgement {
                 order: if mine { "move" } else { "attack" }.into(),
                 target: Some(name.clone()),
@@ -503,24 +539,26 @@ fn mock_judgement(a: &Ask) -> Judgement {
 
     let weak = a.strength < a.max_strength * 0.45;
     let has_enemy = enemy.is_some();
-    let (order, target, dissent) = if weak && own.is_some() {
-        ("retreat", own, a.order_label != "撤退")
+    // 这一段是"没有电报时我自己怎么看"。既然不是在对上意的回答，
+    // 就不存在抗命——dissent 一律 false，否则每天的例行判断都会被当成抗命刷屏。
+    let (order, target) = if weak && own.is_some() {
+        ("retreat", own)
     } else if let Some(e) = enemy {
         if a.aggression > 0.6 || r % 3 != 0 {
-            ("attack", Some(e), a.order_label != "进攻")
+            ("attack", Some(e))
         } else {
-            ("fortify", None, a.order_label != "筑工事")
+            ("fortify", None)
         }
     } else if r % 2 == 0 {
-        ("fortify", None, false)
+        ("fortify", None)
     } else {
-        ("hold", None, false)
+        ("hold", None)
     };
 
     Judgement {
         order: order.into(),
         target,
-        dissent,
+        dissent: false,
         confidence: 0.55 + (r % 40) as f64 / 100.0,
         reason: if weak {
             format!("{}兵已不足半数，再拼下去是白送，先保退路。", a.general)
@@ -529,11 +567,7 @@ fn mock_judgement(a: &Ask) -> Judgement {
         } else {
             "当面无敌情，抢时间把工事做厚，等敌人来碰。".to_string()
         },
-        cost: if dissent {
-            "抗命要担责任，这次认了。".to_string()
-        } else {
-            "照办，接受这段间隙可能错失战机。".to_string()
-        },
+        cost: "照办，接受这段间隙可能错失战机。".to_string(),
         reply: format!("{}收到，按我的判断办。", a.general),
     }
 }
@@ -730,11 +764,9 @@ fn mock_hq(a: &HqAsk) -> HqJudgement {
 }
 
 pub fn ask_hq(cfg: &Config, a: &HqAsk) -> Result<HqJudgement, String> {
-    if cfg.mock {
+    // 同上：敌方统帅部也必须有判断，否则整场戏里只有玩家一个人在动。
+    if !cfg.uses_model() {
         return Ok(mock_hq(a));
-    }
-    if cfg.key.trim().is_empty() {
-        return Err("没有 IRONMIND_API_KEY".into());
     }
     let text = hq_chat(cfg, HQ_SYSTEM, &build_hq_user(a), 700)?;
     let json = extract_json(&text).ok_or_else(|| format!("响应不是 JSON：{:.160}", text))?;

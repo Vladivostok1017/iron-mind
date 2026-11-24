@@ -1912,6 +1912,10 @@ function shortPath(p) {
   const seg = String(p).split("/").filter(Boolean);
   return seg.slice(-2).join("/") || p;
 }
+// 自动存档在列表里要看得出来是自动的，别让人以为自己存过。
+function slotLabel(slot) {
+  return slot === "auto" ? "自动存档" : slot;
+}
 
 // ── 首页 ──
 // 一进来先看到"这是个什么游戏"，而不是一张没有名字的地图。
@@ -2007,9 +2011,9 @@ const Home = (() => {
     }
     const llm = await getJson("/api/llm");
     if ($("hb-llm")) {
-      $("hb-llm").textContent = llm
-        ? (llm.enabled ? String(llm.mode) : "关 · 本地模拟判断")
-        : "—";
+      $("hb-llm").textContent = llm ? String(llm.mode) : "—";
+      // 没接模型时给个提示色，别让人以为将领是"在想"，其实只是本地规则
+      $("hb-llm").className = llm && llm.uses_model ? "ok" : "";
     }
     applyState();
     paintSel();
@@ -2067,7 +2071,8 @@ const Home = (() => {
       Dlg.h("span", "r-act", r, v);
     };
     Dlg.h("p", null, body, "这一版还没有“在界面里改配置”的入口：内核的开关都在环境变量里，改完重启游戏生效。");
-    row("将领大脑", llm ? (llm.enabled ? "开 · " + llm.mode : "关 · 本地模拟判断") : "未知");
+    row("将领大脑", llm ? String(llm.mode) : "未知");
+    row("是否调用模型", llm ? (llm.uses_model ? "是（联网）" : "否（本地规则判断）") : "—");
     row("模型", llm && llm.model ? String(llm.model) : "—");
     row("司令部会商间隔", llm && llm.interval_days ? llm.interval_days + " 日" : "—");
     row("模型调用", llm ? llm.calls + " 次" : "—");
@@ -2282,7 +2287,7 @@ async function saveGame() {
     const list = Dlg.h("div", "dg-list", body);
     for (const s of saves.slice(0, 10)) {
       const row = Dlg.h("div", "dg-row", list);
-      Dlg.h("span", "r-main", row, s.slot);
+      Dlg.h("span", "r-main", row, slotLabel(s.slot));
       Dlg.h("span", "r-dim", row, "第 " + s.day + " 日 · " + s.commands + " 条命令");
       Dlg.h("span", "r-act", row, fmtWhen(s.modified));
       row.addEventListener("click", () => { inp.value = s.slot; inp.focus(); });
@@ -2317,7 +2322,7 @@ async function loadGame(slot) {
   const list = Dlg.h("div", "dg-list", body);
   for (const s of saves) {
     const row = Dlg.h("div", "dg-row", list);
-    Dlg.h("span", "r-main", row, s.slot);
+    Dlg.h("span", "r-main", row, slotLabel(s.slot));
     Dlg.h("span", "r-dim", row, "第 " + s.day + " 日 · " + s.commands + " 条命令");
     Dlg.h("span", "r-act", row, fmtWhen(s.modified));
     row.addEventListener("click", () => applyLoad(s.slot));

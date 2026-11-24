@@ -24,6 +24,10 @@ use sim_content::{build_world, load_module, LoadedModule};
 mod llm;
 
 const DEFAULT_PORT: u16 = 8899;
+/// 每推进多少天自动存一次档。
+const AUTOSAVE_EVERY: u32 = 5;
+/// 自动存档的槽位名。固定一个，不挤占玩家手工存档。
+const AUTOSAVE_SLOT: &str = "auto";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -292,6 +296,18 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         w.report_for(kind, text, side);
                     }
                     done += 1;
+                    // 自动存档：每几天一次，**在循环里**判。
+                    //
+                    // 以前放在循环外，于是"一次推进 6 天"只会检查最后一天（第 6 日，
+                    // 不是 5 的倍数），整局都不会自动存档。按天检查才对。
+                    if w.tick % AUTOSAVE_EVERY == 0 && w.outcome.is_none() {
+                        match write_save(&state, w, Some(AUTOSAVE_SLOT.to_string())) {
+                            Ok((name, day, n)) => {
+                                trace(format!("   自动存档 {name}（第 {day} 日，{n} 条命令）"))
+                            }
+                            Err(e) => trace(format!("   自动存档失败：{e}")),
+                        }
+                    }
                     // 有事发生就停：新战报到、番号有增减、战役判出结局。
                     // "没事"的日子（只有山地行军减员那种）继续跳过去。
                     if advance {
@@ -493,6 +509,9 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             use serde_json::json;
             let body = json!({
                 "enabled": state.llm.enabled,
+                // 这一次判断到底会不会真的调模型。前端据此区分"接了模型"和
+                // "本地规则顶上"——两者都能玩，但不是一回事。
+                "uses_model": state.llm.uses_model(),
                 "mode": state.llm.describe(),
                 "model": state.llm.model,
                 "interval_days": state.llm.interval_days,
@@ -533,7 +552,22 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             use serde_json::json;
             let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
             let id = v.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
-            let approve = v.get("choice").and_then(|x| x.as_str()) == Some("yes");
+            // 前端发 {id, choice:"yes"|"no"}；也接受 approve: true/false（脚本方便）。
+            // 两个都没有就**明确报错**，不要悄悄当成"驳回"——
+            // 悄悄反驳会把玩家的一次"准他改令"变成"维持原令"，而且完全看不出错在哪。
+            let approve = match (
+                v.get("choice").and_then(|x| x.as_str()),
+                v.get("approve").and_then(|x| x.as_bool()),
+            ) {
+                (Some("yes"), _) => Some(true),
+                (Some("no"), _) => Some(false),
+                (_, Some(b)) => Some(b),
+                _ => None,
+            };
+            let Some(approve) = approve else {
+                let msg = json!({ "ok": false, "error": "缺少 choice（yes/no）或 approve" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            };
             let msg = {
                 let mut guard = state.world.lock().unwrap();
                 let w = guard.as_mut().unwrap();
@@ -576,7 +610,12 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         status: "enroute",
                         reply: String::new(),
                     });
-                    trace(format!("   发电报 #{id} → {to}，{delay} 日后送达"));
+                    // 打印的是**实际要等几天**，不是 comms 里的原始参数。
+                    // 以前打 delay=0，读日志的人会以为电报当天就到了。
+                    trace(format!(
+                        "   发电报 #{id} → {to}，第 {arrive} 日送达（{} 日后）",
+                        arrive.saturating_sub(w.tick)
+                    ));
                     json!({ "ok": true, "id": id, "arrive_day": arrive })
                 }
             };
@@ -632,37 +671,15 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     "modified": modified,
                 }));
             }
+            // 最新的排最前：首页的"继续"直接取第一条，
+            // 以前按路径排，于是"auto"永远排在"第20日"前面，读到的不一定是最新的。
+            arr.sort_by_key(|v| {
+                std::cmp::Reverse(v.get("modified").and_then(|m| m.as_u64()).unwrap_or(0))
+            });
             respond(&mut stream, 200, "application/json", &json!({ "saves": arr }).to_string())
         }        ("POST", "/api/save") => {
             use serde_json::json;
             let out = {
-                let g = state.world.lock().unwrap();
-                let w = g.as_ref().unwrap();
-                let cmds: Vec<CmdRecord> = state
-                    .commands
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|c| c.reject.is_none())
-                    .cloned()
-                    .collect();
-                // 注意：两个 lock() 不能写在同一个结构体字面量里。
-                // 临时 guard 会活到整条语句结束，第二次 lock 就是**自死锁**
-                // （std 的 Mutex 不可重入）。踩过一次：存档请求永远不返回。
-                let (mid, mver) = {
-                    let m = state.module.lock().unwrap();
-                    (m.meta.id.clone(), m.meta.version.clone())
-                };
-                let payload = SaveFile {
-                    v: 1,
-                    module_id: mid,
-                    module_version: mver,
-                    seed: w.seed,
-                    day: w.tick,
-                    state_hash: format!("{:016x}", w.state_hash()),
-                    commands: cmds,
-                };
-                let _ = std::fs::create_dir_all("saves");
                 // 槽位：给了名字就用名字，没给就按时间戳（向后兼容）。
                 // 名字要消毒——它会被拼进文件路径，不能让它带 ../ 或分隔符。
                 let slot = serde_json::from_str::<serde_json::Value>(&body_str)
@@ -670,33 +687,14 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     .and_then(|v| v.get("slot").and_then(|x| x.as_str()).map(|s| s.to_string()))
                     .map(|s| sanitize_slot(&s))
                     .filter(|s| !s.is_empty());
-                let name = match slot {
-                    Some(s) => format!("saves/{s}.json"),
-                    None => format!(
-                        "saves/save-{}.json",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs()
-                    ),
-                };
-                match serde_json::to_string_pretty(&payload) {
-                    Ok(s) => match std::fs::write(&name, s) {
-                        Ok(_) => {
-                            trace(format!(
-                                "   存档 {} （第 {} 日，{} 条命令）",
-                                name,
-                                payload.day,
-                                payload.commands.len()
-                            ));
-                            json!({
-                                "ok": true, "path": name, "day": payload.day,
-                                "commands": payload.commands.len(),
-                            })
-                        }
-                        Err(e) => json!({ "ok": false, "error": format!("写文件失败：{e}") }),
-                    },
-                    Err(e) => json!({ "ok": false, "error": format!("序列化失败：{e}") }),
+                let g = state.world.lock().unwrap();
+                let w = g.as_ref().unwrap();
+                match write_save(&state, w, slot) {
+                    Ok((name, day, n)) => {
+                        trace(format!("   存档 {name} （第 {day} 日，{n} 条命令）"));
+                        json!({ "ok": true, "path": name, "day": day, "commands": n })
+                    }
+                    Err(e) => json!({ "ok": false, "error": e }),
                 }
             };
             respond(&mut stream, 200, "application/json", &out.to_string())
@@ -1000,25 +998,74 @@ fn sanitize_slot(raw: &str) -> String {
     cleaned.trim_matches('-').chars().take(40).collect()
 }
 
-/// 找最新的存档（按文件名里的时间戳）。
+/// 找最新的一份存档。
+///
+/// 以前只认 `save-<时间戳>.json`（"不指定槽位"时自动起的名字），
+/// 于是玩家起了名字的存档、以及自动存档，都不算"最新"——
+/// 首页那个"继续"就会读到一个旧的，或者干脆说"没有存档"。
+/// 现在按**文件修改时间**取最新，名字随便起。
 fn latest_save() -> Option<String> {
     let dir = std::fs::read_dir("saves").ok()?;
-    let mut best: Option<(u64, String)> = None;
+    let mut best: Option<(std::time::SystemTime, String)> = None;
     for e in dir.flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        if !name.starts_with("save-") || !name.ends_with(".json") {
+        let path = e.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
             continue;
         }
-        let secs: u64 = name
-            .trim_start_matches("save-")
-            .trim_end_matches(".json")
-            .parse()
-            .unwrap_or(0);
-        if best.as_ref().map_or(true, |(b, _)| secs > *b) {
-            best = Some((secs, format!("saves/{name}")));
+        let Ok(meta) = e.metadata() else { continue };
+        let Ok(t) = meta.modified() else { continue };
+        if best.as_ref().map_or(true, |(b, _)| t > *b) {
+            best = Some((t, path.to_string_lossy().replace('\\', "/")));
         }
     }
     best.map(|(_, p)| p)
+}
+
+/// 写一份存档：世界快照不要，存的是**命令流**（模块 + 种子 + 命令）。
+///
+/// 抽成函数是因为它现在有两个调用者：玩家点"存档"，和每几天的自动存档。
+/// 调用者必须已经持有 `world` 锁——这里会再锁 `commands` 与 `module`，
+/// 顺序必须和 /api/save 一致（world → commands → module），否则会自死锁。
+fn write_save(
+    state: &Arc<ServerState>,
+    w: &World,
+    slot: Option<String>,
+) -> Result<(String, u32, usize), String> {
+    let cmds: Vec<CmdRecord> = state
+        .commands
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c.reject.is_none())
+        .cloned()
+        .collect();
+    let (mid, mver) = {
+        let m = state.module.lock().unwrap();
+        (m.meta.id.clone(), m.meta.version.clone())
+    };
+    let payload = SaveFile {
+        v: 1,
+        module_id: mid,
+        module_version: mver,
+        seed: w.seed,
+        day: w.tick,
+        state_hash: format!("{:016x}", w.state_hash()),
+        commands: cmds,
+    };
+    let name = match slot.filter(|s| !s.is_empty()) {
+        Some(s) => format!("saves/{s}.json"),
+        None => format!(
+            "saves/save-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        ),
+    };
+    std::fs::create_dir_all("saves").map_err(|e| format!("建目录失败：{e}"))?;
+    let text = serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化失败：{e}"))?;
+    std::fs::write(&name, text).map_err(|e| format!("写文件失败：{e}"))?;
+    Ok((name, payload.day, payload.commands.len()))
 }
 
 /// 一条公文。
@@ -2110,6 +2157,30 @@ fn module_roots() -> Vec<std::path::PathBuf> {
             let p = part.trim();
             if !p.is_empty() && !roots.iter().any(|r| r == std::path::Path::new(p)) {
                 roots.push(std::path::PathBuf::from(p));
+            }
+        }
+    }
+    // 安装布局：`modules/` 就在 exe 旁边。
+    //
+    // 桌面外壳会主动把这个目录塞进 IRONMIND_MODULES，但那只在上壳正常时会做。
+    // 直接跑 sim-server.exe（或上壳的 env 逻辑哪天坏了）就会变成"可用模块 0 个"——
+    // 游戏照常启动，只是没战役可开，而且没有任何报错。这里按布局兜底一次。
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        for cand in [dir.join("modules"), std::path::PathBuf::from("modules")] {
+            if !cand.is_dir() {
+                continue;
+            }
+            // 用 canonicalize 比，否则 `<exe>/modules` 和相对路径 `modules`
+            // 会同时进列表，模块在界面上被列两遍。
+            let key = std::fs::canonicalize(&cand).unwrap_or_else(|_| cand.clone());
+            let dup = roots.iter().any(|r| {
+                std::fs::canonicalize(r).unwrap_or_else(|_| r.clone()) == key
+            });
+            if !dup {
+                roots.push(cand);
             }
         }
     }

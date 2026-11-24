@@ -108,9 +108,10 @@ Info "程序文件已就位"
 # ── 模块 ──
 # 引擎自带的示例 + 指定的模块仓库。装好之后玩家换战役不用重新编译。
 Step "安装模块"
+# 注意：**不清空**已有的 modules/。
+# 重装/更新时把玩家自己装进去的战役删掉是没有道理的——以前这里会先删一遍，
+# 结果"更新引擎"等于"丢掉所有战役"。
 $modDests = Join-Path $Dir "modules"
-Get-ChildItem $modDests -Directory -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -like "*.imod" } | Remove-Item -Recurse -Force
 
 $modSources = @()
 $builtin = Join-Path $Repo "content\scenarios"
