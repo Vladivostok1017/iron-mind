@@ -494,9 +494,7 @@ function renderMap() {
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
   const sel = selUnit !== null ? allUnits().find((u) => u.index === selUnit) : null;
-  // 没选单位时，筑工事/整补/换阵地这三个按钮没有意义，藏起来
-  const acts = $("acts");
-  if (acts) acts.style.display = selUnit === null ? "none" : "flex";
+
   const reach = new Set();
   if (sel) {
     const cp = S.provinces.find((p) => p.id === curProv);
@@ -729,6 +727,15 @@ function toast(m) {
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1700);
 }
 
+// 绑定助手：元素不存在就跳过。
+// 为什么需要：删掉一个按钮的 HTML，却漏掉它的 addEventListener，
+// $("x") 返回 null → TypeError → **后面整段脚本都不执行**（boot 都不会跑），
+// 表现就是"地图没了"。用 bind 之后，少一个元素最多少一个功能。
+function bind(id, evName, fn) {
+  const el = document.getElementById(id);
+  if (!el) { console.warn("缺少元素 #" + id + "，跳过绑定"); return; }
+  el.addEventListener(evName, fn);
+}
 async function api(path, body) {
   const opt = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
   try {
@@ -1049,7 +1056,7 @@ function renderPanel() {
   }
 }
 
-$("modes").addEventListener("click", (e) => {
+bind("modes", "click", (e) => {
   const b = e.target.closest(".mode");
   if (!b) return;
   view = b.dataset.view;
@@ -1129,42 +1136,22 @@ let suppressClick = false;
   });
 })();
 
-// 原地命令：筑工事 / 整补 / 换阵地。
-// 「换阵地」就是在省内把部队从一个阵地挪到另一个——这是预备队的用法，
-// 不消耗天数。阵地少了就循环。
-$("acts").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-act]");
-  if (!b || selUnit === null) return;
-  e.stopPropagation();
-  const act = b.dataset.act;
-  if (act === "shift") {
-    const u = allUnits().find((x) => x.index === selUnit);
-    const p = u ? S.provinces.find((q) => (q.units || []).some((x) => x.index === u.index)) : null;
-    const n = p && p.positions ? p.positions.length : 1;
-    if (n < 2) { toast("这个省只有一个阵地"); return; }
-    const next = ((u.node || 0) + 1) % n;
-    api("/api/order", { unit: selUnit, kind: "shift", target: next });
-    toast("调兵：" + p.positions[next].name);
-    return;
-  }
-  api("/api/order", { unit: selUnit, kind: act });
-  toast(act === "fortify" ? "已下令筑工事（三日一级）" : "已下令整补");
-});
-$("dp-send").addEventListener("click", (ev) => { ev.stopPropagation(); sendTelegram(); });
-$("btn-1").addEventListener("click", () => api("/api/tick", { days: 1 }));
-$("btn-3").addEventListener("click", () => api("/api/tick", { days: 3 }));
+
+bind("dp-send", "click", (ev) => { ev.stopPropagation(); sendTelegram(); });
+bind("btn-1", "click", () => api("/api/tick", { days: 1 }));
+bind("btn-3", "click", () => api("/api/tick", { days: 3 }));
 
 // 存档 / 读档。
 // 存的是命令流而不是世界快照：读档时服务端用 (模块, 种子, 命令流) 重跑一遍，
 // 并核对哈希——对得上才说明这一局可复现（见 docs/11）。
-$("btn-save").addEventListener("click", async () => {
+bind("btn-save", "click", async () => {
   try {
     const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const j = await r.json();
     toast(j.ok ? "已存档：第 " + j.day + " 日，" + j.commands + " 条命令" : (j.error || "存档失败"));
   } catch (e) { toast("存档失败：连不上服务"); }
 });
-$("btn-load").addEventListener("click", async () => {
+bind("btn-load", "click", async () => {
   try {
     const r = await fetch("/api/load", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const j = await r.json();
@@ -1175,7 +1162,7 @@ $("btn-load").addEventListener("click", async () => {
     toast("读档到第 " + j.day + " 日" + (j.hash_matched ? "（哈希一致）" : "，⚠ 哈希不一致"));
   } catch (e) { toast("读档失败：连不上服务"); }
 });
-$("btn-reset").addEventListener("click", () => {
+bind("btn-reset", "click", () => {
   selUnit = null; curProv = null; geom = null;
   api("/api/reset", {}).then(() => toast("已重开"));
 });
