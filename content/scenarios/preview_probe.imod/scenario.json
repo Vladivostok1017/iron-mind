@@ -1,0 +1,14 @@
+{
+  "id": "scen.preview_probe",
+  "name": "预览版机制演示",
+  "start_date": "1940-01-01",
+  "days": 20,
+  "seed": 20260101,
+  "comms": { "preset": "radio" },
+  "_comment": "preview 块是总闸：三个布尔值分别打开弹药油料、铁路被炸、派系人事。删掉这一段，这个模块就退回第一版发行版的行为。",
+  "preview": {
+    "ammo_fuel": true,
+    "rail_damage": true,
+    "politics": true
+  }
+}

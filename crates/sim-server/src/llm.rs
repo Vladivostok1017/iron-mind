@@ -533,6 +533,28 @@ fn mock_judgement(a: &Ask) -> Judgement {
     // 如果它连"命令里提到的地方"都不认，跨省行军这条路就永远测不到，
     // 只能靠真人对着真模型手点。
     if !a.incoming.is_empty() {
+        // 预览版：炸路 / 抢修。没有这一条，不接模型的玩家永远派不出飞机去炸桥，
+        // 也就永远看不到铁路被炸这个机制——那不是"可选功能"，那是坏了。
+        if a.rail_damage && (a.incoming.contains("炸") || a.incoming.contains("破路")) {
+            let where_ = a
+                .neighbors
+                .iter()
+                .map(|n| n.0.clone())
+                .chain(a.far.iter().map(|f| f.0.clone()))
+                .find(|n| a.incoming.contains(n.as_str()))
+                .or_else(|| a.neighbors.iter().find(|n| n.1 == "敌方控制").map(|n| n.0.clone()));
+            if let Some(name) = where_ {
+                return Judgement {
+                    order: "bomb_rail".into(),
+                    target: Some(name.clone()),
+                    dissent: false,
+                    confidence: 0.6,
+                    reason: format!("上意要破{}的交通，我的判断是也应当先炸铁路。", name),
+                    cost: "飞机出去一趟，油料与弹药都要消耗；也不一定一次就炸断。".into(),
+                    reply: format!("{}：即派机队空袭{}段铁路。", a.general, name),
+                };
+            }
+        }
         let mut hit: Option<(String, bool)> = None;
         for (name, owner, _, _) in &a.neighbors {
             if a.incoming.contains(name.as_str()) {

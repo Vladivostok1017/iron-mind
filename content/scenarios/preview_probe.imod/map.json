@@ -1,0 +1,52 @@
+{
+  "bbox": null,
+  "projection": "wgs84",
+  "provinces": [
+    {
+      "id": 0,
+      "name": "西营",
+      "terrain": "plain",
+      "owner": "cn",
+      "supply_source": true,
+      "rail": true,
+      "supply_throughput": 1,
+      "neighbors": [1],
+      "note": "我方补给源，铁路起点",
+      "positions": [{ "name": "西营站", "terrain": "plain", "width": 0.8, "fort": 0 }]
+    },
+    {
+      "id": 1,
+      "name": "中桥",
+      "terrain": "plain",
+      "owner": "cn",
+      "rail": true,
+      "supply_throughput": 1,
+      "neighbors": [0, 2],
+      "note": "铁路咽喉：炸这里，前线就断粮",
+      "positions": [{ "name": "桥头", "terrain": "plain", "width": 0.7, "fort": 1 }]
+    },
+    {
+      "id": 2,
+      "name": "东山口",
+      "terrain": "hill",
+      "owner": "cn",
+      "rail": true,
+      "supply_throughput": 0.8,
+      "neighbors": [1, 3],
+      "note": "前线，接敌",
+      "positions": [{ "name": "山口", "terrain": "hill", "width": 0.6, "fort": 1 }]
+    },
+    {
+      "id": 3,
+      "name": "东营",
+      "terrain": "plain",
+      "owner": "jp",
+      "supply_source": true,
+      "rail": true,
+      "supply_throughput": 1,
+      "neighbors": [2],
+      "note": "敌方补给源，也是空军可以炸的目标",
+      "positions": [{ "name": "东营站", "terrain": "plain", "width": 0.8, "fort": 0 }]
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "_comment": "派系只在 preview.politics 打开时才有意义；将领用 faction 字段引用派系 id。",
+  "factions": [
+    { "id": "f_main", "name": "中央系", "side": "cn", "weight": 0.7, "note": "主帅嫡系，掌握补给与人事" },
+    { "id": "f_local", "name": "地方系", "side": "cn", "weight": 0.35, "note": "本乡本土，兵员足但装备差" }
+  ],
+  "units": [
+    {
+      "id": "cn.main",
+      "name": "甲师",
+      "side": "cn",
+      "kind": "infantry",
+      "strength": 9.0,
+      "position": 1,
+      "effectiveness": 1.05,
+      "supply_reach": 0.2,
+      "ammo": 1.0,
+      "fuel": 1.0,
+      "commander": {
+        "name": "甲师长",
+        "obedience": 0.78, "initiative": 0.55,
+        "aggression": 0.6, "caution": 0.45,
+        "title": "师长", "persona": "中央军校出身，行事谨慎，习惯等命令。",
+        "agenda": "想证明中央系能打，不愿把部队交给地方系指挥。",
+        "faction": "f_main"
+      },
+      "note": "演示用"
+    },
+    {
+      "id": "cn.local",
+      "name": "乙师",
+      "side": "cn",
+      "kind": "infantry",
+      "strength": 7.0,
+      "position": 0,
+      "effectiveness": 0.85,
+      "supply_reach": 0.1,
+      "ammo": 0.6,
+      "fuel": 1.0,
+      "commander": {
+        "name": "乙师长",
+        "obedience": 0.6, "initiative": 0.5,
+        "aggression": 0.5, "caution": 0.6,
+        "title": "师长", "persona": "本省保安部队改编，打仗靠地形和人熟。",
+        "agenda": "保住本乡，不想为中央系消耗。",
+        "faction": "f_local"
+      },
+      "note": "演示用"
+    },
+    {
+      "id": "cn.armor",
+      "name": "战车队",
+      "side": "cn",
+      "kind": "armor",
+      "strength": 2.0,
+      "position": 0,
+      "effectiveness": 1.2,
+      "supply_reach": 0.4,
+      "ammo": 1.0,
+      "fuel": 0.4,
+      "fuel_burn": 0.15,
+      "commander": {
+        "name": "战车队队长",
+        "obedience": 0.9, "initiative": 0.4,
+        "aggression": 0.7, "caution": 0.3,
+        "faction": "f_main"
+      },
+      "note": "油只有四成：跑两趟就没油了，正好看'缺油走不动'"
+    },
+    {
+      "id": "cn.air",
+      "name": "侦察轰炸队",
+      "side": "cn",
+      "kind": "air",
+      "strength": 0.4,
+      "position": 0,
+      "recon_radius": 3,
+      "strike_power": 0.5,
+      "supply_reach": 0.3,
+      "commander": {
+        "name": "航空队长",
+        "obedience": 0.85, "initiative": 0.5,
+        "aggression": 0.8, "caution": 0.3
+      },
+      "note": "recon_radius 3：够得着东营的铁路，可以炸"
+    },
+    {
+      "id": "jp.line",
+      "name": "敌步兵联队",
+      "side": "jp",
+      "kind": "infantry",
+      "strength": 8.0,
+      "position": 3,
+      "effectiveness": 1.5,
+      "supply_reach": 0.45,
+      "commander": {
+        "name": "联队长",
+        "obedience": 0.8, "initiative": 0.6,
+        "aggression": 0.7, "caution": 0.4
+      },
+      "note": "演示用"
+    }
+  ]
+}

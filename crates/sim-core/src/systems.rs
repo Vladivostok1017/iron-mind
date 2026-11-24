@@ -297,6 +297,9 @@ pub fn tick(world: &mut World) {
     run_naval(world, seed, now);
     rules.run(world, Phase::PostCombat);
     run_morale(world);
+    // 预览版：派系影响力的日常漂移。放在士气之后、溃退之前——
+    // 它读的是"今天打得怎么样"，写的是"朝里谁说话更管用"。
+    crate::politics::run(world);
     // 溃退：士气崩了且当面有敌 → 退，退不掉就被围歼。
     // 这是伤亡不对称的来源（对射本身几乎对称）。
     run_rout(world, now, seed);

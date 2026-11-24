@@ -424,6 +424,98 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             };
             respond(&mut stream, 200, "application/json", &json)
         }
+        // 预览版：人事（撤换主官）。和命令一样记进命令流——
+        // 世界必须是 (模块, 种子, 命令流) 的函数，人事也算命令。
+        ("POST", "/api/personnel") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let unit = v.get("unit").and_then(|x| x.as_u64()).unwrap_or(u64::MAX) as usize;
+            let action = v
+                .get("action")
+                .and_then(|x| x.as_str())
+                .unwrap_or("relieve")
+                .to_string();
+            if action != "relieve" {
+                let msg = json!({ "error": format!("不认识的人事动作：{action}") });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            let mut g = state.world.lock().unwrap();
+            let Some(w) = g.as_mut() else {
+                let msg = json!({ "error": "还没有开始战役" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            };
+            // 先在这个世界上试一次（拒绝就不落命令），再照命令流重放一次。
+            match sim_core::politics::relieve(w, unit) {
+                Ok((old, new_chief)) => {
+                    let rec = CmdRecord {
+                        day: w.tick,
+                        unit,
+                        kind: "relieve".into(),
+                        target: None,
+                        reject: None,
+                        source: "player".into(),
+                        reason: String::new(),
+                    };
+                    state.commands.lock().unwrap().push(rec);
+                    let body = json!({
+                        "ok": true,
+                        "old": old,
+                        "new": new_chief,
+                        "state": serde_json::from_str::<serde_json::Value>(&snapshot(w)).unwrap(),
+                    })
+                    .to_string();
+                    respond(&mut stream, 200, "application/json", &body)
+                }
+                Err(e) => {
+                    let msg = json!({ "error": e });
+                    respond(&mut stream, 400, "application/json", &msg.to_string())
+                }
+            }
+        }
+        // 预览版：回放浏览。**只读**——它按命令流重算一个世界出来给前端看，
+        // 不碰正在跑的那一局。世界本来就是 (模块, 种子, 命令流) 的确定性函数，
+        // 所以"看第 30 天"不需要录像文件，重算一次就是那天的样子。
+        ("POST", "/api/replay") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let live_day = {
+                let g = state.world.lock().unwrap();
+                g.as_ref().map(|w| w.tick).unwrap_or(0)
+            };
+            let day = v
+                .get("day")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(live_day as u64) as u32;
+            let day = day.min(live_day);
+            let cmds = state.commands.lock().unwrap().clone();
+            let module = state.module.lock().unwrap().clone();
+            let w = rebuild(&module, &cmds, day);
+            // 回放里的"今天发生了什么"：只给这一天的战报，否则右栏会被整局刷屏。
+            let events: Vec<serde_json::Value> = w
+                .log
+                .iter()
+                .filter(|e| e.tick == day)
+                .rev()
+                .take(40)
+                .map(|e| {
+                    json!({
+                        "kind": e.kind.code(),
+                        "text": e.text,
+                        "side": e.side.map(|s| if s == Side::Cn { "cn" } else { "jp" }),
+                    })
+                })
+                .collect();
+            let body = json!({
+                "state": serde_json::from_str::<serde_json::Value>(&snapshot(&w)).unwrap(),
+                "day": day,
+                "live_day": live_day,
+                "hash": format!("{:016x}", w.state_hash()),
+                "events": events,
+                "commands": cmds.iter().filter(|c| c.day <= day && c.reject.is_none()).count(),
+            })
+            .to_string();
+            respond(&mut stream, 200, "application/json", &body)
+        }
         ("GET", "/api/replay-check") => {
             let (live_hash, live_tick) = {
                 let g = state.world.lock().unwrap();
@@ -1254,6 +1346,12 @@ struct CmdRecord {
 /// `manual / disobeyed / dissent_count`，而这些都进状态哈希。
 /// 两条路径只要有一处不一致，回放校验就会挂——这正是在替我抓这类不一致。
 fn apply_record(w: &mut World, c: &CmdRecord) {
+    // 预览版人事：撤换不是"命令"，但它同样改变状态，所以必须走命令流，
+    // 否则回放算出来的世界和实时世界对不上（回放校验会当场抓住）。
+    if c.kind == "relieve" {
+        let _ = sim_core::politics::relieve(w, c.unit);
+        return;
+    }
     if apply_typed(w, c.unit, &c.kind, c.target).is_some() {
         return; // 被拒的命令不产生状态变化
     }
@@ -1542,8 +1640,22 @@ fn expire_requests(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<Str
                 r.status = "expired";
             }
         }
+        // 玩家看到的是"改成了什么动作"，不是内部命令码（bomb_rail 这种
+        // 英文标识符一旦漏进战报，读起来就像 bug）。
+        let kind_cn = match kind.as_str() {
+            "attack" => "进攻",
+            "move" => "推进",
+            "retreat" => "撤退",
+            "fortify" => "筑工事",
+            "rest" => "整补",
+            "shift" => "调兵",
+            "hold" => "固守",
+            "bomb_rail" => "炸路",
+            "repair_rail" => "抢修",
+            _ => "改令",
+        };
         notes.push(format!(
-            "{unit_name}（{general}）：请示无人答复，已自决改令 {kind}"
+            "{unit_name}（{general}）：请示无人答复，已自决{kind_cn}"
         ));
     }
     notes
@@ -1638,7 +1750,11 @@ fn deliver_telegrams(state: &Arc<ServerState>, w: &World, day: u32) -> Vec<Strin
         let mut targets = resolve_recipients(w, Side::Cn, &to);
         targets.truncate(MAX_RECIPIENTS);
         for idx in &targets {
-            if let Some(ask) = build_ask(state, w, *idx, &text) {
+            // 空军平时不"执行命令"（第一版没有转场），所以它的问询一直被挡掉；
+            // 但预览版开了铁路被炸之后，空军是**唯一**能炸路的兵种——
+            // 再挡掉就等于这个机制永远只能靠模组作者手改数据来触发。
+            let ground_only = !w.fx.rail_damage;
+            if let Some(ask) = build_ask_kind(state, w, *idx, &text, ground_only) {
                 state.brain.submit(llm::Job { unit: *idx, day, ask, telegram: Some(id) });
             }
         }
@@ -1760,7 +1876,28 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
     // 只给他邻省，他的判断就只能是"打隔壁"，玩家的"抽两个师去守万家岭"
     // 也就永远落不了地。这里给 2-7 日行程内的目标，按天数排序。
     let mut far = Vec::new();
-    for (pid, hops) in sim_core::systems::reachable(w, u.position, u.side, u.kind) {
+    // 空军没有"行程"（它不占省、也不行军），`reachable` 对它是空的。
+    // 但开着铁路被炸时，空军需要知道"我能炸到哪里"——否则它的判断里
+    // 永远不会出现目标省，炸路这条命令也就永远发不出来。
+    let hops_of = |pid: u32| -> Option<u32> {
+        if u.kind.is_ground() || u.kind == sim_core::UnitKind::Naval {
+            sim_core::systems::hops_to(w, u.position, pid, u.side, u.kind)
+        } else {
+            w.hops_between(u.position, pid).ok()
+        }
+    };
+    let candidate: Vec<(u32, u32)> = if u.kind.is_ground() || u.kind == sim_core::UnitKind::Naval {
+        sim_core::systems::reachable(w, u.position, u.side, u.kind)
+    } else {
+        let mut v: Vec<(u32, u32)> = Vec::new();
+        for pid in 0..w.provinces.len() as u32 {
+            if let Some(d) = hops_of(pid) {
+                v.push((pid, d));
+            }
+        }
+        v
+    };
+    for (pid, hops) in candidate {
         if hops < 2 || hops > 7 {
             continue;
         }
@@ -1869,7 +2006,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         // 把模型的输出翻译成引擎命令
         let kind = j.order.as_str();
         let target: Option<u32> = match kind {
-            "attack" | "move" | "retreat" => j
+            "attack" | "move" | "retreat" | "bomb_rail" | "repair_rail" => j
                 .target
                 .as_deref()
                 .and_then(|n| province_by_name(w, n)),
@@ -1881,7 +2018,10 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             _ => None,
         };
         // 目标解析不出来就当成"按兵不动"，不要瞎打
-        let kind = if matches!(kind, "attack" | "move" | "retreat") && target.is_none() {
+        let kind = if matches!(
+            kind,
+            "attack" | "move" | "retreat" | "bomb_rail" | "repair_rail"
+        ) && target.is_none() {
             "hold"
         } else {
             kind
@@ -1902,6 +2042,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         };
         let same_target = match kind {
             "attack" | "move" | "retreat" => cur.target() == target,
+            "bomb_rail" | "repair_rail" => cur.place() == target,
             "shift" => matches!(*&cur, Order::Shift(n) if Some(n as u32) == target),
             _ => true,
         };
@@ -2382,6 +2523,13 @@ fn snapshot(w: &World) -> String {
                     "units": f.units,
                 })
             })
+            .collect::<Vec<_>>(),
+        // 已去职的将领（预览版 politics）：人事不是没有代价的事，
+        // 撤过谁得能查——否则玩家会以为"撤了就是没了"，不知道该不该撤。
+        "dismissed": w
+            .dismissed
+            .iter()
+            .map(|(unit, who, day)| json!({ "unit": unit, "who": who, "day": day }))
             .collect::<Vec<_>>(),
         "plan": plan,
         "outcome": outcome,

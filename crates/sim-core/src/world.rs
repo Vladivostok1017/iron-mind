@@ -1131,6 +1131,9 @@ pub struct World {
     pub fx: Features,
     /// 派系（预览版）。模块不声明就永远是空的，也不进哈希。
     pub factions: Vec<crate::politics::Faction>,
+    /// 已去职的将领（预览版 politics）：(部队, 将领, 第几日)。
+    /// 只用于界面与哈希——人走了就是走了，这一局不再回来。
+    pub dismissed: Vec<(String, String, u32)>,
     /// 战役长度（天）。到日子就判结局。
     pub campaign_days: u32,
     /// 模块声明的结局规则，按 priority 判。
@@ -1166,6 +1169,7 @@ impl World {
             formations: Vec::new(),
             fx: Features::default(),
             factions: Vec::new(),
+            dismissed: Vec::new(),
             campaign_days: u32::MAX,
             endings: Vec::new(),
             outcome: None,
@@ -1311,7 +1315,9 @@ impl World {
         match self.hq_alive(idx) {
             Some(true) => (base + Fixed::ratio(5, 100)).clamp(Fixed::ZERO, Fixed::ONE),
             Some(false) => (base - Fixed::ratio(15, 100)).clamp(Fixed::ZERO, Fixed::ONE),
-            None => base,
+            // 预览版派系：靠山失势的将领更可能抗命（关着 politics 时恒为 0）。
+            None => (base + crate::politics::obedience_shift(self, idx))
+                .clamp(Fixed::ZERO, Fixed::ONE),
         }
     }
 

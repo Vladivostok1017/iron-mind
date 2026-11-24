@@ -408,6 +408,29 @@
   #setup .su-msg.bad { color: #c47a6e; }
   #setup .su-foot { font-size: 11px; color: #5d6672; margin-top: 10px; line-height: 1.7; }
   #setup code { color: #9aa6b3; }
+  /* 回放条：屏幕底部居中的时间轴。压在地图之上，不挡侧栏操作。 */
+  #replay-bar {
+    position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; border-radius: 10px;
+    background: rgba(12, 16, 22, .92); border: 1px solid #2a3542;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .45); z-index: 40;
+  }
+  #replay-bar input[type=range] { width: 320px; accent-color: #c9a227; }
+  .rp-btn {
+    background: #1b232d; color: #cfd6de; border: 1px solid #2f3a47;
+    border-radius: 6px; padding: 3px 9px; font-size: 12px; cursor: pointer;
+  }
+  .rp-btn:hover { background: #26313d; }
+  .rp-btn.wide { padding: 3px 12px; }
+  .rp-day { font-size: 12px; color: #9aa6b3; font-variant-numeric: tabular-nums; }
+  #app.replaying #replay-bar { display: flex !important; }
+  /* 派系面板（预览版）：一条影响力条 + 成员名单 */
+  .fr { margin-bottom: 8px; }
+  .fr-h { display: flex; justify-content: space-between; font-size: 12px; color: #cfd6de; }
+  .fr-bar { height: 4px; background: #1c242e; border-radius: 2px; margin: 3px 0 2px; overflow: hidden; }
+  .fr-bar i { display: block; height: 100%; }
+  .fr-who { font-size: 11px; color: #7f8a96; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -426,6 +449,8 @@
     <!-- 预览版角标：模块声明了 preview.* 才出现。
          第一版发行版的界面不该多出奇怪的东西，所以默认 display:none。 -->
     <div class="pend" id="t-preview" style="display:none" title="">预览版</div>
+    <!-- 回放浏览（预览版）：点开进入"看过去"的模式，不推进、不下令。 -->
+    <div class="pend" id="rp-open" style="display:none" title="按天回看这一局">回放</div>
     <div class="pend" id="pending">战报 —</div>
     <div class="clock" id="clock">第 0 日</div>
   </div>
@@ -440,6 +465,14 @@
       <div id="hypso-leg">
         <div class="hl-bar" id="hl-bar"></div>
         <div class="hl-ticks"><span>0</span><span>200</span><span>500</span><span>900</span><span>1300 米</span></div>
+      </div>
+      <!-- 回放条：只在回放模式下显示，压在屏幕底部中间 -->
+      <div id="replay-bar" style="display:none">
+        <button class="rp-btn" id="rp-prev" title="前一天">◀</button>
+        <input type="range" id="rp-range" min="0" max="0" value="0">
+        <button class="rp-btn" id="rp-next" title="后一天">▶</button>
+        <span class="rp-day" id="rp-day">第 0 日</span>
+        <button class="rp-btn wide" id="rp-exit">回到现在</button>
       </div>
     </div>
     <aside>
@@ -464,6 +497,12 @@
       <div class="sec" id="node-sec" style="display:none">
         <h3>阵地 <span id="node-prov" style="color:#7c8794;font-weight:400"></span></h3>
         <div id="node-list"></div>
+      </div>
+      <!-- 派系（预览版 politics）：谁在朝里说话管用。
+           不显示将领的服从度——那是内部量，玩家该看的是靠山与去职名单。 -->
+      <div class="sec" id="fac-sec" style="display:none">
+        <h3>派系 <span id="fac-hint" style="color:#7c8794;font-weight:400"></span></h3>
+        <div id="fac-list"></div>
       </div>
       <div class="sec">
         <h3>态势</h3>
@@ -765,6 +804,48 @@ let DEV_GEN = null;
 // 界面里所有预览版面板/角标都以它为准——关着的时候界面与定稿版本一模一样。
 const fxOn = (name) => !!(S && Array.isArray(S.features) && S.features.indexOf(name) >= 0);
 
+// ---- 回放浏览（预览版）----
+// 世界是 (模块, 种子, 命令流) 的确定性函数，所以"看第 N 天"不需要录像：
+// 内核按命令流重算一遍，前端把算出来的状态当成 S 画出来就行。
+// 进入回放时把实时状态存在 LIVE 里，退出时换回来——**绝不写回服务端**。
+let LIVE = null;
+let REPLAY_DAY = 0;
+
+async function replaySeek(day) {
+  try {
+    const r = await fetch("/api/replay", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day }),
+    });
+    const j = await r.json();
+    if (j.error) { toast(j.error); return; }
+    if (!LIVE) LIVE = S;                       // 第一次进回放：记住"现在"
+    REPLAY_DAY = j.day;
+    S = j.state;                                // 只在前端替换视图
+    S.__replay = { day: j.day, live: j.live_day, events: j.events || [] };
+    $("app").classList.add("replaying");
+    $("replay-bar").style.display = "flex";
+    const rng = $("rp-range");
+    rng.max = String(j.live_day);
+    rng.value = String(j.day);
+    $("rp-day").textContent = "第 " + j.day + " 日 / 共 " + j.live_day + " 日";
+    selUnit = null; curProv = null; nodeProv = null;
+    render();
+  } catch (e) { toast("回放失败：连不上内核"); }
+}
+
+function replayExit() {
+  if (!LIVE) return;
+  S = LIVE;
+  LIVE = null;
+  REPLAY_DAY = 0;
+  $("app").classList.remove("replaying");
+  $("replay-bar").style.display = "none";
+  selUnit = null; curProv = null; nodeProv = null;
+  render();
+  toast("回到第 " + S.tick + " 日");
+}
+
 async function loadBasemap() {
   try {
     const j = await (await fetch("/basemap.json")).json();
@@ -1061,6 +1142,10 @@ function renderTop() {
   // 预览版角标：模块开了 preview.* 才亮。点它说明现在多了哪些机制——
   // 不说清楚的话，玩家会以为"弹药打光了打不动"是 bug。
   const fx = S.features || [];
+  // 回放入口：只要有正在跑的一局就能回看（它只读，不影响任何东西）。
+  const rp = $("rp-open");
+  if (rp) rp.style.display = LIVE ? "none" : "";
+  renderFactions();
   const pv = $("t-preview");
   if (pv) {
     pv.style.display = fx.length ? "" : "none";
@@ -1486,6 +1571,13 @@ bind("mod-sel", "change", async () => {
 });
 
 async function api(path, body) {
+  // 回放模式下世界是"重算出来的像"，不是正在跑的那一局：
+  // 这时候推进/下令/存档都会错得莫名其妙（命令会落到实时世界上，
+  // 而玩家看的是第 12 天）。所以先挡住，说清楚怎么退出。
+  if (LIVE && /\/(tick|advance|order|reset|save|report)/.test(path)) {
+    toast("回放中：先点「回到现在」再操作");
+    return;
+  }
   const opt = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
   try {
     const r = await fetch(path, opt);
@@ -1844,10 +1936,28 @@ function renderOutliner() {
       nodeProv = null;
       render();
     };
+    // 预览版人事：右键撤换主官。放在右键而不是按钮上，是因为撤将是不可逆的，
+    // 不该和"看一眼"的左键挨在一起——误点一次就少一个会打仗的人。
+    if (fxOn("politics") && !u.ended_day) {
+      d.oncontextmenu = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const who = u.commander || "主官";
+        if (!confirm("撤换 " + who + "？\n\n继任者是个听话但平庸的参谋，\n他那一派在朝中的分量会掉一截，这一局他不会回来。")) return;
+        fetch("/api/personnel", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ unit: u.index, action: "relieve" }),
+        }).then((r) => r.json()).then((j) => {
+          if (j.error) { toast(j.error); return; }
+          S = j.state;
+          render();
+          toast(who + " 已去职，由 " + j.new + " 接任");
+        }).catch(() => toast("人事命令没送到"));
+      };
+      d.title = (d.title || "") + "（右键：撤换主官）";
+    }
     box.appendChild(d);
   }
-
-  // 编制簿：已经覆灭的番号。
   // 番号没了、军长殉国、还有多少天重建——这就是"编制改变"的全部内容，
   // 不摆出来，玩家只会以为部队"莫名其妙消失了"。
   const gone = S.gone || [];
@@ -1902,6 +2012,35 @@ async function refreshLlm() {
       }
     }
   } catch (e) { el.textContent = "—"; }
+}
+
+// 派系面板（预览版 politics）。
+// 只显示"影响力"与"谁属于哪一派"——将领的服从度永远不给玩家看，
+// 否则玩家就会去算数值，而不是读人。
+function renderFactions() {
+  const sec = $("fac-sec");
+  if (!sec) return;
+  if (!S || !fxOn("politics")) { sec.style.display = "none"; return; }
+  sec.style.display = "";
+  const box = $("fac-list");
+  const list = (S.factions || []).filter((f) => f.cn);
+  const gone = S.dismissed || [];
+  $("fac-hint").textContent = gone.length ? "· 已去职 " + gone.length + " 人" : "";
+  const rows = list.map((f) => {
+    const pct = Math.round(f.influence * 100);
+    const col = pct >= 60 ? "#c9a227" : pct >= 35 ? "#8d949c" : "#c0392b";
+    const who = (f.generals || []).length ? f.generals.join("、") : "（无带兵将领）";
+    return `<div class="fr">
+      <div class="fr-h"><span>${f.name}</span><span style="color:${col}">${pct}</span></div>
+      <div class="fr-bar"><i style="width:${pct}%;background:${col}"></i></div>
+      <div class="fr-who">${who}</div>
+    </div>`;
+  });
+  if (gone.length) {
+    rows.push(`<div class="fr-who" style="margin-top:6px;color:#7c8794">已去职：` +
+      gone.map((g) => `${g.who}（第 ${g.day} 日）`).join("、") + `</div>`);
+  }
+  box.innerHTML = rows.join("") || `<div class="fr-who">这个战役没有声明派系。</div>`;
 }
 
 function showTip(ev, p) {
@@ -2081,6 +2220,16 @@ bind("mail-close", "click", () => closeMail());
 bind("btn-1", "click", () => pushOn("tick", 1));
 bind("btn-3", "click", () => pushOn("tick", 3));
 bind("btn-next", "click", () => pushOn("advance", 0));
+
+// 回放（预览版）：进入 / 前后一天 / 拖 / 退出。
+bind("rp-open", "click", () => replaySeek(S ? S.tick : 0));
+bind("rp-prev", "click", () => replaySeek(Math.max(0, REPLAY_DAY - 1)));
+bind("rp-next", "click", () => {
+  const live = LIVE ? LIVE.tick : REPLAY_DAY;
+  replaySeek(Math.min(live, REPLAY_DAY + 1));
+});
+bind("rp-range", "input", (ev) => replaySeek(Number(ev.target.value)));
+bind("rp-exit", "click", () => replayExit());
 
 /* ═══════════════════════════════════════════════════════════════════════
    从"一张能跑的地图"到"一个能装的游戏"，缺的是这几块：
