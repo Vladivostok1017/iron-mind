@@ -178,6 +178,21 @@
   #tip .t-row { color: #8b95a1; }
   #tip .t-row b { color: #c3ccd6; font-weight: 500; }
   /* 行军线：虚线 + 剩余天数 */
+  /* 通话：和"发报"并列的另一个指挥动作——问，而不是下命令。
+     回答是**他的说法**，不是上帝视角；所以这里故意不给任何数字校验。 */
+  .call-log { max-height: 230px; overflow-y: auto; margin: 8px 0; display: flex;
+    flex-direction: column; gap: 6px; }
+  .call-line { font-size: 12px; line-height: 1.75; padding: 6px 9px; border-radius: 4px; }
+  .call-line.me { background: #182231; color: #cfe0f0; align-self: flex-end; max-width: 86%; }
+  .call-line.them { background: #141b23; color: #b6c0cc; border: 1px solid #222b36; max-width: 92%; }
+  .call-line.them b { color: #d5dee8; font-weight: 600; }
+  .call-line.typing { color: #6f7a86; font-style: italic; }
+  .call-row { display: flex; gap: 6px; }
+  .call-row input { flex: 1; background: #0f151b; color: #cfd8e3; border: 1px solid #2a3542;
+    border-radius: 4px; padding: 7px 9px; font-size: 12.5px; font-family: inherit; }
+  .call-row input:focus { outline: none; border-color: #3d5a7a; }
+  #call-to { width: 100%; margin-bottom: 8px; background: #0f151b; color: #cfd8e3;
+    border: 1px solid #2a3542; border-radius: 4px; padding: 6px 8px; font-size: 12px; }
   /* 铁路：底色一条 + 上面一条暖色虚线当枕木。
      补给每过一省乘"通路损耗 × 省吞吐"（铁路 0.95 / 水路 0.85 / 陆路 0.75），
      所以铁路是这张图上最重要的战略提示——以前它根本没画出来。 */
@@ -384,7 +399,7 @@
     <aside>
       <!-- 电报台：玩家唯一的指挥手段。地图只用来查看。 -->
       <div class="sec" id="dispatch-sec">
-        <h3>电报台</h3>
+        <h3>电报台 <button class="m-chip" id="dp-call" style="float:right;margin-top:-2px">通话</button></h3>
         <div class="dp-row"><span>发给</span><select id="dp-to"></select></div>
         <textarea id="dp-text" rows="3" placeholder="用一句话下命令，例如：守住德安至万家岭一线，工事加厚，不许拿部队去拼消耗。"></textarea>
         <button class="btn primary" id="dp-send">发出电报</button>
@@ -2101,6 +2116,133 @@ bind("su-save", "click", () => {
     api_key: key,
   });
 });
+
+// ── 通话：给将领发消息（打字，不是语音）──
+// 这是"发报"之外的第二个人机接口：**问**，而不是下命令。
+// 回话代表他自己的说法——他可能不知道、可能报得乐观、可能把估计说成事实。
+// 这才是"我们看到的不是真实战场"的落点：信息从人嘴里出来就已经有偏差了。
+const Call = (() => {
+  let unit = null;
+  const hist = new Map(); // 单位索引 → [{me, text}]
+
+  function ownUnits() {
+    return allUnits().filter((u) => u.mine);
+  }
+  function unitByIdx(i) {
+    return ownUnits().find((u) => u.index === i) || null;
+  }
+  function push(kind, who, text) {
+    const log = $("call-log");
+    if (!log) return;
+    const d = document.createElement("div");
+    d.className = "call-line " + kind;
+    if (kind === "them" && who) {
+      const b = document.createElement("b");
+      b.textContent = who + "：";
+      d.appendChild(b);
+    }
+    d.appendChild(document.createTextNode(text));
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+  function renderHist() {
+    const log = $("call-log");
+    if (!log) return;
+    log.replaceChildren();
+    const h = hist.get(unit) || [];
+    if (!h.length) {
+      const u = unitByIdx(unit);
+      push("them", u ? u.commander : "", "（接通了。有事请讲。）");
+    }
+    for (const m of h) push(m.me ? "me" : "them", m.me ? "" : m.who, m.text);
+  }
+  async function ask() {
+    const inp = $("call-in");
+    if (!inp || unit === null) return;
+    const text = (inp.value || "").trim();
+    if (!text) return;
+    inp.value = "";
+    push("me", "", text);
+    const h = hist.get(unit) || [];
+    h.push({ me: true, text });
+    hist.set(unit, h);
+    push("them typing", "", "（等他回话……）");
+    try {
+      const r = await fetch("/api/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unit, text }),
+      });
+      const j = await r.json();
+      const log = $("call-log");
+      if (log && log.lastChild) log.removeChild(log.lastChild); // 去掉"等他回话"
+      if (!j.ok) { push("them", "", j.error || "（联络中断）"); return; }
+      const hh = hist.get(unit) || [];
+      hh.push({ me: false, who: j.general, text: j.reply });
+      hist.set(unit, hh);
+      push("them", j.general, j.reply);
+    } catch (e) {
+      const log = $("call-log");
+      if (log && log.lastChild) log.removeChild(log.lastChild);
+      push("them", "", "（电话断了：连不上内核）");
+    }
+  }
+  function open(idx) {
+    const list = ownUnits();
+    if (!list.length) { toast("还没有可联络的部队"); return; }
+    unit = idx !== null && idx !== undefined && list.some((u) => u.index === idx)
+      ? idx
+      : list[0].index;
+
+    const body = document.createElement("div");
+    const sel = document.createElement("select");
+    sel.id = "call-to";
+    for (const u of list) {
+      const o = document.createElement("option");
+      o.value = u.index;
+      o.textContent = u.name + "（" + u.commander + "）";
+      if (u.index === unit) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener("change", () => {
+      unit = Number(sel.value);
+      renderHist();
+      const inp = $("call-in");
+      if (inp) inp.focus();
+    });
+    body.appendChild(sel);
+
+    const log = document.createElement("div");
+    log.className = "call-log";
+    log.id = "call-log";
+    body.appendChild(log);
+
+    const row = document.createElement("div");
+    row.className = "call-row";
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.id = "call-in";
+    inp.placeholder = "问一句，例如：当面敌军有多少？补给还够几天？";
+    const send = document.createElement("button");
+    send.className = "btn primary";
+    send.textContent = "问他";
+    send.addEventListener("click", ask);
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); ask(); }
+    });
+    row.appendChild(inp);
+    row.appendChild(send);
+    body.appendChild(row);
+
+    Dlg.open({
+      title: "通话", body,
+      actions: [{ label: "挂断" }],
+    });
+    renderHist();
+    setTimeout(() => { const i = $("call-in"); if (i) i.focus(); }, 60);
+  }
+  return { open };
+})();
+bind("dp-call", "click", () => Call.open(selUnit));
 
 // ── 首页 ──
 // 一进来先看到"这是个什么游戏"，而不是一张没有名字的地图。

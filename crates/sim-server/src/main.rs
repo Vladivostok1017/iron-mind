@@ -699,8 +699,8 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 } else {
                     // 通信延迟：电报按线路传到兵团部，再由参谋分下去
                     // （电报本身是秒级的，这里的延迟是参谋作业与下达，见 docs/10）
-                    let delay = w.comms.transmission + w.comms.order_delay;
-                    let arrive = w.tick + delay.max(1);
+                    let delay = w.comms.command_delay();
+                    let arrive = w.tick + delay;
                     let id = state
                         .next_telegram_id
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -723,6 +723,50 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 }
             };
             respond(&mut stream, 200, "application/json", &out.to_string())
+        }
+        // 通话：拿起电话问将领一句话。**不下命令**，也不进命令流。
+        //
+        // 为什么要有：电报只有"下达"这一个功能，玩家的好奇没法落地——
+        // 想知道"你那儿还剩多少粮""当面敌军到底几个师"，只能靠猜。
+        // 而真实指挥员最常用的动作恰恰是问一句。
+        //
+        // 回答是**他的话**，不是上帝视角：他只知道自己的侦察、部下报上来的、
+        // 以及他自己愿意说的。所以这里不能拿真值直接回给玩家。
+        ("POST", "/api/ask") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let idx = v.get("unit").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let text = v
+                .get("text")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                let msg = json!({ "ok": false, "error": "问点什么？" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            // 先把上下文取出来再放锁：模型要几秒，不能把整个世界锁住
+            let ask = {
+                let g = state.world.lock().unwrap();
+                g.as_ref().and_then(|w| build_ask(&state, w, idx, ""))
+            };
+            let Some(ask) = ask else {
+                let msg = json!({ "ok": false, "error": "这个番号联系不上" });
+                return respond(&mut stream, 404, "application/json", &msg.to_string());
+            };
+            let who = ask.general.clone();
+            let reply = match llm::talk(&cfg(&state), &ask, &text) {
+                Ok(t) => t,
+                Err(e) => format!("（联络不上：{e}）"),
+            };
+            trace(format!("   通话 {who}：{text} → {reply}"));
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({ "ok": true, "general": who, "reply": reply }).to_string(),
+            )
         }
         ("GET", "/api/telegrams") => {
             use serde_json::json;
@@ -1675,7 +1719,13 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         // 中方的将领要向上报：抗命不是立刻执行，而是**请你点头**。
         // 日方由 AI 全权指挥，没有上级可问，直接执行。
         if w.units[idx].side == Side::Cn {
-            let title = format!("{} {}", kind, j.target.clone().unwrap_or_default());
+            // 公文标题用中文命令名。以前这里直接拼 `kind`（引擎内部代号），
+            // 公文堆里于是出现"请示：attack 万家岭 准不准？"——半句英文。
+            let title = format!(
+                "{} {}",
+                kind_label,
+                j.target.clone().unwrap_or_default()
+            );
             let rid = push_report(
                 state,
                 Report {

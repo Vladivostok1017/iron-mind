@@ -860,6 +860,84 @@ pub fn ping(cfg: &Config) -> Result<String, String> {
     Ok(t.chars().take(40).collect())
 }
 
+/// 通话用的系统提示：这是**口头汇报**，不是下达命令。
+const TALK_SYSTEM: &str = "你是国民革命军的一名将领，正在电话里向上级口头汇报。\
+只说你从自己部队、侦察和下级报告里知道的事：不知道就说不知道，不要编造精确数字，\
+不要把估计说成事实。两三句话，像人说话，带一点情绪也可以。\
+不要下命令，不要输出 JSON，不要列清单。";
+
+/// 通话：问将领一句话，只回答，**不产生任何命令**。
+///
+/// 这是"通讯"的另一半。以前只有发报这一个动作，玩家没法问"你那儿怎么样"，
+/// 而指挥员一天到晚干的就是这件事。回答完全是他自己的说法——
+/// 他可能报得乐观、可能不知道、可能把估计说成事实，这正是要的。
+pub fn talk(cfg: &Config, a: &Ask, question: &str) -> Result<String, String> {
+    if !cfg.uses_model() {
+        return Ok(local_talk(a, question));
+    }
+    let user = format!(
+        "{}\n\n上级在电话里问你：「{}」\n用第一人称回答，两三句话。",
+        build_user(a),
+        question
+    );
+    hq_chat(cfg, TALK_SYSTEM, &user, 300)
+}
+
+/// 没有模型时的通话：用他自己的状态组织成"汇报"的口吻。
+///
+/// 注意它给的仍然是**他的处境**（补给、士气、当面之敌的估计），
+/// 不是全图真值——和接了模型时同一个立场。
+fn local_talk(a: &Ask, question: &str) -> String {
+    let q = question;
+    let enemy = a
+        .neighbors
+        .iter()
+        .find(|n| n.1 == "敌方控制")
+        .map(|n| n.0.clone());
+    let strength = format!("{:.1} 千", a.strength);
+    let supply = if a.supply < 0.3 {
+        "补给很紧，撑不了几天"
+    } else if a.supply < 0.6 {
+        "补给勉强"
+    } else {
+        "补给还行"
+    };
+    let morale = if a.morale < 0.4 {
+        "士气很低，部队打不动了"
+    } else if a.morale < 0.7 {
+        "士气一般"
+    } else {
+        "士气还在"
+    };
+    let asks_enemy = q.contains('敌') || q.contains("当面") || q.contains("情况");
+    let asks_supply = q.contains('粮') || q.contains("弹") || q.contains("补");
+    let mut s = format!("{}：职部在{}，现有兵力 {}。", a.general, a.province, strength);
+    if asks_enemy {
+        match enemy {
+            Some(e) => s.push_str(&format!(
+                "当面{}方向有敌活动，估计不少于 {} 千，具体情况还在查。",
+                e,
+                (a.neighbors
+                    .iter()
+                    .find(|n| n.1 == "敌方控制")
+                    .map(|n| n.2)
+                    .unwrap_or(0.0)
+                    .max(1.0))
+                .round()
+            )),
+            None => s.push_str("当面尚未发现敌军主力，只有零星侦察。"),
+        }
+    }
+    if asks_supply {
+        s.push_str(&format!("{}。", supply));
+    }
+    if s.len() < 30 {
+        s.push_str(&format!("{}，{}。", supply, morale));
+    }
+    s.push_str("请上峰示。");
+    s
+}
+
 fn hq_chat(cfg: &Config, system: &str, user: &str, max_tokens: u32) -> Result<String, String> {
     let body = serde_json::json!({
         "model": cfg.model,
