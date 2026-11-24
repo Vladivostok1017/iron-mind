@@ -135,7 +135,15 @@ v0.10 · **能装**：`install.ps1` 装成桌面程序（原生窗口 + 开始�
 
 ## 怎么跑
 
-### 玩（装成桌面程序）
+### 玩（不装 Rust，直接下载）
+
+去 [Releases](https://github.com/Vladivostok1017/iron-mind/releases) 下 `IronMind-<版本>-win64.zip`，
+解压双击 `IronMind.exe`。原生窗口、离线可玩（接模型才需要联网），模块已经打在 `modules\` 里。
+
+> exe 没有代码签名，SmartScreen 第一次会拦：**更多信息 → 仍要运行**。
+> 全部源码都在这，不放心可以自己 `cargo build --release`。
+
+### 玩（装成桌面程序，带开始菜单与卸载）
 
 ```powershell
 pwsh -File install.ps1 -Modules F:\dsh\nanxun-1938 -DefaultModule nanxun_1938.imod

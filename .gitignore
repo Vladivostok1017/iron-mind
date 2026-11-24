@@ -36,3 +36,7 @@ Thumbs.db
 
 # 截图验证产物（node tools/shot.js 生成，不入库）
 /tools/_shots/
+
+# Release 打包产物（tools/package.ps1 生成，上传到 GitHub Release，不入库）
+/dist/
+
