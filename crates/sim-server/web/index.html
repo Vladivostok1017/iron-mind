@@ -2018,6 +2018,8 @@ const Dlg = (() => {
     d.classList.remove("on");
     $("dlg-body").replaceChildren();
     $("dlg-foot").replaceChildren();
+    // 关窗之后补弹排队的要闻：请示批完，那一仗的战报不该就此消失。
+    try { if (typeof Briefing !== "undefined") Briefing.popup(); } catch (e) {}
   }
   function open(o) {
     $("dlg-title").textContent = o.title || "";
@@ -2422,10 +2424,14 @@ const Briefing = (() => {
     // 按天过滤就会把前一天的战斗/易手全漏掉，而且 lastSeen 已经推过去了。
     const lines = S.log.filter((e) => e.tick > lastSeen && IMPORTANT.has(e.kind));
     const day = lines.length ? lines[0].tick : maxTick;
-    lastSeen = maxTick;
-    if (!lines.length) return; // 这天没有要紧的事，不打扰
-    // 已经开着别的窗（请示/设置/引导/首次设置）就别叠上去
+    if (!lines.length) { lastSeen = maxTick; return; } // 这天没有要紧的事，不打扰
+    // 已经开着别的窗（请示/设置/引导/首次设置）就先排队。
+    //
+    // 这里**不能推进基线**：以前推进了，于是"请示弹出来的那一 tick 的要闻"
+    // 被永久吞掉——玩家批完请示，那一仗的战报就再也见不到了。
+    // 现在留着基线，等窗一关（Dlg.close / 引导结束）再补弹。
     if ($("dlg").classList.contains("on") || Setup.isOpen() || Guide.isOn()) return;
+    lastSeen = maxTick;
 
     const body = document.createElement("div");
     Dlg.h("p", "dg-note", body, "第 " + day + " 日起 · " + lines.length + " 条要闻");
@@ -2559,7 +2565,57 @@ const Home = (() => {
       Dlg.h("span", "r-act", row, x.current ? "当前" : "开始");
       row.addEventListener("click", () => startModule(x.path));
     }
-    Dlg.open({ title: "新的战役", body, actions: [{ label: "取消" }] });
+    Dlg.open({
+      title: "新的战役", body,
+      actions: [
+        // 装一个战役以前要把文件夹拷进 modules/ 再重启——那是安装文档的事，
+        // 不是游戏的事。这里选一个文件夹就导入并出现在列表里。
+        { label: "导入模块…", keep: true, onClick: () => importModule() },
+        { label: "取消" },
+      ],
+    });
+  }
+
+  // 从文件夹导入一个模块。浏览器只能"读"，所以把文件内容传给内核去写盘。
+  // 选中的目录里必须有 module.json（嵌套一层也能认）。
+  function importModule() {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.webkitdirectory = true;
+    inp.multiple = true;
+    inp.addEventListener("change", async () => {
+      const files = [...(inp.files || [])];
+      if (!files.length) return;
+      const out = [];
+      for (const f of files) {
+        const rel = (f.webkitRelativePath || f.name).split("/").slice(1).join("/") || f.name;
+        if (!/\.(json|md|txt)$/i.test(rel)) continue;
+        if (f.size > 4 * 1024 * 1024) continue;
+        out.push({ path: rel, text: await f.text() });
+      }
+      if (!out.some((f) => f.path === "module.json")) {
+        Dlg.open({
+          title: "导入失败",
+          body: "选中的文件夹里没有 module.json。请选择模块目录本身（里面应当有 module.json / map.json / oob.json / scenario.json）。",
+          actions: [{ label: "知道了" }],
+        });
+        return;
+      }
+      toast("正在导入 " + out.length + " 个文件…");
+      try {
+        const r = await fetch("/api/modules/import", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files: out }),
+        });
+        const j = await r.json();
+        if (!j.ok) { toast(j.error || "导入失败"); return; }
+        toast("已导入 " + j.name + "（" + j.files + " 个文件）");
+        Dlg.close();
+        await loadModules();
+        await Home.newCampaign();
+      } catch (e) { toast("导入失败：连不上内核"); }
+    });
+    inp.click();
   }
 
   async function startModule(path) {
@@ -2603,7 +2659,17 @@ const Home = (() => {
     row("模型调用", llm ? llm.calls + " 次" : "—");
     row("待送达判断", llm ? llm.ready + " 条" : "—");
     row("模块目录", roots.length ? roots.map(shortPath).join("，") : "引擎自带 content/scenarios");
-    row("存档目录", "saves/（与内核工作目录同层）");
+    row("存档目录", "saves/（与内核工作目录同层，每 5 日自动存档）");
+    // 版本信息：更新这么多次之后，"你跑的是哪一版"必须说得清。
+    // 引擎号 + 内核构建时间（exe 的修改时间）比版本号可靠：
+    // 同一个版本号编很多次的话，7 天前的 exe 和今天的看起来一样。
+    const v = await getJson("/api/version");
+    const cur = (await listModules()).mods.find((m) => m.current);
+    row("引擎", v ? v.engine + " · " + v.profile : "—");
+    row("内核构建", v && v.built
+      ? new Date(v.built * 1000).toLocaleString("zh-CN", { hour12: false })
+      : "—");
+    row("当前模块", cur ? cur.name + " · v" + (cur.version || "?") : "—");
     if (llm && llm.errors && llm.errors.length) {
       Dlg.h("p", "dg-note", body, "最近的模型错误：" + llm.errors.slice(-3).join("　/　"));
     }
@@ -2752,6 +2818,7 @@ const Guide = (() => {
     const g = $("guide");
     if (g) g.classList.remove("on");
     localStorage.setItem("im_onboarded", "1");
+    try { if (typeof Briefing !== "undefined") Briefing.popup(); } catch (e) {}
   }
   function next() {
     if (i >= steps.length - 1) { finish(); return; }

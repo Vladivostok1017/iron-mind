@@ -468,6 +468,109 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             )
         }
         // 切换模块：整体替换世界，清空命令流/电报/公文。
+        // 导入模块：把玩家选中的一堆文本文件写进 modules/<名字>/。
+        //
+        // 为什么要有：装一个战役以前要"把文件夹拷到 modules/ 再重启"——
+        // 对能开资源管理器的人不算事，但那是安装文档的事，不是游戏的事。
+        // 界面上「新的战役 → 导入模块」选一个文件夹就完事。
+        //
+        // 收的是 JSON 而不是 multipart：模块文件全是 UTF-8 文本
+        // （module.json / map.json / oob.json / scenario.json / provinces_geo.json），
+        // 手写 HTTP 服务器解析 multipart 不值得。
+        ("POST", "/api/modules/import") => {
+            use serde_json::json;
+            let v: serde_json::Value = match serde_json::from_str(&body_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = json!({ "ok": false, "error": format!("请求不是 JSON：{e}") });
+                    return respond(&mut stream, 400, "application/json", &msg.to_string());
+                }
+            };
+            let Some(files) = v.get("files").and_then(|f| f.as_array()) else {
+                let msg = json!({ "ok": false, "error": "没有收到文件" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            };
+            // 目录名：优先用 module.json 里的 id 尾段，否则用请求里的 name
+            let mut dir_name: Option<String> = None;
+            let mut module_json: Option<serde_json::Value> = None;
+            for f in files {
+                let path = f.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                if path == "module.json" || path.ends_with("/module.json") {
+                    if let Some(text) = f.get("text").and_then(|t| t.as_str()) {
+                        module_json = serde_json::from_str::<serde_json::Value>(text).ok();
+                    }
+                }
+            }
+            match &module_json {
+                None => {
+                    let msg = json!({ "ok": false, "error": "这不是一个模块：顶层缺少可读的 module.json" });
+                    return respond(&mut stream, 400, "application/json", &msg.to_string());
+                }
+                Some(m) => {
+                    let id = m.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                    let name = m.get("name").and_then(|x| x.as_str()).unwrap_or("imported");
+                    let raw = if id.contains('.') {
+                        id.rsplit('.').next().unwrap_or(id)
+                    } else if id.is_empty() {
+                        name
+                    } else {
+                        id
+                    };
+                    dir_name = Some(sanitize_slot(raw));
+                }
+            }
+            let Some(dir) = dir_name.filter(|d| !d.is_empty()) else {
+                let msg = json!({ "ok": false, "error": "module.json 里的 id/name 不可用作目录名" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            };
+            // 落到哪个根：第一个"可写且不是引擎自带"的模块根
+            let root = import_root();
+            let target = root.join(format!("{dir}.imod"));
+            if target.exists() {
+                let msg = json!({ "ok": false, "error": format!("已经有一个同名模块：{}", dir) });
+                return respond(&mut stream, 409, "application/json", &msg.to_string());
+            }
+            if let Err(e) = std::fs::create_dir_all(&target) {
+                let msg = json!({ "ok": false, "error": format!("建目录失败：{e}") });
+                return respond(&mut stream, 500, "application/json", &msg.to_string());
+            }
+            let mut written = 0usize;
+            for f in files {
+                let Some(path) = f.get("path").and_then(|p| p.as_str()) else { continue };
+                // 只要文件名安全的：不许绝对路径、不许 ..、只收文本类
+                let rel = path.trim_start_matches('/');
+                if rel.contains("..") || rel.contains(':') || rel.contains('\\') {
+                    continue;
+                }
+                let ext = rel.rsplit('.').next().unwrap_or("").to_lowercase();
+                if !matches!(ext.as_str(), "json" | "md" | "txt") {
+                    continue;
+                }
+                let Some(text) = f.get("text").and_then(|t| t.as_str()) else { continue };
+                let dest = target.join(rel);
+                if let Some(parent) = dest.parent() {
+                    if std::fs::create_dir_all(parent).is_err() {
+                        continue;
+                    }
+                }
+                if std::fs::write(&dest, text).is_ok() {
+                    written += 1;
+                }
+            }
+            trace(format!("   导入模块 → {}（{written} 个文件）", target.display()));
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({
+                    "ok": true,
+                    "name": dir,
+                    "path": target.to_string_lossy().replace('\\', "/"),
+                    "files": written,
+                })
+                .to_string(),
+            )
+        }
         ("POST", "/api/module") => {
             use serde_json::json;
             let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
@@ -514,9 +617,19 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
         // 首页要显示"引擎是什么版本"。玩家的 bug 报告里有没有这一行，差别很大。
         ("GET", "/api/version") => {
             use serde_json::json;
+            // `built` = 内核 exe 的修改时间（秒）。这才是"你到底在跑哪一版"：
+            // 同一版本号编译很多次之后，7 天前的 exe 和今天的看起来一模一样。
+            let built = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.metadata().ok())
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             let body = json!({
                 "engine": env!("CARGO_PKG_VERSION"),
                 "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+                "built": built,
             })
             .to_string();
             respond(&mut stream, 200, "application/json", &body)
@@ -2487,6 +2600,34 @@ fn module_roots() -> Vec<std::path::PathBuf> {
         roots.push(builtin);
     }
     roots
+}
+
+/// 导入的模块往哪写：第一个"可写、且不是引擎自带"的模块根。
+///
+/// 装好的布局是 exe 旁边的 `modules/`；开发时是 IRONMIND_MODULES 指的那个仓库。
+/// 两个都没有就现造一个 `modules/`——总比报错说"请先配置环境变量"强。
+fn import_root() -> std::path::PathBuf {
+    for r in module_roots() {
+        if r.ends_with("content/scenarios") || r.ends_with("content\\scenarios") {
+            continue;
+        }
+        if r.is_dir() {
+            return r;
+        }
+    }
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        let m = dir.join("modules");
+        let _ = std::fs::create_dir_all(&m);
+        if m.is_dir() {
+            return m;
+        }
+    }
+    let m = std::path::PathBuf::from("modules");
+    let _ = std::fs::create_dir_all(&m);
+    m
 }
 
 /// 扫出所有模块目录（`*.imod`），按根目录顺序、路径排序，保证确定性。
