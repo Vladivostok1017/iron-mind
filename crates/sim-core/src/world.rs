@@ -828,6 +828,11 @@ pub enum Order {
     Fortify,
     /// 整补：留在原地恢复补给与士气。
     Rest,
+    /// 炸铁路（预览版 `Features::rail_damage`）。只有空军执行：
+    /// 飞到目标省上空把这条线炸断一级。
+    BombRail(u32),
+    /// 抢修铁路（预览版）。工兵/就地部队在**当前省**修复一级。
+    RepairRail(u32),
 }
 
 impl Order {
@@ -840,20 +845,43 @@ impl Order {
             Order::Shift(n) => (4, *n as u32),
             Order::Fortify => (5, 0),
             Order::Rest => (6, 0),
+            // 新命令一律**追加**在末尾：code 是哈希与回放协议的一部分，
+            // 在中间插一个会让所有旧回放的命令流对不上。
+            Order::BombRail(p) => (7, *p),
+            Order::RepairRail(p) => (8, *p),
         }
     }
 
-    /// 意图指向的目标省（若有）。
+    /// 意图指向的**移动**目标省（若有）。
+    ///
+    /// 炸路/抢修不算移动：它们也带一个省号，但不该让部队走过去
+    /// （否则空军会"行军"到目标省，抢修的部队会离开自己的省）。
     pub fn target(&self) -> Option<u32> {
         match self {
             Order::Hold | Order::Shift(_) | Order::Fortify | Order::Rest => None,
             Order::Attack(p) | Order::Move(p) | Order::Retreat(p) => Some(*p),
+            Order::BombRail(_) | Order::RepairRail(_) => None,
+        }
+    }
+
+    /// 这条命令指向的省（含炸路/抢修）。界面显示"打哪/炸哪"用这个。
+    pub fn place(&self) -> Option<u32> {
+        match self {
+            Order::Attack(p)
+            | Order::Move(p)
+            | Order::Retreat(p)
+            | Order::BombRail(p)
+            | Order::RepairRail(p) => Some(*p),
+            Order::Hold | Order::Shift(_) | Order::Fortify | Order::Rest => None,
         }
     }
 
     /// 这条命令要不要动身子。筑工事、整补、省内调兵都不动（调兵另算）。
     pub fn is_stationary(&self) -> bool {
-        matches!(self, Order::Hold | Order::Fortify | Order::Rest)
+        matches!(
+            self,
+            Order::Hold | Order::Fortify | Order::Rest | Order::RepairRail(_)
+        )
     }
 
     pub fn label(&self) -> &'static str {
@@ -865,6 +893,8 @@ impl Order {
             Order::Shift(_) => "调兵",
             Order::Fortify => "筑工事",
             Order::Rest => "整补",
+            Order::BombRail(_) => "炸路",
+            Order::RepairRail(_) => "抢修",
         }
     }
 }
@@ -1146,6 +1176,20 @@ impl World {
     pub fn with_features(mut self, fx: Features) -> Self {
         self.fx = fx;
         self
+    }
+
+    /// 预览版弹药对火力的调制系数。
+    ///
+    /// 关着（`Features::ammo_fuel = false`）恒为 1——所以定稿战役一个字都不受影响，
+    /// 连哈希都不变（这个函数不写状态）。
+    ///
+    /// 打光弹药不是"没有火力"：还有机枪残余弹药、刺刀、缴获。
+    /// 所以地板是 35%：一个打光弹药的师仍然能守一阵，但反击几乎无效。
+    pub fn ammo_factor(&self, u: &Unit) -> Fixed {
+        if !self.fx.ammo_fuel {
+            return Fixed::ONE;
+        }
+        Fixed::ratio(35, 100) + Fixed::ratio(65, 100) * u.ammo.clamp(Fixed::ZERO, Fixed::ONE)
     }
 
     /// 某方"在路上"的报告队列。

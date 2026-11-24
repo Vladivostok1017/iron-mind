@@ -24,6 +24,7 @@ pub mod fixed;
 pub mod hash;
 pub mod intel;
 pub mod politics;
+pub mod rail;
 pub mod rng;
 pub mod rules;
 pub mod scenario;

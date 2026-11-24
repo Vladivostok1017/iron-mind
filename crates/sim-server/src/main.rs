@@ -1130,6 +1130,42 @@ fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) 
         ("fortify", _) => ("fortify", None),
         ("rest", _) => ("rest", None),
         ("shift", Some(n)) => ("shift", Some(n)),
+        // 预览版：炸路 / 抢修。没开这个开关的战役里，这两条命令必须**明确拒绝**，
+        // 而不是静默变成"固守"——否则玩家会以为飞机出去了，其实什么都没发生。
+        ("bomb_rail" | "repair_rail", Some(t)) => {
+            if !w.fx.rail_damage {
+                return Some(
+                    "这个战役没有开「铁路被炸」（scenario.json 的 preview.rail_damage），\
+                     炸路与抢修都无效"
+                        .into(),
+                );
+            }
+            if t as usize >= w.provinces.len() {
+                return Some("目标省份不存在".into());
+            }
+            if !w.provinces[t as usize].rail {
+                return Some(format!("{}没有铁路线", w.provinces[t as usize].name));
+            }
+            if kind == "bomb_rail" {
+                if u.kind != sim_core::UnitKind::Air {
+                    return Some(format!("只有空军能炸铁路，{}是{}", u.name, u.kind.label()));
+                }
+                if t == from {
+                    return Some("不能炸自己脚下的铁路".into());
+                }
+            } else {
+                if !u.kind.is_ground() {
+                    return Some("抢修要地面部队就近动手".into());
+                }
+                if t != from {
+                    return Some(format!(
+                        "抢修只能修脚下这一段：{}不在这里",
+                        w.provinces[t as usize].name
+                    ));
+                }
+            }
+            (kind, Some(t))
+        }
         ("attack" | "move" | "retreat", Some(t)) => {
             if t as usize >= w.provinces.len() {
                 return Some("目标省份不存在".into());
@@ -1188,6 +1224,8 @@ fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) 
         ("shift", Some(n)) => Order::Shift(n as u8),
         ("fortify", _) => Order::Fortify,
         ("rest", _) => Order::Rest,
+        ("bomb_rail", Some(t)) => Order::BombRail(t),
+        ("repair_rail", Some(t)) => Order::RepairRail(t),
         _ => Order::Hold,
     };
     None
@@ -1768,6 +1806,7 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
         title: u.commander.title.clone(),
         memory: memory_for(state, w, idx),
         incoming: incoming.to_string(),
+        rail_damage: w.fx.rail_damage,
         hq_plan: sim_core::ai::theater_plan(w, u.side).summary,
     })
 }

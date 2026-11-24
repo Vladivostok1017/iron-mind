@@ -239,6 +239,9 @@
   .rail { pointer-events: none; }
   .rail .railbed { stroke: #151c24; stroke-width: 3.4; stroke-linecap: round; opacity: .85; }
   .rail .rails { stroke: #8a7448; stroke-width: 1.4; stroke-dasharray: 5 4; stroke-linecap: round; }
+  /* 预览版铁路被炸：坏一段变橙、断了变红并拉开间隔 */
+  .rail .rails.hurt { stroke: #d08a2a; stroke-width: 1.6; stroke-dasharray: 3 6; }
+  .rail .rails.cut { stroke: #c0392b; stroke-width: 1.8; stroke-dasharray: 1 9; }
   .marchline text { fill: #c9a227; font-size: 9px; font-weight: 600;
     text-anchor: middle; paint-order: stroke; stroke: #0b1016; stroke-width: 2.4px; }
   /* 地形视图的高程色标 */
@@ -758,6 +761,10 @@ let BASEMAP = null;
 // 世界代号：模块被替换（切模块/重载）一次就 +1。页面靠它知道"地图换了"
 let DEV_GEN = null;
 
+// 预览版功能是否开着。模块在 scenario.json 的 preview 里声明，引擎据此开关系统。
+// 界面里所有预览版面板/角标都以它为准——关着的时候界面与定稿版本一模一样。
+const fxOn = (name) => !!(S && Array.isArray(S.features) && S.features.indexOf(name) >= 0);
+
 async function loadBasemap() {
   try {
     const j = await (await fetch("/basemap.json")).json();
@@ -1248,8 +1255,17 @@ function renderMap() {
         const b = geom.centroids[nb];
         if (!b) continue;
         const seg = { x1: a[0], y1: a[1], x2: b[0], y2: b[1] };
-        el("line", Object.assign({ class: "railbed" }, seg), railG);
-        el("line", Object.assign({ class: "rails" }, seg), railG);
+        // 预览版铁路被炸：坏的段落换颜色、断了画成红色虚点。
+        // 这一层不加文字标注（图上已经够挤），点省份看详情里有具体等级。
+        const dmg = fxOn("rail_damage") ? Math.max(p.rail_damage || 0, q.rail_damage || 0) : 0;
+        if (dmg > 0) {
+          const cls = dmg >= 3 ? "rails cut" : "rails hurt";
+          el("line", Object.assign({ class: "railbed" }, seg), railG);
+          el("line", Object.assign({ class: cls }, seg), railG);
+        } else {
+          el("line", Object.assign({ class: "railbed" }, seg), railG);
+          el("line", Object.assign({ class: "rails" }, seg), railG);
+        }
       }
     }
   }
@@ -1805,7 +1821,16 @@ function renderOutliner() {
     // `supply < 0.3` 只是缺粮：战力打折，但不减员——这两件事必须分开说，
     // 否则玩家会以为"所有部队都在饿死"而没法判断该救哪一支。
     const hungry = u.encircled ? "断粮·" : (u.supply < 0.3 ? "缺粮·" : "");
-    right.textContent = hungry + u.strength.toFixed(1) + " 千 " +
+    // 预览版：弹药/油料。只在开关打开时显示——否则定稿战役的列表一行都不会变。
+    // 0.15 以下标红：那时候基本"打不动/走不动"了，玩家得知道为什么。
+    let fuelAmmo = "";
+    if (fxOn("ammo_fuel")) {
+      const low = (v) => (v < 0.15 ? "#d9534f" : v < 0.4 ? "#d0a020" : "#7f8a96");
+      const a = Math.round(u.ammo * 100), f = Math.round(u.fuel * 100);
+      fuelAmmo = `<span style="color:${low(a)}">弹${a}</span> ` +
+        (u.fuel < 0.999 || u.kind_code === 1 ? `<span style="color:${low(f)}">油${f}</span> ` : "");
+    }
+    right.innerHTML = fuelAmmo + hungry + u.strength.toFixed(1) + " 千 " +
       (marching ? "→" + u.march_to + " " + u.march_hops + "日" : u.order);
     if (hungry) right.style.color = "#d9534f";
     else if (marching) right.style.color = "#c9a227";
@@ -1897,6 +1922,13 @@ function showTip(ev, p) {
   }
   rows.push("<div class='t-row'>归属：<b>" + (p.mine ? "我方" : (p.owner_known ? "敌方" : "未知")) + "</b></div>");
   if (p.supply_source) rows.push("<div class='t-row'>补给源</div>");
+  // 预览版铁路状态：炸了几级、还能不能通车。图上只有颜色深浅，这里给数字。
+  if (fxOn("rail_damage") && p.rail) {
+    const d = p.rail_damage || 0;
+    const txt = d === 0 ? "通车" : d >= 3 ? "已炸断（补给退回陆路）" : "坏 " + d + " 级";
+    const col = d === 0 ? "#7f8a96" : d >= 3 ? "#c0392b" : "#d08a2a";
+    rows.push("<div class='t-row' style='color:" + col + "'>铁路：" + txt + "</div>");
+  }
   // 阵地：多阵地省把每个阵地的宽度与工事列出来，
   // 玩家才能判断"这个山头放不放得下我一个军"。
   if (p.positions && p.positions.length > 1) {

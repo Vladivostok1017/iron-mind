@@ -209,6 +209,8 @@ pub struct Ask {
     pub memory: Vec<String>,
     /// 上级刚刚发来的电报原文。空 = 例行判断，不是接到命令。
     pub incoming: String,
+    /// 这个战役有没有开"铁路被炸"（预览版）。没开就别在提示词里给它派活。
+    pub rail_damage: bool,
     /// 司令部（统帅部）的作战方针。这是**方向**，不是命令。
     pub hq_plan: String,
 }
@@ -292,6 +294,13 @@ fn build_user(a: &Ask) -> String {
     ));
     s.push_str("\n可选行动：attack（打目标省）/move（开赴目标省）/retreat（撤向己方）/hold/fortify/rest/shift（省内换阵地）\n");
     s.push_str("target 可以写邻接省，也可以写上面的远处省份——远距离调动一天走约一个省，走到之前不算到位。\n");
+    // 预览版才有这两条：模块没开 rail_damage 时，给模型多两个用不上的词
+    // 只会让它在答复里瞎承诺（"已派飞机炸桥"——其实没有这个机制）。
+    if a.rail_damage {
+        s.push_str(
+            "bomb_rail（空军炸目标省的铁路，一次炸坏一级，三次炸断）/repair_rail（就地抢修本省铁路）\n",
+        );
+    }
     s.push_str("输出 JSON：{\"order\":\"...\",\"target\":\"省名或阵地名\",\"dissent\":true,\"confidence\":0.6,\"reason\":\"不超过80字，你自己的判断\",\"cost\":\"照办时你接受的代价，不超过40字\",\"reply\":\"回给上级的一句话电报，60字内，第一人称\"}\n");
     s
 }

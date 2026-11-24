@@ -279,12 +279,18 @@ pub fn tick(world: &mut World) {
     crate::ai::run_ai(world);
     crate::intel::run_intel(world);
     run_supply(world);
+    // 预览版：弹药/油料补充。放在补给之后、作战之前——
+    // "这个 tick 拿到多少补给"必须先算出来，才有"补了多少弹"。
+    run_logistics(world);
     // 整编在补给之后：它要知道本方到底还控制着哪些补给源
     run_reform(world);
     rules.run(world, Phase::PostSupply);
     run_movement(world);
     rules.run(world, Phase::PostMovement);
     run_air(world, now);
+    // 预览版：炸路与抢修。放在空袭之后、地面战斗之前——
+    // 这一天的空袭要先落到铁路线上，然后才轮到地面部队消耗补给。
+    crate::rail::run_rail(world);
     rules.run(world, Phase::PreCombat);
     run_combat(world, seed, now);
     // 江面上的炮战：舰队之间终于会互相开火了
@@ -363,8 +369,12 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             };
             // 三种通路三种损耗：铁路 0.95、水道 0.85、普通陆路 0.75。
             // 有干线的省几乎不掉，这就是"守住铁路"的意义。
-            let base = if np.rail {
-                Fixed::ratio(95, 100)
+            //
+            // 预览版铁路被炸：炸到 3 级等于这条线断了——它退回普通陆路，
+            // 于是"炸桥"这件事终于有后果：前线部队的补给立刻塌下来。
+            let dmg = np.rail_damage; // 关着 rail_damage 时恒为 0
+            let base = if np.rail && dmg < 3 {
+                Fixed::ratio(95, 100) - Fixed::ratio(18, 100) * Fixed::from_int(dmg as i32)
             } else if np.terrain == Terrain::Water {
                 Fixed::ratio(85, 100)
             } else {
@@ -489,6 +499,38 @@ fn run_supply(world: &mut World) {
     }
 }
 
+/// 预览版：弹药与油料的补充（`Features::ammo_fuel`）。
+///
+/// 补**不是**每天补满，而是按补给水平补：补给 1.0 时弹药约 3 天一个基数、
+/// 油料约 4 天。补给被切断的时候两者都不补，于是"断补给"从"减战斗力"
+/// 变成"再打几天就打不动了"——这是这一版想加的那层压力。
+///
+/// 为什么不做成"打光就消失"：部队打光弹药应该是**打不动**，不是蒸发。
+/// 归零时它能守、能挨打，但反击几乎无效（伤害系数见 `run_combat`）。
+fn run_logistics(world: &mut World) {
+    if !world.fx.ammo_fuel {
+        return;
+    }
+    // 弹药补得快、油料补得慢：油料要靠汽车与铁路运，弹药能就地开箱。
+    const AMMO_PER_DAY: i32 = 34; // 百分比
+    const FUEL_PER_DAY: i32 = 25;
+    for i in 0..world.units.len() {
+        let u = &world.units[i];
+        if !u.is_alive() {
+            continue;
+        }
+        let supply = u.supply.clamp(Fixed::ZERO, Fixed::ONE);
+        if supply <= Fixed::ZERO {
+            continue; // 断了补给：一点都不补，存的打完就打完了
+        }
+        let ammo_rate = Fixed::ratio(AMMO_PER_DAY, 100) * supply;
+        let fuel_rate = Fixed::ratio(FUEL_PER_DAY, 100) * supply;
+        let u = &mut world.units[i];
+        u.ammo = (u.ammo + ammo_rate).clamp(Fixed::ZERO, Fixed::ONE);
+        u.fuel = (u.fuel + fuel_rate).clamp(Fixed::ZERO, Fixed::ONE);
+    }
+}
+
 /// 这个省的所有邻省都不在本方手里 → 被围。
 ///
 /// 只看**省归属**，不看敌军动向：围歼的判定要稳定、可预期，
@@ -539,6 +581,11 @@ fn run_movement(world: &mut World) {
             Some(t) => t,
             None => continue, // 固守/筑工事/整补/调兵
         };
+        // 预览版油料：吃油的部队没油就走不动。
+        // 步兵 `fuel_burn = 0` 永远不受影响——这是"骡马化"和"摩托化"的分界。
+        if world.fx.ammo_fuel && u.fuel_burn > Fixed::ZERO && u.fuel <= Fixed::ZERO {
+            continue;
+        }
         // 目标可以不相邻：远距离调动沿最省力的路一天走一省（见 `walk`）。
         // AI 给出非法目标时静默忽略，而不是 panic——内容层永远可能出错。
         let prov = &world.provinces[u.position as usize];
@@ -607,6 +654,15 @@ fn run_movement(world: &mut World) {
     for &(i, dest, node) in &moves {
         world.units[i].position = dest;
         world.units[i].node = node;
+        // 预览版油料：动一步就烧一点。这不是"每天耗油"，是"每走一省耗油"——
+        // 停在原地的不耗，所以"守摊子"永远不缺油，只有长途机动才会烧空。
+        if world.fx.ammo_fuel {
+            let burn = world.units[i].fuel_burn;
+            if burn > Fixed::ZERO {
+                world.units[i].fuel =
+                    (world.units[i].fuel - burn).clamp(Fixed::ZERO, Fixed::ONE);
+            }
+        }
     }
 
     // ---- 遭遇战：处理对向穿插 ----
@@ -890,11 +946,13 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
 
         let mut cn_power = Fixed::ZERO;
         for &i in &cn {
-            cn_power += world.units[i as usize].combat_power();
+            let u = &world.units[i as usize];
+            cn_power += u.combat_power() * world.ammo_factor(u);
         }
         let mut jp_power = Fixed::ZERO;
         for &i in &jp {
-            jp_power += world.units[i as usize].combat_power();
+            let u = &world.units[i as usize];
+            jp_power += u.combat_power() * world.ammo_factor(u);
         }
 
         let def_mult = world.provinces[p].node_defense(node);
@@ -936,6 +994,17 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
         jp_loss = (jp_loss * jp_jitter).clamp(Fixed::ZERO, Fixed::ratio(60, 100));
 
         // 应用损耗
+        //
+        // 预览版弹药：打了一天就烧一天弹药。这个数字是"一天激烈交火消耗
+        // 约 8% 基数"——按每天能补 34% 算，持续作战会稳定在七成上下，
+        // 而补给一断，三四天就滑到打不动。这就是要的节奏。
+        if world.fx.ammo_fuel {
+            const BURN: Fixed = Fixed::ratio_const(8, 100);
+            for &i in cn.iter().chain(jp.iter()) {
+                let u = &mut world.units[i as usize];
+                u.ammo = (u.ammo - BURN).clamp(Fixed::ZERO, Fixed::ONE);
+            }
+        }
         //
         // 士气打击分两块：
         // 1. 伤亡本身带来的动摇（按自己的损失率）；
@@ -1424,11 +1493,13 @@ fn run_naval(world: &mut World, seed: u64, now: u32) {
     for (p, cn, jp) in fights {
         let mut cn_power = Fixed::ZERO;
         for &i in &cn {
-            cn_power += world.units[i].combat_power();
+            let u = &world.units[i];
+            cn_power += u.combat_power() * world.ammo_factor(u);
         }
         let mut jp_power = Fixed::ZERO;
         for &i in &jp {
-            jp_power += world.units[i].combat_power();
+            let u = &world.units[i];
+            jp_power += u.combat_power() * world.ammo_factor(u);
         }
         let total = cn_power + jp_power;
         if total.is_zero() {
