@@ -21,6 +21,8 @@ use sim_core::world::{Order, Side, Terrain, World};
 use sim_core::Accuracy;
 use sim_content::{build_world, load_module, LoadedModule};
 
+mod llm;
+
 const DEFAULT_PORT: u16 = 8899;
 
 fn main() {
@@ -53,10 +55,15 @@ fn main() {
         println!("  [警告] {}: {}", w.code, w.message);
     }
 
+    let llm_cfg = llm::Config::from_env();
+    println!("  将领大脑：{}", llm_cfg.describe());
+
     let state = Arc::new(ServerState {
         module,
         world: std::sync::Mutex::new(None),
         commands: std::sync::Mutex::new(Vec::new()),
+        llm: llm_cfg.clone(),
+        brain: llm::Broker::new(llm_cfg),
     });
     {
         let mut w = state.world.lock().unwrap();
@@ -110,6 +117,9 @@ struct ServerState {
     world: std::sync::Mutex<Option<World>>,
     /// 玩家命令流。`(模块, 种子, 命令流)` 就是一份完整存档。
     commands: std::sync::Mutex<Vec<CmdRecord>>,
+    /// 将领的 LLM 配置与后台问询。
+    llm: llm::Config,
+    brain: llm::Broker,
 }
 
 fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()> {
@@ -193,7 +203,19 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 let mut guard = state.world.lock().unwrap();
                 let w = guard.as_mut().unwrap();
                 for _ in 0..days.min(30) {
+                    let day = w.tick;
+                    // 将领的判断在 tick 边界生效：先落命令，再推演这一天。
+                    let notes = drain_ready(&state, w, day);
+                    request_due(&state, w);
                     sim_core::systems::tick(w);
+                    for (dissent, text) in notes {
+                        let kind = if dissent {
+                            sim_core::world::EventKind::Dissent
+                        } else {
+                            sim_core::world::EventKind::Command
+                        };
+                        w.report(kind, text);
+                    }
                 }
                 trace(format!("   tick → {} (第 {} 日)", w.tick, w.tick));
                 snapshot(w)
@@ -228,6 +250,8 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     kind,
                     target,
                     reject: result.clone(),
+                    source: "player".into(),
+                    reason: String::new(),
                 });
                 match &result {
                     Some(err) => trace(format!("   指令被拒：{err}")),
@@ -250,6 +274,20 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let cmds = state.commands.lock().unwrap().clone();
             let json = replay_check(&state.module, live_hash, live_tick, &cmds);
             respond(&mut stream, 200, "application/json", &json)
+        }
+        ("GET", "/api/llm") => {
+            use serde_json::json;
+            let body = json!({
+                "enabled": state.llm.enabled,
+                "mode": state.llm.describe(),
+                "model": state.llm.model,
+                "interval_days": state.llm.interval_days,
+                "calls": *state.brain.calls.lock().unwrap(),
+                "ready": state.brain.ready.lock().unwrap().len(),
+                "errors": state.brain.errors.lock().unwrap().clone(),
+            })
+            .to_string();
+            respond(&mut stream, 200, "application/json", &body)
         }
         ("POST", "/api/save") => {
             use serde_json::json;
@@ -472,6 +510,33 @@ struct CmdRecord {
     target: Option<u32>,
     #[serde(default)]
     reject: Option<String>,
+    /// 谁下的：player / llm / auto
+    #[serde(default)]
+    source: String,
+    /// 将领的解释（llm 命令才有）
+    #[serde(default)]
+    reason: String,
+}
+
+/// 按"命令记录"重放一条命令。**实时与回放共用这一段**。
+///
+/// 为什么不能只调 `apply_typed`：LLM 命令除了写 order，还会改动
+/// `manual / disobeyed / dissent_count`，而这些都进状态哈希。
+/// 两条路径只要有一处不一致，回放校验就会挂——这正是在替我抓这类不一致。
+fn apply_record(w: &mut World, c: &CmdRecord) {
+    if apply_typed(w, c.unit, &c.kind, c.target).is_some() {
+        return; // 被拒的命令不产生状态变化
+    }
+    if c.source == "llm" {
+        if let Some(u) = w.units.get_mut(c.unit) {
+            u.manual = true; // 将领自己拿的主意，本 tick 规则 AI 不许覆盖
+            if !c.reason.is_empty() {
+                u.disobeyed = true;
+                u.dissent_reason = Some(c.reason.clone());
+                u.dissent_count += 1;
+            }
+        }
+    }
 }
 
 /// 用命令流重建世界（回放、读档共用同一段代码）。
@@ -483,7 +548,7 @@ fn rebuild(module: &sim_content::LoadedModule, cmds: &[CmdRecord], until_day: u3
     sim_core::intel::run_intel(&mut w);
     for day in 0..=until_day {
         for c in cmds.iter().filter(|c| c.day == day && c.reject.is_none()) {
-            let _ = apply_typed(&mut w, c.unit, &c.kind, c.target);
+            apply_record(&mut w, c);
         }
         if day == until_day {
             break;
@@ -549,6 +614,222 @@ fn latest_save() -> Option<String> {
         }
     }
     best.map(|(_, p)| p)
+}
+
+fn terrain_cn(t: Terrain) -> &'static str {
+    match t {
+        Terrain::Plain => "平原",
+        Terrain::Hill => "丘陵",
+        Terrain::Mountain => "山地",
+        Terrain::Marsh => "沼泽",
+        Terrain::Water => "水域",
+        Terrain::Urban => "城镇",
+    }
+}
+
+fn side_cn(s: Side) -> &'static str {
+    match s {
+        Side::Cn => "国军",
+        Side::Jp => "日军",
+    }
+}
+
+/// 给一个单位准备"问将领"的材料。**只放他自己知道的东西**：
+/// 邻接敌情用的是本方情报估计，不是真值。
+fn build_ask(w: &World, idx: usize) -> Option<llm::Ask> {
+    let u = w.units.get(idx)?;
+    if !u.is_alive() || !u.kind.is_ground() {
+        return None;
+    }
+    let p = w.provinces.get(u.position as usize)?;
+    let node = p.position_at(u.node);
+    let mut neighbors = Vec::new();
+    for &nb in &p.neighbors {
+        let q = &w.provinces[nb as usize];
+        neighbors.push((
+            q.name.clone(),
+            if q.owner == u.side { "我方控制" } else { "敌方控制" }.to_string(),
+            w.enemy_estimate(u.side, nb).to_display_f64(),
+            terrain_cn(q.terrain).to_string(),
+        ));
+    }
+    Some(llm::Ask {
+        day: w.tick,
+        general: u.commander.name.clone(),
+        unit: u.name.clone(),
+        side: side_cn(u.side).to_string(),
+        obedience: u.commander.obedience.to_display_f64(),
+        initiative: u.commander.initiative.to_display_f64(),
+        aggression: u.commander.aggression.to_display_f64(),
+        caution: u.commander.caution.to_display_f64(),
+        strength: u.strength.to_display_f64(),
+        max_strength: u.max_strength.to_display_f64(),
+        morale: u.morale.to_display_f64(),
+        supply: u.supply.to_display_f64(),
+        province: p.name.clone(),
+        node: node.map(|n| n.name.clone()).unwrap_or_else(|| "主阵地".into()),
+        terrain: terrain_cn(p.terrain).to_string(),
+        owner: side_cn(p.owner).to_string(),
+        node_fort: node.map(|n| n.fort).unwrap_or(0),
+        width: p.node_width(u.node).to_display_f64(),
+        neighbors,
+        order_label: u.order.label().to_string(),
+        order_from: if u.manual { "玩家亲自" } else { "统帅部" }.to_string(),
+        nodes: p.positions.iter().map(|n| n.name.clone()).collect(),
+    })
+}
+
+/// 按名字找省（模型只看得到名字，看不到 id）。
+fn province_by_name(w: &World, name: &str) -> Option<u32> {
+    let name = name.trim();
+    w.provinces
+        .iter()
+        .position(|p| p.name == name)
+        .map(|i| i as u32)
+        .or_else(|| {
+            // 容忍"德安省""德安（城垣）"这类写法
+            w.provinces
+                .iter()
+                .position(|p| p.name.contains(name) || name.contains(&p.name))
+                .map(|i| i as u32)
+        })
+}
+
+fn node_by_name(w: &World, prov: u32, name: &str) -> Option<u8> {
+    w.provinces[prov as usize]
+        .positions
+        .iter()
+        .position(|n| n.name == name.trim())
+        .map(|i| i as u8)
+}
+
+/// 取走本日已就绪的判断，转成命令写进世界与命令流。
+///
+/// 规则：
+/// - 判断与现有命令**一致**（`dissent=false`）→ 不改命令，只记一条战报（他表了态）。
+/// - 判断不同 → 覆盖命令，记一条抗命战报。**这就是"将领向你上报"的落点。**
+fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, String)> {
+    let taken: Vec<(usize, llm::Ready)> = {
+        let mut ready = state.brain.ready.lock().unwrap();
+        // 允许"迟到"：模型要几秒，判断几乎总在当日 tick 之后才回来。
+        // 所以取 `day <= 现在` 的，太旧的（超过 3 天）就丢掉，别用过时的判断。
+        let ids: Vec<usize> = ready
+            .iter()
+            .filter(|(_, r)| r.day <= day && day.saturating_sub(r.day) <= 3)
+            .map(|(k, _)| *k)
+            .collect();
+        ids.into_iter()
+            .filter_map(|k| ready.remove(&k).map(|r| (k, r)))
+            .collect()
+    };
+
+    let mut notes = Vec::new();
+    for (idx, ready) in taken {
+        if idx >= w.units.len() || !w.units[idx].is_alive() {
+            continue;
+        }
+        let j = ready.judgement;
+        let general = w.units[idx].commander.name.clone();
+        let unit_name = w.units[idx].name.clone();
+        let cur = w.units[idx].order;
+
+        // 把模型的输出翻译成引擎命令
+        let kind = j.order.as_str();
+        let target: Option<u32> = match kind {
+            "attack" | "move" | "retreat" => j
+                .target
+                .as_deref()
+                .and_then(|n| province_by_name(w, n)),
+            "shift" => j
+                .target
+                .as_deref()
+                .and_then(|n| node_by_name(w, w.units[idx].position, n))
+                .map(|n| n as u32),
+            _ => None,
+        };
+        // 目标解析不出来就当成"按兵不动"，不要瞎打
+        let kind = if matches!(kind, "attack" | "move" | "retreat") && target.is_none() {
+            "hold"
+        } else {
+            kind
+        };
+        let same = cur.label() == match kind {
+            "attack" => "进攻",
+            "move" => "推进",
+            "retreat" => "撤退",
+            "fortify" => "筑工事",
+            "rest" => "整补",
+            "shift" => "调兵",
+            _ => "固守",
+        };
+
+        let text = if j.reason.is_empty() {
+            format!("{unit_name}（{general}）{kind}")
+        } else if j.cost.is_empty() {
+            format!("{unit_name}（{general}）：{}", j.reason)
+        } else {
+            format!("{unit_name}（{general}）：{}（代价：{}）", j.reason, j.cost)
+        };
+
+        if same {
+            // 同意上级：不改命令，只表态
+            notes.push((false, text));
+            continue;
+        }
+
+        // 先写记录，再**用记录本身**应用命令：实时与回放走同一段代码。
+        let rec = CmdRecord {
+            day,
+            unit: idx,
+            kind: kind.to_string(),
+            target,
+            reject: None,
+            source: "llm".into(),
+            reason: j.reason.clone(),
+        };
+        let mut trial = w.clone();
+        if apply_typed(&mut trial, idx, kind, target).is_some() {
+            let e = "将领给出的命令不合法（已在预演中被拒）";
+            notes.push((false, format!("{unit_name}（{general}）{e}")));
+            continue;
+        }
+        state.commands.lock().unwrap().push(rec.clone());
+        apply_record(w, &rec);
+        notes.push((true, format!("{text}（擅自改为 {kind}）")));
+    }
+    notes
+}
+
+/// 提交到期的问询。同一个单位 `interval_days` 内只问一次，每 tick 最多几单。
+fn request_due(state: &Arc<ServerState>, w: &World) {
+    if !state.llm.enabled {
+        return;
+    }
+    let day = w.tick;
+    let interval = state.llm.interval_days.max(1);
+    let mut budget = 3usize;
+    for idx in 0..w.units.len() {
+        if budget == 0 {
+            break;
+        }
+        let u = &w.units[idx];
+        if !u.is_alive() || !u.kind.is_ground() {
+            continue;
+        }
+        // 已经问过还没回来的，先等
+        {
+            let asked = state.brain.asked.lock().unwrap();
+            if let Some(&d) = asked.get(&idx) {
+                if day.saturating_sub(d) < interval {
+                    continue;
+                }
+            }
+        }
+        if let Some(ask) = build_ask(w, idx) {
+            state.brain.submit(llm::Job { unit: idx, day, ask });
+            budget -= 1;
+        }
+    }
 }
 
 /// 生成给前端的快照。

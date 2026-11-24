@@ -155,6 +155,7 @@
         <h3>态势</h3>
         <div class="kv"><span>通信手段</span><b id="k-comms">—</b></div>
         <div class="kv"><span>报告延迟</span><b id="k-delay">—</b></div>
+        <div class="kv"><span>将领大脑</span><b id="k-llm">—</b></div>
         <div class="kv"><span>已知敌情</span><b id="k-known">—</b></div>
         <div class="kv"><span>在途战报</span><b id="k-pend">—</b></div>
       </div>
@@ -696,7 +697,19 @@ async function api(path, body) {
     S = j.state || j;
     if (selUnit !== null && !allUnits().find((u) => u.index === selUnit)) { selUnit = null; curProv = null; }
     render();
+    refreshLlm();
   } catch (e) { toast("连接失败，检查服务是否运行"); }
+}
+
+// 侧栏显示将领大脑在用谁：真模型 / 模拟 / 规则
+async function refreshLlm() {
+  const el = $("k-llm");
+  if (!el) return;
+  try {
+    const j = await (await fetch("/api/llm")).json();
+    el.textContent = !j.enabled ? "规则 AI" : (j.model + " · " + j.calls + " 次");
+    el.title = j.mode + (j.errors && j.errors.length ? "\n最近错误：" + j.errors[0] : "");
+  } catch (e) { el.textContent = "—"; }
 }
 
 function showTip(ev, p) {

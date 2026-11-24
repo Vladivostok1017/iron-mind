@@ -70,7 +70,10 @@ fn golden_hash_is_stable() {
 ///   动机：路过即占领让六个师团四十天涂满九十个省，战线形同虚设。
 /// - 加入省内阵地（`Position`）后重算：战斗改为逐阵地结算、按展开宽度封顶，
 ///   并新增 `Shift`（省内调兵）、`Fortify`（筑工事）、`Rest`（整补）。
-const GOLDEN_LAST_HASH: u64 = 0xad3f_2dde_1ed1_0a4e;
+/// - 状态哈希补进 `unit.node` 与 `unit.manual` 后重算。
+///   动机：这两个字段会影响战斗结果与"谁在下令"；不进哈希就会出现
+///   "两个不同状态算出同一哈希"，回放校验（/api/replay-check）就抓不到偏差。
+const GOLDEN_LAST_HASH: u64 = 0xfecb_71ee_3309_a9ee;
 
 #[test]
 fn different_seeds_diverge() {

@@ -975,6 +975,10 @@ impl World {
             h.write_i32(u.strike_power.raw());
             h.write_u32(u.disobeyed as u32);
             h.write_u32(u.dissent_count);
+            // 阵地与命令归属也改变结果（阵地决定战斗宽度，manual 决定谁在下令），
+            // 不进哈希的话两个不同状态会算出同一个哈希，回放校验就形同虚设。
+            h.write_u32(u.node as u32);
+            h.write_u32(u.manual as u32);
         }
 
         // 情报也该进哈希：它会影响 AI 决策，不哈希就抓不到确定性漂移。
