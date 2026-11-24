@@ -32,6 +32,132 @@ pub fn can_enter(kind: UnitKind, terrain: Terrain) -> bool {
     }
 }
 
+/// 一次广度松弛的结果：到各省的代价、第一步往哪走、还要走几步。
+struct Walk {
+    /// 到各省的最小加权代价（沿途地形的通行消耗之和）。
+    dist: Vec<Option<Fixed>>,
+    /// 从起点出发的**第一步**。路径本身不存，每 tick 重算。
+    next: Vec<Option<u32>>,
+    /// 还要经过几个省界（= 还要几天）。
+    hops: Vec<Option<u32>>,
+}
+
+/// 从 `from` 出发的最省力走法。
+///
+/// 为什么不要求相邻才下令：**千里奔袭是常态**。
+/// 1938 年国军一个军从赣北调到万家岭要走上百公里；日军第 106 师团
+/// 也是从九江一路走进来的。只允许"打隔壁"，等于把战役压缩成一连串
+/// 相邻省对撞，玩家说"抽两个师去守万家岭"就得一天一天点。
+///
+/// 但也不是瞬移：**一天只走一个省**（约 35 公里），路上会被打、会掉队。
+/// 这样"远距离调动有代价"这条史实就保住了。
+///
+/// 权重 = 目标省的地形通行消耗 × (自己的地 ×1 / 别人的地 ×1.5)，
+/// 再给已经挤满的省加价——否则部队会一直卡在人堆里等位置。
+fn walk(world: &World, from: u32, side: Side, kind: UnitKind) -> Walk {
+    let n = world.provinces.len();
+    let mut w = Walk {
+        dist: vec![None; n],
+        next: vec![None; n],
+        hops: vec![None; n],
+    };
+    if from as usize >= n {
+        return w;
+    }
+    // 本省已经站了多少地面部队：挤满的省加价绕开，而不是傻等
+    let mut crowd = vec![0u32; n];
+    for u in world.units.iter() {
+        if u.is_alive() && u.kind.is_ground() && (u.position as usize) < n {
+            crowd[u.position as usize] += 1;
+        }
+    }
+    w.dist[from as usize] = Some(Fixed::ZERO);
+    w.hops[from as usize] = Some(0);
+
+    // 87 个省，O(n²) 松弛比堆更简单，且**顺序固定**——确定性免费拿到。
+    for _ in 0..=n {
+        let mut changed = false;
+        for p in 0..n {
+            let dp = match w.dist[p] {
+                Some(d) => d,
+                None => continue,
+            };
+            let hp = w.hops[p].unwrap_or(0);
+            for &q in &world.provinces[p].neighbors {
+                let qi = q as usize;
+                if qi >= n || qi == p {
+                    continue;
+                }
+                if !can_enter(kind, world.provinces[qi].terrain) {
+                    continue;
+                }
+                let mut cost = world.provinces[qi].terrain.move_cost();
+                if world.provinces[qi].owner != side {
+                    cost = cost * Fixed::ratio(3, 2);
+                }
+                if crowd[qi] >= STACK_LIMIT {
+                    cost = cost * Fixed::ratio(3, 1);
+                }
+                let nd = dp + cost;
+                let better = match w.dist[qi] {
+                    None => true,
+                    Some(d) => nd < d,
+                };
+                if better {
+                    w.dist[qi] = Some(nd);
+                    w.hops[qi] = Some(hp + 1);
+                    w.next[qi] = if p == from as usize { Some(q) } else { w.next[p] };
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    w
+}
+
+/// 从 `from` 去 `to` 的下一站。不相邻也能给出第一步；走不通返回 `None`。
+pub fn next_hop(world: &World, from: u32, to: u32, side: Side, kind: UnitKind) -> Option<u32> {
+    if from == to {
+        return None;
+    }
+    let w = walk(world, from, side, kind);
+    w.next.get(to as usize).copied().flatten()
+}
+
+/// 还要几天才能到（经过几个省界）。走不通返回 `None`。
+///
+/// 前端用它显示"距目标 3 日"，玩家才知道远距离调动到底有多慢。
+pub fn hops_to(world: &World, from: u32, to: u32, side: Side, kind: UnitKind) -> Option<u32> {
+    if from == to {
+        return Some(0);
+    }
+    let w = walk(world, from, side, kind);
+    w.hops.get(to as usize).copied().flatten()
+}
+
+/// 从某省出发能走到哪些省、各要几天。按 (天数, 省号) 排序，确定性。
+///
+/// 两个地方要用：
+/// 1. 将领的提示词——要让他知道"再走三天能到万家岭"，否则他只会盯着邻省；
+/// 2. 前端——显示"距目标 3 日"。
+pub fn reachable(world: &World, from: u32, side: Side, kind: UnitKind) -> Vec<(u32, u32)> {
+    let w = walk(world, from, side, kind);
+    let mut out: Vec<(u32, u32)> = w
+        .hops
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| match h {
+            Some(n) if i as u32 != from && *n > 0 => Some((i as u32, *n)),
+            _ => None,
+        })
+        .collect();
+    out.sort_by_key(|&(p, h)| (h, p));
+    out
+}
+
 /// 航空兵的侦察与打击半径内可达的省（含自身）。
 fn within_radius(world: &World, origin: u32, r: u32) -> Vec<u32> {
     let n = world.provinces.len();
@@ -216,20 +342,25 @@ fn run_movement(world: &mut World) {
             Some(t) => t,
             None => continue, // 固守/筑工事/整补/调兵
         };
-        // 必须是邻接，且地形允许该兵种进入。
+        // 目标可以不相邻：远距离调动沿最省力的路一天走一省（见 `walk`）。
         // AI 给出非法目标时静默忽略，而不是 panic——内容层永远可能出错。
         let prov = &world.provinces[u.position as usize];
-        if !prov.neighbors.contains(&target) {
-            continue;
-        }
-        let dest_terrain = world.provinces[target as usize].terrain;
+        let step = if prov.neighbors.contains(&target) {
+            target
+        } else {
+            match next_hop(world, u.position, target, u.side, u.kind) {
+                Some(n) => n,
+                None => continue, // 走不通（要跨海、或根本没有陆路）
+            }
+        };
+        let dest_terrain = world.provinces[step as usize].terrain;
         if !can_enter(u.kind, dest_terrain) {
             continue;
         }
         // 进入哪个阵地：进攻打兵力最薄的，行军挑最空的。
         let attacking = matches!(u.order, crate::world::Order::Attack(_));
-        let node = pick_node(world, target, u.side, attacking);
-        moves.push((i, target, node));
+        let node = pick_node(world, step, u.side, attacking);
+        moves.push((i, step, node));
     }
 
     // ---- 堆叠上限 ----
@@ -303,8 +434,18 @@ fn run_movement(world: &mut World) {
         match u.order.target() {
             Some(t) => {
                 let here = u.position;
-                let adjacent = world.provinces[here as usize].neighbors.contains(&t);
-                if here == t || !adjacent {
+                // 判定"走完了没有"，**不能用"是否相邻"**：
+                // 远距离调动在路上时本来就不相邻，用相邻判定会把玩家的命令
+                // 在第一个 tick 就清成固守——"千里奔袭"永远走不出去。
+                let done = if here == t {
+                    true
+                } else if u.kind.is_ground() {
+                    next_hop(world, here, t, u.side, u.kind).is_none()
+                } else {
+                    // 空海军不"走"，目标只表示打击/巡逻方向，相邻即算有效
+                    !world.provinces[here as usize].neighbors.contains(&t)
+                };
+                if done {
                     world.units[i].order = Order::Hold;
                     world.units[i].manual = false;
                 }

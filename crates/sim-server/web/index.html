@@ -945,24 +945,47 @@ async function api(path, body) {
 
 // 电报台：玩家唯一的指挥入口。
 // 地图只用来查看——不发命令、不调兵。命令一律变成文字，交给将领去理解。
+//
+// 收件人可以细到**任何一个军/师**，不必只发给兵团：
+// 史实里战区长官越级调 74 军这种事很常见，而且兵团只有三个，
+// 18 个师里有 12 个根本无从下令——那不是"指挥"，那是被架空了。
 function renderDispatch() {
   const sel = $("dp-to");
   if (!sel || !S) return;
-  const forms = [];
+  const units = [];
   for (const p of S.provinces) {
-    for (const u of p.units || []) {
-      if (u.mine && u.formation && !forms.includes(u.formation)) forms.push(u.formation);
-    }
+    for (const u of p.units || []) if (u.mine) units.push(u);
+  }
+  // 兵团 → 下属部队；没有上级番号的归"直属"
+  const groups = new Map();
+  for (const u of units) {
+    const f = u.formation || "直属";
+    if (!groups.has(f)) groups.set(f, []);
+    groups.get(f).push(u);
   }
   const keep = sel.value;
   sel.innerHTML = "";
-  for (const f of forms) {
+  const opt = (val, text) => {
     const o = document.createElement("option");
-    o.value = f;
-    o.textContent = f;
-    sel.appendChild(o);
+    o.value = val;
+    o.textContent = text;
+    return o;
+  };
+  const marching = (u) => (u.march_hops > 0 && u.march_to ? "　→" + u.march_to + " " + u.march_hops + "日" : "");
+  for (const [f, list] of groups) {
+    const g = document.createElement("optgroup");
+    g.label = f + " · " + list.length + " 部";
+    if (f !== "直属") g.appendChild(opt(f, "【整个】" + f));
+    for (const u of list) {
+      g.appendChild(opt(u.name, u.name + "　" + u.strength.toFixed(1) + " 千" + marching(u)));
+    }
+    sel.appendChild(g);
   }
-  if (keep && forms.includes(keep)) sel.value = keep;
+  const g = document.createElement("optgroup");
+  g.label = "战区";
+  g.appendChild(opt("全体", "全体部队（" + units.length + " 部）"));
+  sel.appendChild(g);
+  if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
 }
 
 async function refreshTelegrams() {
@@ -1221,7 +1244,12 @@ function renderOutliner() {
       (p && p.positions && p.positions[u.node] ? "·" + p.positions[u.node].name : "");
     const right = document.createElement("span");
     right.className = "ol-r";
-    right.textContent = u.strength.toFixed(1) + " 千 " + u.order;
+    // 行军中的部队要能一眼看出来：第几天到、去哪。
+    // 没有这一项，远距离调动在地图上就是"部队忽然不见了几天"。
+    const marching = u.march_hops > 0 && u.march_to;
+    right.textContent = u.strength.toFixed(1) + " 千 " +
+      (marching ? "→" + u.march_to + " " + u.march_hops + "日" : u.order);
+    if (marching) right.style.color = "#c9a227";
     d.appendChild(left);
     d.appendChild(right);
     d.title = u.commander + (u.disobeyed ? "（抗命中）" : "");

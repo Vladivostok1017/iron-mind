@@ -132,6 +132,12 @@ pub struct Ask {
     pub width: f64,
     /// (省名, 归属, 敌方兵力估计, 地形)
     pub neighbors: Vec<(String, String, f64, String)>,
+    /// (省名, 要走几天, 归属, 敌方兵力估计, 地形)
+    ///
+    /// 远距离目标：将领不该只看得见邻省。没有这一项，"千里奔袭"
+    /// 就永远落不了地——模型只会从邻省里挑一个，玩家说"抽两个师
+    /// 去守万家岭"它就理解成"往邻省挪一步"。
+    pub far: Vec<(String, u32, String, f64, String)>,
     /// 上级要他做什么
     pub order_label: String,
     /// 命令来自"统帅部"还是"玩家亲自"
@@ -207,11 +213,21 @@ fn build_user(a: &Ask) -> String {
             name, owner, terr, est
         ));
     }
+    if !a.far.is_empty() {
+        s.push_str("更远处的战场（要走几天，路上会被打、会掉队）：\n");
+        for (name, hops, owner, est, terr) in &a.far {
+            s.push_str(&format!(
+                "- {}（{}日行程，{}，{}，敌军估计 {:.1} 千）\n",
+                name, hops, owner, terr, est
+            ));
+        }
+    }
     s.push_str(&format!(
         "\n上级给你的命令：{}（来自：{}）\n",
         a.order_label, a.order_from
     ));
-    s.push_str("\n可选行动：attack（攻邻接省）/move（去邻接省）/retreat（撤向邻接己方省）/hold/fortify/rest/shift（省内换阵地）\n");
+    s.push_str("\n可选行动：attack（打目标省）/move（开赴目标省）/retreat（撤向己方）/hold/fortify/rest/shift（省内换阵地）\n");
+    s.push_str("target 可以写邻接省，也可以写上面的远处省份——远距离调动一天走约一个省，走到之前不算到位。\n");
     s.push_str("输出 JSON：{\"order\":\"...\",\"target\":\"省名或阵地名\",\"dissent\":true,\"confidence\":0.6,\"reason\":\"不超过80字，你自己的判断\",\"cost\":\"照办时你接受的代价，不超过40字\",\"reply\":\"回给上级的一句话电报，60字内，第一人称\"}\n");
     s
 }
@@ -431,9 +447,51 @@ fn mock_judgement(a: &Ask) -> Judgement {
     let enemy = a
         .neighbors
         .iter()
-        .find(|n| n.1 != a.side && n.2 > 0.0)
+        .find(|n| n.1 == "敌方控制")
         .map(|n| n.0.clone());
-    let own = a.neighbors.iter().find(|n| n.1 == a.side).map(|n| n.0.clone());
+    let own = a
+        .neighbors
+        .iter()
+        .find(|n| n.1 == "我方控制")
+        .map(|n| n.0.clone());
+
+    // 有电报时先看电报里点了哪个地名——**邻省和远处都算**。
+    //
+    // 这个假模型存在的意义是验证整条链路：电报 → 将领判断 → 命令 → 行军。
+    // 如果它连"命令里提到的地方"都不认，跨省行军这条路就永远测不到，
+    // 只能靠真人对着真模型手点。
+    if !a.incoming.is_empty() {
+        let mut hit: Option<(String, bool)> = None;
+        for (name, owner, _, _) in &a.neighbors {
+            if a.incoming.contains(name.as_str()) {
+                hit = Some((name.clone(), owner == "我方控制"));
+                break;
+            }
+        }
+        if hit.is_none() {
+            for (name, _hops, owner, _, _) in &a.far {
+                if a.incoming.contains(name.as_str()) {
+                    hit = Some((name.clone(), owner == "我方控制"));
+                    break;
+                }
+            }
+        }
+        if let Some((name, mine)) = hit {
+            return Judgement {
+                order: if mine { "move" } else { "attack" }.into(),
+                target: Some(name.clone()),
+                dissent: false,
+                confidence: 0.62,
+                reason: format!("上意指向{}，我的判断是也应当把兵力投向那里。", name),
+                cost: if mine {
+                    "部队要走几天，路上会掉队。".to_string()
+                } else {
+                    "攻坚要付伤亡，且后方会空虚。".to_string()
+                },
+                reply: format!("{}收到，即向{}。", a.general, name),
+            };
+        }
+    }
 
     let weak = a.strength < a.max_strength * 0.45;
     let has_enemy = enemy.is_some();
@@ -502,7 +560,7 @@ pub struct Ready {
 impl Broker {
     pub fn new(cfg: Config) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<Job>();
-        let ready = Arc::new(Mutex::new(HashMap::new()));
+        let ready: Arc<Mutex<HashMap<usize, Ready>>> = Arc::new(Mutex::new(HashMap::new()));
         let asked = Arc::new(Mutex::new(HashMap::new()));
         let calls = Arc::new(Mutex::new(0u32));
         let errors = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -515,10 +573,22 @@ impl Broker {
                 match ask(&cfg, &job.ask) {
                     Ok(j) => {
                         *c2.lock().unwrap() += 1;
-                        r2.lock().unwrap().insert(
-                            job.unit,
-                            Ready { day: job.day, judgement: j, telegram: job.telegram },
-                        );
+                        let mut g = r2.lock().unwrap();
+                        // 一份已经躺在池子里的**电报判断**不能被例行问询盖掉。
+                        //
+                        // ready 是按单位索引存的，而例行问询每 tick 都会问同一批单位。
+                        // 电报问询刚答完、例行问询后脚答完，后者的结果就把前者顶了——
+                        // 表现是"回电说照办，部队却原地不动"，而且完全没有报错。
+                        let telegram_pending = g
+                            .get(&job.unit)
+                            .map(|r| r.telegram.is_some())
+                            .unwrap_or(false);
+                        if !(telegram_pending && job.telegram.is_none()) {
+                            g.insert(
+                                job.unit,
+                                Ready { day: job.day, judgement: j, telegram: job.telegram },
+                            );
+                        }
                     }
                     Err(e) => {
                         let mut ev = e2.lock().unwrap();

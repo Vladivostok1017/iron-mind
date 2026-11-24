@@ -603,8 +603,15 @@ fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) 
             }
             if t == from {
                 ("hold", None) // 点自己所在的省 = 固守
-            } else if !w.provinces[from as usize].neighbors.contains(&t) {
-                return Some("只能对相邻省份下令".into());
+            } else if is_ground
+                && sim_core::systems::hops_to(w, from, t, side, u.kind).is_none()
+            {
+                // 不再要求相邻：**千里奔袭是常态**（见 sim-core `walk`）。
+                // 只拦真正走不通的：地面部队要跨水，或根本没有陆路。
+                return Some(format!(
+                    "{}走不到{}：陆路上不通（要跨水，得走水路或换个目标）",
+                    w.units[unit_idx].name, w.provinces[t as usize].name
+                ));
             } else {
                 let dest = &w.provinces[t as usize];
                 if is_ground && dest.terrain == Terrain::Water {
@@ -868,6 +875,33 @@ struct Telegram {
     reply: String,
 }
 
+/// 一封电报到底发给谁。
+///
+/// 玩家是"第九战区长官部"，可以直接给兵团下令，也可以**越过兵团直接
+/// 给某个军、某个师**下令——史实里这很常见（薛岳越级调 74 军守万家岭）。
+/// 之前只认 `formation`，所以下拉框里只有三个兵团，18 个师里有 12 个
+/// 根本无从下令。现在三种写法都认：
+///
+/// - 兵团番号（`第1兵团`）→ 该番号下所有部队
+/// - 部队名（`第74军`）→ 就这一个单位（它本身就是那一级指挥部）
+/// - `全体` / `全军` / `第九战区` → 本战区所有部队
+fn resolve_recipients(w: &World, side: Side, to: &str) -> Vec<usize> {
+    let everyone = matches!(to, "全体" | "全军" | "第九战区" | "战区");
+    (0..w.units.len())
+        .filter(|&i| {
+            let u = &w.units[i];
+            if !u.is_alive() || u.side != side {
+                return false;
+            }
+            if everyone {
+                return true;
+            }
+            // 空军也听命令（只是它的"执行"不是走路，而是出击）
+            u.name == to || u.formation == to
+        })
+        .collect()
+}
+
 /// 到期电报：把原文交给该番号下的将领，让他自己判断。
 ///
 /// 注意这不是"把命令写进 order"。写进去的是**电报原文**，
@@ -885,14 +919,11 @@ fn deliver_telegrams(state: &Arc<ServerState>, w: &World, day: u32) -> Vec<Strin
     };
     let mut notes = Vec::new();
     for (id, to, text) in due {
-        // 该番号下还活着的部队，最多同时问 6 个（成本上限）
-        let mut targets: Vec<usize> = (0..w.units.len())
-            .filter(|&i| {
-                let u = &w.units[i];
-                u.is_alive() && u.kind.is_ground() && u.formation == to
-            })
-            .collect();
-        targets.truncate(6);
+        // 收到电报的将领各自独立判断。上限是**成本**上限，不是逻辑上限：
+        // 每多一个将领就多一次模型调用。
+        const MAX_RECIPIENTS: usize = 8;
+        let mut targets = resolve_recipients(w, Side::Cn, &to);
+        targets.truncate(MAX_RECIPIENTS);
         for idx in &targets {
             if let Some(ask) = build_ask(state, w, *idx, &text) {
                 state.brain.submit(llm::Job { unit: *idx, day, ask, telegram: Some(id) });
@@ -992,6 +1023,28 @@ fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &str) ->
             terrain_cn(q.terrain).to_string(),
         ));
     }
+    // 远处的地：将领不该只看得见邻省。
+    //
+    // 千里奔袭是这个战场上的常态（74 军从赣北调万家岭、106 师团从九江走过来），
+    // 只给他邻省，他的判断就只能是"打隔壁"，玩家的"抽两个师去守万家岭"
+    // 也就永远落不了地。这里给 2-7 日行程内的目标，按天数排序。
+    let mut far = Vec::new();
+    for (pid, hops) in sim_core::systems::reachable(w, u.position, u.side, u.kind) {
+        if hops < 2 || hops > 7 {
+            continue;
+        }
+        let q = &w.provinces[pid as usize];
+        far.push((
+            q.name.clone(),
+            hops,
+            if q.owner == u.side { "我方控制" } else { "敌方控制" }.to_string(),
+            w.enemy_estimate(u.side, pid).to_display_f64(),
+            terrain_cn(q.terrain).to_string(),
+        ));
+        if far.len() >= 10 {
+            break;
+        }
+    }
     Some(llm::Ask {
         day: w.tick,
         general: u.commander.name.clone(),
@@ -1012,6 +1065,7 @@ fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &str) ->
         node_fort: node.map(|n| n.fort).unwrap_or(0),
         width: p.node_width(u.node).to_display_f64(),
         neighbors,
+        far,
         order_label: u.order.label().to_string(),
         order_from: if u.manual { "玩家亲自" } else { "统帅部" }.to_string(),
         nodes: p.positions.iter().map(|n| n.name.clone()).collect(),
@@ -1098,7 +1152,12 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         } else {
             kind
         };
-        let same = cur.label() == match kind {
+        // "和上级一致"要同时比**动作**和**目标**。
+        //
+        // 只比动作会出大错：部队已经在"推进"某省，模型改主意要"推进"另一个
+        // 更远的省，动作标签一样，于是被判成"同意上级、不改命令"，
+        // 新目标被静静丢掉——玩家看到的回电说"照办"，部队却往老地方走。
+        let kind_label = match kind {
             "attack" => "进攻",
             "move" => "推进",
             "retreat" => "撤退",
@@ -1107,6 +1166,12 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             "shift" => "调兵",
             _ => "固守",
         };
+        let same_target = match kind {
+            "attack" | "move" | "retreat" => cur.target() == target,
+            "shift" => matches!(*&cur, Order::Shift(n) if Some(n as u32) == target),
+            _ => true,
+        };
+        let same = cur.label() == kind_label && same_target;
 
         // 报告里带上他自己的把握程度：玩家看到的是"他有多大信心"，不是一个已定事实
         let grip = format!("（把握 {:.0}%）", j.confidence * 100.0);
@@ -1281,9 +1346,15 @@ fn request_due(state: &Arc<ServerState>, w: &World) {
     let mut cands: Vec<(u32, usize)> = Vec::new();
     {
         let asked = state.brain.asked.lock().unwrap();
+        // 已经有判断躺在池子里、还没被取走的单位，不要再问一遍：
+        // 白花钱，而且会跟电报问询抢同一个 ready 槽位。
+        let ready = state.brain.ready.lock().unwrap();
         for idx in 0..w.units.len() {
             let u = &w.units[idx];
             if !u.is_alive() || !u.kind.is_ground() {
+                continue;
+            }
+            if ready.contains_key(&idx) {
                 continue;
             }
             let last = asked.get(&idx).copied();
@@ -1355,6 +1426,17 @@ fn snapshot(w: &World) -> String {
                     "order_code": u.order.code().1,
                     "node": u.node,
                     "formation": u.formation,
+                    // 距命令目标还有几天（每 tick 走一省）。远距离调动全靠它，
+                    // 否则玩家看不出"这支部队正在路上"还是"根本没动"。
+                    "march_hops": u.order.target().map(|t| {
+                        if t == u.position {
+                            0
+                        } else {
+                            sim_core::systems::hops_to(w, u.position, t, u.side, u.kind)
+                                .unwrap_or(0)
+                        }
+                    }),
+                    "march_to": u.order.target().map(|t| w.provinces[t as usize].name.clone()),
                     "disobeyed": u.disobeyed,
                     "dissent": u.dissent_reason,
                 }))
