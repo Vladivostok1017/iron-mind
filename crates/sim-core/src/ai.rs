@@ -193,6 +193,119 @@ struct CommandContext {
     weakest_neighbor: Option<u32>,
 }
 
+/// 给非玩家阵营的"假指挥官"：统帅部的作战方针。
+///
+/// 之前非玩家阵营是**没有指挥部的**：八个师团各自看一眼邻省、各自决定打不打，
+/// 行动像八个独立军阀，而不是一支有作战方针的军。史实里第 11 军司令部是有的
+/// （"沿南浔线南下、相机夺取南昌"），而在模拟里它不存在。
+///
+/// 这里补的是一份**确定性、不额外花钱**的方针：只看战场事实
+/// （兵力比、目标价值、够不够得着），不叫第二次模型。
+/// 规则 AI 直接照它办事；LLM 将领在提示词里看到它，然后**可以不同意**——
+/// 这才是真实指挥链：司令部给方向，师团长给判断。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TheaterPlan {
+    /// 主要用兵方向（按优先级排序的目标省）。
+    pub focus: Vec<u32>,
+    pub posture: Posture,
+    /// 一句话说明，直接进提示词。
+    pub summary: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Posture {
+    /// 全面推进
+    Advance,
+    /// 巩固现有战线（实力不足或补给不济）
+    Hold,
+    /// 收缩（被打残了）
+    Withdraw,
+}
+
+impl Posture {
+    pub fn label(self) -> &'static str {
+        match self {
+            Posture::Advance => "推进",
+            Posture::Hold => "巩固",
+            Posture::Withdraw => "收缩",
+        }
+    }
+}
+
+/// 算出某一方的作战方针。
+///
+/// 判据三条，全部来自战场事实，不掺任何国别设定：
+/// 1. 现存兵力比决定姿态（0.8 倍以上才全面推进）；
+/// 2. 目标是敌方控制的省，价值 = 补给源 3 + 铁路 2 + 工事 1；
+/// 3. 只考虑**够得着**的（邻接本方部队），同级按省号保序。
+pub fn theater_plan(world: &World, side: Side) -> TheaterPlan {
+    let enemy = side.opponent();
+    let own_power = world.total_strength(side);
+    let foe_power = world.total_strength(enemy);
+
+    let posture = if own_power.is_zero() || foe_power.is_zero() {
+        Posture::Hold
+    } else if own_power * Fixed::ratio(8, 10) > foe_power {
+        Posture::Advance
+    } else if own_power * Fixed::ratio(5, 10) > foe_power {
+        Posture::Hold
+    } else {
+        Posture::Withdraw
+    };
+
+    let mut cands: Vec<(u32, i32)> = Vec::new();
+    for p in 0..world.provinces.len() {
+        let prov = &world.provinces[p];
+        if prov.owner == side || prov.terrain == Terrain::Water {
+            continue;
+        }
+        let reachable = prov.neighbors.iter().any(|&nb| {
+            world.units_in(nb).iter().any(|&j| {
+                let x = &world.units[j as usize];
+                x.side == side && x.kind.is_ground() && x.is_alive()
+            })
+        });
+        if !reachable {
+            continue;
+        }
+        let mut value = 0i32;
+        if prov.is_supply_source {
+            value += 3;
+        }
+        if prov.rail {
+            value += 2;
+        }
+        if prov.fort > 0 {
+            value += 1;
+        }
+        cands.push((p as u32, value));
+    }
+    cands.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let focus: Vec<u32> = cands.iter().take(2).map(|c| c.0).collect();
+
+    let names: Vec<String> = focus
+        .iter()
+        .map(|&p| world.provinces[p as usize].name.clone())
+        .collect();
+    let ratio = if foe_power.is_zero() {
+        9.99
+    } else {
+        own_power.to_display_f64() / foe_power.to_display_f64()
+    };
+    let summary = if names.is_empty() {
+        format!("{}：当面没有可攻目标，守住现有战线。", posture.label())
+    } else {
+        format!(
+            "{}：主攻方向 {}（兵力比 {:.2}）。",
+            posture.label(),
+            names.join("、"),
+            ratio
+        )
+    };
+
+    TheaterPlan { focus, posture, summary }
+}
+
 /// 每 tick 为双方重算意图。
 pub fn run_ai(world: &mut World) {
     let seed = world.seed;

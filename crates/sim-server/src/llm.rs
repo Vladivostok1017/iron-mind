@@ -153,6 +153,8 @@ pub struct Ask {
     pub memory: Vec<String>,
     /// 上级刚刚发来的电报原文。空 = 例行判断，不是接到命令。
     pub incoming: String,
+    /// 司令部（统帅部）的作战方针。这是**方向**，不是命令。
+    pub hq_plan: String,
 }
 
 const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。你不是助手、不是客服，也不在回答"用户"的提问。
@@ -221,6 +223,12 @@ fn build_user(a: &Ask) -> String {
                 name, hops, owner, terr, est
             ));
         }
+    }
+    if !a.hq_plan.is_empty() {
+        s.push_str(&format!(
+            "\n司令部的作战方针：{}\n这是方向，不是命令。你与它不一致时可以按自己的判断办，但要说明理由。\n",
+            a.hq_plan
+        ));
     }
     s.push_str(&format!(
         "\n上级给你的命令：{}（来自：{}）\n",

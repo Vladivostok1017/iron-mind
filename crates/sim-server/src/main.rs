@@ -1279,6 +1279,7 @@ fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &str) ->
         title: u.commander.title.clone(),
         memory: memory_for(state, w, idx),
         incoming: incoming.to_string(),
+        hq_plan: sim_core::ai::theater_plan(w, u.side).summary,
     })
 }
 
@@ -1770,9 +1771,18 @@ fn snapshot(w: &World) -> String {
             "metrics": o.metrics.iter().map(|(k, v)| json!({ "label": k, "value": round1(*v) })).collect::<Vec<_>>(),
         })
     });
+    // 本方司令部的作战方针：这是给玩家的（自己的统帅部怎么想，他应该知道），
+    // 敌方的方针属于情报，不给。
+    let own_plan = sim_core::ai::theater_plan(w, viewer);
+    let plan = json!({
+        "posture": own_plan.posture.label(),
+        "focus": own_plan.focus.iter().map(|&p| w.provinces[p as usize].name.clone()).collect::<Vec<_>>(),
+        "summary": own_plan.summary,
+    });
     json!({
         "tick": w.tick,
         "campaign_days": w.campaign_days,
+        "plan": plan,
         "outcome": outcome,
         "player": "cn",
         // 已覆灭的番号（含殉国、整编倒计时）

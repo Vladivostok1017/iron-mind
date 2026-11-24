@@ -181,6 +181,9 @@
   .marchline text { fill: #c9a227; font-size: 9px; font-weight: 600;
     text-anchor: middle; paint-order: stroke; stroke: #0b1016; stroke-width: 2.4px; }
   /* 地形视图的高程色标 */
+  #plan { font-size: 11px; color: #9aa6b3; max-width: 380px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  #plan b { color: #c9a227; font-weight: 500; }
   #hypso-leg { position: absolute; left: 14px; bottom: 14px; width: 190px; display: none;
     background: rgba(16,22,29,.86); border: 1px solid #2d3947; border-radius: 4px;
     padding: 6px 8px 4px; font-size: 10px; color: #8b95a1; z-index: 8; pointer-events: none; }
@@ -293,7 +296,7 @@
     <div class="sep"></div>
     <!-- 模块 = 这一仗的剧本。游戏只提供框架，剧本由玩家自己写，所以必须能在这儿换。 -->
     <select id="mod-sel" title="切换模块（会重开一局）" style="font-size:11.5px;background:#141b23;color:#c3ccd6;border:1px solid #2d3947;border-radius:4px;padding:5px 6px;max-width:190px"></select>
-    <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
+    <!-- 本方统帅部的作战方针：玩家该知道自己司令部的方向，再决定要不要越级 -->`n    <div id="plan" title="本方司令部的作战方针（方向，不是命令）"></div>`n    <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
     <button class="btn" id="btn-save">存档</button>
     <button class="btn" id="btn-load">读档</button>
     <button class="btn" id="btn-reset">重开</button>
@@ -689,6 +692,15 @@ function render() {
 }
 
 function renderTop() {
+  try {
+    const el = document.getElementById("plan");
+    if (el && S && S.plan) {
+      el.innerHTML = "司令部：" + (S.plan.focus && S.plan.focus.length
+        ? S.plan.posture + " → " + S.plan.focus.join("、")
+        : S.plan.posture);
+      el.title = S.plan.summary;
+    }
+  } catch (e) { }
   $("s-str").textContent = S.side.strength.toFixed(1) + " 千";
   $("s-prov").textContent = S.side.provinces + " / " + S.provinces.length;
   $("s-enemy").textContent = S.enemy.estimated_strength.toFixed(1) + " 千";
