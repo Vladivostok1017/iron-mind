@@ -51,6 +51,13 @@ pub struct ModuleMeta {
     /// 玩家可操作的一方。当前引擎只支持单方可玩。
     #[serde(default = "default_playable")]
     pub playable_side: SideDef,
+    /// 非玩家阵营的统帅部（AI 玩家）。
+    ///
+    /// 这是**敌方那一局的总指挥**：他有自己的战役目标、自己的性格，
+    /// 会对自己的师团下达具体命令（走的是和玩家一样的"电报 → 将领判断"通道）。
+    /// 内容层决定他是谁、想要什么；引擎不认识人名。
+    #[serde(default)]
+    pub hq: Option<HqDef>,
     /// 战役尺度。决定"这张图是什么"，也决定校验规则。
     ///
     /// - `theater` 战役级：几十到上百个省，师级单位，数天一级的时间颗粒
@@ -325,6 +332,29 @@ pub struct ProvinceDef {
     /// 备注，供作者记录出处。
     #[serde(default)]
     pub note: String,
+}
+
+/// 非玩家阵营的统帅部（"AI 玩家"）。
+///
+/// 这是敌方那一局的总指挥：有自己的战役目标与性格，会对自己麾下的师团
+/// 下具体命令——走的是**和玩家一样的通道**（电报 → 师团长判断 → 执行），
+/// 所以师团长照样可以抗命。
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct HqDef {
+    /// 司令官姓名（岡村寧次）。
+    pub name: String,
+    /// 职务（第11军司令官）。
+    #[serde(default)]
+    pub title: String,
+    /// 人物志：他是什么人、怎么打仗。
+    #[serde(default)]
+    pub persona: String,
+    /// 他要什么、怕什么。
+    #[serde(default)]
+    pub agenda: String,
+    /// 战役目标，按优先级。写给模型看的，不是给引擎算的。
+    #[serde(default)]
+    pub objectives: Vec<String>,
 }
 
 /// 模块声明的一条结局。

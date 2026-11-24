@@ -616,3 +616,316 @@ impl Broker {
         let _ = self.jobs.send(job);
     }
 }
+
+// ------------------------------------------------------------------ AI 玩家
+
+/// 敌方统帅部（AI 玩家）的一次问询。
+///
+/// 之前非玩家阵营只有"师团长各自判断"，没有**一个人**在上面定"这一仗要打成什么样"。
+/// 史实里那是第 11 军司令部的工作。现在给敌方一个真正的指挥官：
+/// 他有目标、有性格、会点名让某几个师团去做什么。
+///
+/// 他和师团长的关系是关键：**他下的是电报，不是命令**。
+/// 师团长照样走 `Ask` → `Judgement` → 可以抗命。同一条指挥链。
+#[derive(Clone)]
+pub struct HqAsk {
+    pub day: u32,
+    pub side: String,
+    pub title: String,
+    pub general: String,
+    pub persona: String,
+    pub agenda: String,
+    pub objectives: Vec<String>,
+    /// 己方各部：(番号, 所在省, 兵力千, 补给, 当前命令, 是否被围)
+    pub units: Vec<(String, String, f64, f64, String, bool)>,
+    /// 已知敌情：(省, 估计兵力, 归属)
+    pub enemy: Vec<(String, f64, String)>,
+    pub last_plan: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct HqJudgement {
+    pub plan: String,
+    /// (发给哪个番号, 电报原文)
+    pub orders: Vec<(String, String)>,
+    pub reason: String,
+}
+
+const HQ_SYSTEM: &str = r#"你是一支侵华日军的军司令官，正在自己的司令部里决定这一仗怎么打。
+
+你不是助手，不在回答提问。你手上有一份战役目标，有若干师团，有补给与时间。
+
+要求：
+1. 先判断战场态势，再决定这一阶段要什么（进攻？巩固？集中到哪一点？）；
+2. 只给具体师团下**少数几条**电报（0-3 条），每条一句话，像真电报；
+3. 不要复述数字，不要写报告文学，不要自称 AI；
+4. 你的判断可以与国内大本营的期待不一致，但要说清理由；
+5. 你没有无限的兵：被打残的师团不要派去攻坚。
+
+只输出一个 JSON 对象，不要代码围栏：
+{"plan":"本阶段方针，60字内","orders":[{"to":"第106师团","text":"一句话命令"}],"reason":"20-60字，你的判断依据"}"#;
+
+fn build_hq_user(a: &HqAsk) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("你是{}，{}。\n", a.general, a.title));
+    if !a.persona.is_empty() {
+        s.push_str(&format!("你的经历与用兵习惯：{}\n", a.persona));
+    }
+    if !a.agenda.is_empty() {
+        s.push_str(&format!("你在意什么：{}\n", a.agenda));
+    }
+    if !a.objectives.is_empty() {
+        s.push_str("你的战役目标（按优先级）：\n");
+        for (i, o) in a.objectives.iter().enumerate() {
+            s.push_str(&format!("{}. {}\n", i + 1, o));
+        }
+    }
+    s.push_str(&format!("\n第 {} 日。你麾下：\n", a.day));
+    for (name, prov, str_, sup, order, encircled) in &a.units {
+        s.push_str(&format!(
+            "- {}：在 {}，兵力 {:.1} 千，补给 {:.2}，当前{} {}\n",
+            name,
+            prov,
+            str_,
+            sup,
+            order,
+            if *encircled { "（被围！）" } else { "" }
+        ));
+    }
+    s.push_str("已知敌情：\n");
+    if a.enemy.is_empty() {
+        s.push_str("- （还没有可靠情报）\n");
+    }
+    for (prov, str_, owner) in &a.enemy {
+        s.push_str(&format!("- {}：{}，估计 {:.1} 千\n", prov, owner, str_));
+    }
+    if !a.last_plan.is_empty() {
+        s.push_str(&format!("\n你上一阶段的方针：{}\n", a.last_plan));
+        s.push_str("战场没变就别改；变了就说明为什么变。\n");
+    }
+    s.push_str("\n只输出 JSON。");
+    s
+}
+
+/// 假司令官：确定性地给方针与 1-2 条电报，用来验证整条链路。
+fn mock_hq(a: &HqAsk) -> HqJudgement {
+    let mut orders = Vec::new();
+    for (name, _prov, str_, sup, _order, encircled) in &a.units {
+        if *encircled {
+            orders.push((name.clone(), "固守待援，不得突围。".to_string()));
+            continue;
+        }
+        if *str_ > 10.0 && *sup > 0.35 {
+            orders.push((name.clone(), "向当面之敌推进，占住要点。".to_string()));
+        }
+        if orders.len() >= 2 {
+            break;
+        }
+    }
+    HqJudgement {
+        plan: format!("以主力沿铁路推进（第 {} 日）", a.day),
+        orders,
+        reason: "当面之敌战线不稳，先压迫其正面。".into(),
+    }
+}
+
+pub fn ask_hq(cfg: &Config, a: &HqAsk) -> Result<HqJudgement, String> {
+    if cfg.mock {
+        return Ok(mock_hq(a));
+    }
+    if cfg.key.trim().is_empty() {
+        return Err("没有 IRONMIND_API_KEY".into());
+    }
+    let text = hq_chat(cfg, HQ_SYSTEM, &build_hq_user(a), 700)?;
+    let json = extract_json(&text).ok_or_else(|| format!("响应不是 JSON：{:.160}", text))?;
+    let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| format!("解析失败：{e}"))?;
+    let plan = v.get("plan").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let mut orders = Vec::new();
+    if let Some(arr) = v.get("orders").and_then(|x| x.as_array()) {
+        for o in arr.iter().take(3) {
+            let to = o.get("to").and_then(|x| x.as_str()).unwrap_or("").trim();
+            let text = o.get("text").and_then(|x| x.as_str()).unwrap_or("").trim();
+            if !to.is_empty() && !text.is_empty() {
+                orders.push((to.to_string(), text.to_string()));
+            }
+        }
+    }
+    Ok(HqJudgement { plan, orders, reason })
+}
+
+/// 发一次请求（司令部专用）。
+///
+/// 刻意**没有**去重构 `ask()` 里的那段 curl：那条路是跑通过了的东西，
+/// 为了少写四十行去动它不划算。两段代码都只做""拼 JSON → curl -K → 取 content""。
+fn hq_chat(cfg: &Config, system: &str, user: &str, max_tokens: u32) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": cfg.model,
+        "temperature": 0.8,
+        "max_tokens": max_tokens,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user }
+        ]
+    })
+    .to_string();
+
+    let dir = std::env::temp_dir().join(format!("ironmind-hq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建临时目录失败：{e}"))?;
+    let body_path = dir.join("body.json");
+    let cfg_path = dir.join("curl.conf");
+    std::fs::write(&body_path, body).map_err(|e| format!("写请求失败：{e}"))?;
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "url = \"{}/chat/completions\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\n",
+            cfg.base.trim_end_matches('/'),
+            cfg.key.trim()
+        ),
+    )
+    .map_err(|e| format!("写 curl 配置失败：{e}"))?;
+
+    let out = std::process::Command::new("curl")
+        .args([
+            "-s",
+            "--max-time",
+            &cfg.timeout_secs.to_string(),
+            "-K",
+            &cfg_path.to_string_lossy(),
+            "-d",
+            &format!("@{}", body_path.to_string_lossy()),
+        ])
+        .output()
+        .map_err(|e| format!("调用 curl 失败：{e}"))?;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    if text.trim().is_empty() {
+        return Err(format!(
+            "模型无响应（stderr: {}）",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}"))?;
+    if let Some(err) = v.get("error") {
+        return Err(format!("接口报错：{err}"));
+    }
+    let content = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| format!("响应里没有 content：{:.160}", text))?;
+    Ok(content.to_string())
+}
+
+/// 司令部问询的后台线程：独立一条，别和将领问询抢队列。
+///
+/// 为什么不塞进 `Broker`：将领问询是"每个单位一份"，司令部是"每天至多一份"，
+/// 生命周期也不同（司令部慢得多）。分开两条线程，互不拖累。
+pub struct HqDriver {
+    tx: std::sync::mpsc::Sender<(u32, HqAsk)>,
+    pub ready: Arc<Mutex<Option<(u32, HqJudgement)>>>,
+    pub calls: Arc<Mutex<u32>>,
+    pub errors: Arc<Mutex<Vec<String>>>,
+}
+
+impl HqDriver {
+    pub fn new(cfg: Config) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<(u32, HqAsk)>();
+        let ready: Arc<Mutex<Option<(u32, HqJudgement)>>> = Arc::new(Mutex::new(None));
+        let calls = Arc::new(Mutex::new(0u32));
+        let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+        let r2 = Arc::clone(&ready);
+        let c2 = Arc::clone(&calls);
+        let e2 = Arc::clone(&errors);
+        std::thread::spawn(move || {
+            while let Ok((day, ask)) = rx.recv() {
+                match ask_hq(&cfg, &ask) {
+                    Ok(j) => {
+                        *c2.lock().unwrap() += 1;
+                        *r2.lock().unwrap() = Some((day, j));
+                    }
+                    Err(e) => {
+                        let mut ev = e2.lock().unwrap();
+                        if ev.len() < 20 {
+                            ev.push(format!("司令部 第{day}日：{e}"));
+                        }
+                    }
+                }
+            }
+        });
+        Self { tx, ready, calls, errors }
+    }
+
+    pub fn submit(&self, day: u32, ask: HqAsk) {
+        let _ = self.tx.send((day, ask));
+    }
+
+    pub fn take(&self) -> Option<(u32, HqJudgement)> {
+        self.ready.lock().unwrap().take()
+    }
+}
+
+#[cfg(test)]
+mod hq_tests {
+    use super::*;
+
+    fn ask() -> HqAsk {
+        HqAsk {
+            day: 3,
+            side: "日本".into(),
+            title: "第11军司令官".into(),
+            general: "岡村寧次".into(),
+            persona: "情报参谋出身".into(),
+            agenda: "打通南浔线".into(),
+            objectives: vec!["夺取德安".into(), "保护长江补给线".into()],
+            units: vec![
+                ("第6师团".into(), "九江".into(), 24.0, 0.6, "固守".into(), false),
+                ("第106师团".into(), "万家岭".into(), 16.0, 0.2, "进攻".into(), true),
+            ],
+            enemy: vec![("德安".into(), 20.0, "敌方控制".into())],
+            last_plan: String::new(),
+        }
+    }
+
+    #[test]
+    fn mock_hq_gives_a_plan_and_orders() {
+        let j = mock_hq(&ask());
+        assert!(!j.plan.is_empty(), "要有方针");
+        assert!(!j.orders.is_empty(), "要有给师团的电报");
+        // 被围的部队收到的是固守，不是推进
+        let encircled = j.orders.iter().find(|(to, _)| to == "第106师团");
+        if let Some((_, text)) = encircled {
+            assert!(text.contains("固守"), "被围的师团不该被派去推进：{text}");
+        }
+    }
+
+    #[test]
+    fn prompt_carries_who_he_is_and_what_he_wants() {
+        let s = build_hq_user(&ask());
+        assert!(s.contains("第11军司令官"), "提示词里要有职务");
+        assert!(s.contains("夺取德安"), "提示词里要有战役目标");
+        assert!(s.contains("第106师团"), "提示词里要有麾下各部");
+        assert!(s.contains("被围"), "被围的部队要标出来");
+        assert!(s.contains("德安"), "提示词里要有已知敌情");
+    }
+
+    #[test]
+    fn ask_hq_works_offline() {
+        // mock 模式下不联网也应当给出判断
+        let cfg = Config {
+            enabled: true,
+            mock: true,
+            base: "http://127.0.0.1:1".into(),
+            model: "x".into(),
+            key: String::new(),
+            interval_days: 1,
+            timeout_secs: 1,
+        };
+        let j = ask_hq(&cfg, &ask()).expect("mock 不该失败");
+        assert!(!j.reason.is_empty());
+    }
+}

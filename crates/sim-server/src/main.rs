@@ -71,7 +71,10 @@ fn main() {
         world: std::sync::Mutex::new(None),
         commands: std::sync::Mutex::new(Vec::new()),
         llm: llm_cfg.clone(),
-        brain: llm::Broker::new(llm_cfg),
+        brain: llm::Broker::new(llm_cfg.clone()),
+        hq: llm::HqDriver::new(llm_cfg),
+        hq_plan: std::sync::Mutex::new(String::new()),
+        hq_last_day: std::sync::Mutex::new(0),
         reports: std::sync::Mutex::new(Vec::new()),
         next_report_id: std::sync::atomic::AtomicU32::new(1),
         provinces_geo: std::sync::Mutex::new(provinces_geo),
@@ -136,6 +139,10 @@ struct ServerState {
     /// 将领的 LLM 配置与后台问询。
     llm: llm::Config,
     brain: llm::Broker,
+    /// 敌方统帅部（AI 玩家）：独立线程 + 上一次的方针。
+    hq: llm::HqDriver,
+    hq_plan: std::sync::Mutex<String>,
+    hq_last_day: std::sync::Mutex<u32>,
     /// 公文堆（请示 / 抗命 / 通报）
     reports: std::sync::Mutex<Vec<Report>>,
     next_report_id: std::sync::atomic::AtomicU32,
@@ -264,6 +271,12 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         w.report(sim_core::world::EventKind::Command, n);
                     }
                     request_due(&state, w);
+                    // 敌方统帅部：收电报、开会。放在 tick 之前，
+                    // 这样他这一天的判断当天就能落到师团长头上。
+                    let hq_notes = run_hq(&state, w, day);
+                    for (_dissent, text, side) in hq_notes {
+                        w.report_for(sim_core::world::EventKind::Command, text, side);
+                    }
                     sim_core::systems::tick(w);
                     for (dissent, text, side) in notes {
                         let kind = if dissent {
@@ -1914,4 +1927,134 @@ mod tests {
         let long: String = "a".repeat(80);
         assert_eq!(sanitize_slot(&long).len(), 40);
     }
+}// AI 玩家（敌方统帅部）的接入。放在 main.rs 里，紧贴服务端状态。
+
+/// 距上次叫司令部几天了（用来控制频率：司令部不该每天开会）。
+fn hq_due(state: &Arc<ServerState>, w: &World) -> bool {
+    if !state.llm.enabled {
+        return false;
+    }
+    // 模块没写统帅部就不做——不是每个模块都想给敌国一个"人"。
+    let Some(_) = state.module.lock().unwrap().meta.hq.clone() else {
+        return false;
+    };
+    let interval = std::env::var("IRONMIND_HQ_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(4);
+    let last = *state.hq_last_day.lock().unwrap();
+    w.tick >= last + interval
+}
+
+/// 组装给敌国司令部的问询。
+fn build_hq_ask(state: &Arc<ServerState>, w: &World, side: Side) -> Option<llm::HqAsk> {
+    let hq = state.module.lock().unwrap().meta.hq.clone()?;
+    let enemy = side.opponent();
+
+    let mut units = Vec::new();
+    for u in w.units.iter() {
+        if u.side != side || !u.kind.is_ground() || !u.is_alive() {
+            continue;
+        }
+        let prov = w
+            .provinces
+            .get(u.position as usize)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "?".into());
+        units.push((
+            u.name.clone(),
+            prov,
+            u.strength.to_display_f64(),
+            u.supply.to_display_f64(),
+            u.order.label().to_string(),
+            u.encircled,
+        ));
+    }
+
+    // 已知敌情（本方视角的情报，不是真值）
+    let intel = w.intel(side);
+    let mut known = Vec::new();
+    for (i, p) in w.provinces.iter().enumerate() {
+        let it = intel.get(i).copied().unwrap_or_else(sim_core::ProvinceIntel::unknown);
+        if it.accuracy == sim_core::Accuracy::Unknown || p.owner == side {
+            continue;
+        }
+        known.push((
+            p.name.clone(),
+            it.enemy_strength.to_display_f64(),
+            if p.owner == enemy { "敌方控制".to_string() } else { "归属不明".to_string() },
+        ));
+    }
+    known.truncate(18);
+
+    Some(llm::HqAsk {
+        day: w.tick,
+        side: side_cn(side).to_string(),
+        title: hq.title.clone(),
+        general: hq.name.clone(),
+        persona: hq.persona.clone(),
+        agenda: hq.agenda.clone(),
+        objectives: hq.objectives.clone(),
+        units,
+        enemy: known,
+        last_plan: state.hq_plan.lock().unwrap().clone(),
+    })
+}
+
+/// 每 tick 边界：该开会就开会；会开完了就把电报发给各师团。
+fn run_hq(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, String, Side)> {
+    let mut notes = Vec::new();
+
+    // ---- 收：司令部的判断到了 ----
+    if let Some((hq_day, j)) = state.hq.take() {
+        if day.saturating_sub(hq_day) <= 3 {
+            *state.hq_plan.lock().unwrap() = j.plan.clone();
+            trace(format!(
+                "   司令部（第{hq_day}日）：{} —— {} 条电报",
+                j.plan,
+                j.orders.len()
+            ));
+            // 他的命令走**和玩家一样的路**：先变成电报原文，交给师团长判断。
+            // 师团长可以抗命——这正是"敌方也有指挥链"的意思。
+            let title = state
+                .module
+                .lock()
+                .unwrap()
+                .meta
+                .hq
+                .clone()
+                .map(|h| format!("{}{}", h.title, h.name))
+                .unwrap_or_else(|| "司令部".into());
+            for (to, text) in j.orders {
+                let idx = w
+                    .units
+                    .iter()
+                    .position(|u| u.name == to && u.side == Side::Jp && u.is_alive());
+                let Some(idx) = idx else {
+                    trace(format!("   司令部电报找不到收件人：{to}"));
+                    continue;
+                };
+                let incoming = format!("{title}：{text}");
+                if let Some(ask) = build_ask(state, w, idx, &incoming) {
+                    state.brain.submit(llm::Job { unit: idx, day, ask, telegram: None });
+                    trace(format!("   司令部 → {to}：{text}"));
+                    notes.push((false, format!("敌司令部电令 {}", to), Side::Jp));
+                }
+            }
+            if !j.reason.is_empty() {
+                trace(format!("   司令部理由：{}", j.reason));
+            }
+        }
+    }
+
+    // ---- 发：到日子了就叫一次 ----
+    if hq_due(state, w) {
+        if let Some(ask) = build_hq_ask(state, w, Side::Jp) {
+            *state.hq_last_day.lock().unwrap() = w.tick;
+            state.hq.submit(w.tick, ask);
+            trace(format!("   问询敌司令部（第{}日）", w.tick));
+        }
+    }
+
+    notes
 }
