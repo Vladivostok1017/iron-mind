@@ -23,6 +23,7 @@ pub mod endings;
 pub mod fixed;
 pub mod hash;
 pub mod intel;
+pub mod politics;
 pub mod rng;
 pub mod rules;
 pub mod scenario;
@@ -33,7 +34,7 @@ pub use fixed::Fixed;
 pub use intel::IntelSummary;
 pub use rules::{Condition, Phase, Primitive, Rule, RuleSet};
 pub use world::{
-    Accuracy, Commander, Order, Province, ProvinceIntel, Side, Terrain, Unit, UnitKind, World,
+    Accuracy, Commander, Features, Order, Province, ProvinceIntel, Side, Terrain, Unit, UnitKind, World,
 };
 
 /// 连续跑 `n` 个 tick，返回每个 tick 结束时的世界哈希。

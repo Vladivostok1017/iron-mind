@@ -37,6 +37,7 @@ fn scenario() -> ScenarioDef {
         comms: None,
         rules: Vec::<RuleDef>::new(),
         endings: Vec::new(),
+        preview: None,
     }
 }
 
@@ -80,6 +81,9 @@ fn unit(id: &str, side: SideDef, strength: f64, pos: u32) -> UnitDef {
         commander: None,
         reform_days: 0,
         reform_ratio: 0.0,
+        ammo: 1.0,
+        fuel: 1.0,
+        fuel_burn: None,
         note: String::new(),
     }
 }
@@ -94,6 +98,7 @@ fn build(cn: f64, jp: f64) -> Vec<String> {
         ],
     };
     let oob = OobDef {
+        factions: Vec::new(),
         units: vec![
             unit("cn-1", SideDef::Cn, cn, 0),
             unit("jp-1", SideDef::Jp, jp, 1),

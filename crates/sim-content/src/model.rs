@@ -156,6 +156,32 @@ pub struct ScenarioDef {
     /// 模块自定义规则。这是模块"扩展玩法"的入口。
     #[serde(default)]
     pub rules: Vec<RuleDef>,
+    /// **预览版功能开关**。不写 = 全关 = 第一版发行版的定稿行为。
+    ///
+    /// 为什么放在内容里而不是命令行开关：同一台引擎要能同时跑
+    /// 定稿战役和实验战役，而且回放必须靠**模块自己**说明它想开哪些机制，
+    /// 否则同一个模块在两个人的机器上会跑出两种结果。
+    #[serde(default)]
+    pub preview: Option<PreviewDef>,
+}
+
+/// 预览版功能的开关表。
+///
+/// 这些机制**不进第一版发行版的平衡**：它们会改变战斗、补给与将领行为，
+/// 所以只在模块显式打开时才生效。老模块不写这一段，跑出来的每个字节都和
+/// 定稿版本一致（状态哈希也不变）。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
+pub struct PreviewDef {
+    /// 弹药与油料：打光了真的打不动，缺油的装甲走不动。
+    #[serde(default)]
+    pub ammo_fuel: bool,
+    /// 铁路可被炸断（3 级损坏），也会被就地抢修。
+    #[serde(default)]
+    pub rail_damage: bool,
+    /// 派系与人事：将领有靠山，靠山影响服从，可以撤换。
+    #[serde(default)]
+    pub politics: bool,
 }
 
 /// 规则的阶段。
@@ -413,6 +439,9 @@ pub struct ClauseDef {
 #[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct OobDef {
     pub units: Vec<UnitDef>,
+    /// 派系（预览版）。不写就是没有派系政治。
+    #[serde(default)]
+    pub factions: Vec<FactionDef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -496,6 +525,17 @@ pub struct UnitDef {
     /// 整编后补到满编的几成（0.4 = 四成）。
     #[serde(default)]
     pub reform_ratio: f64,
+    /// 开局弹药基数 0-1（预览版 `preview.ammo_fuel` 才有意义，默认满）。
+    #[serde(default = "default_one_f64")]
+    pub ammo: f64,
+    /// 开局油料基数 0-1。同上。
+    #[serde(default = "default_one_f64")]
+    pub fuel: f64,
+    /// 每天每动一步的油料消耗 0-1（默认按兵种给：步兵 0，装甲 0.12，海空军 0.15）。
+    ///
+    /// 写 0 表示"这支部队不吃油"（马拉炮兵、徒步步兵）。
+    #[serde(default)]
+    pub fuel_burn: Option<f64>,
     #[serde(default)]
     pub note: String,
 }
@@ -531,6 +571,28 @@ pub struct CommanderDef {
     /// 职务（第几军司令官、师长……），纯展示与提示词用。
     #[serde(default)]
     pub title: String,
+    /// 所属派系 id（预览版 `preview.politics`）。留空 = 无派系（技术军官、中央直系）。
+    #[serde(default)]
+    pub faction: Option<String>,
+}
+
+/// 一个派系（预览版 `preview.politics`）。
+///
+/// 派系是**人**的关系，所以写在 `oob.json` 里、和将领表放一起。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
+pub struct FactionDef {
+    /// 稳定 id，将领用 `faction` 引用它。
+    pub id: String,
+    /// 显示名。
+    pub name: String,
+    /// 归属阵营。派系只在本方内部竞争。
+    pub side: SideDef,
+    /// 初始朝中分量 0-1。引擎会围绕它缓慢漂移，战功与败绩再推动它。
+    #[serde(default = "default_half")]
+    pub weight: f64,
+    #[serde(default)]
+    pub note: String,
 }
 
 fn default_half() -> f64 {

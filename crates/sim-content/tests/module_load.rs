@@ -79,6 +79,7 @@ fn scenario() -> ScenarioDef {
         comms: None,
         rules: Vec::new(),
         endings: Vec::new(),
+        preview: None,
     }
 }
 
@@ -122,6 +123,9 @@ fn unit(id: &str, side: SideDef, strength: f64, pos: u32) -> UnitDef {
         commander: None,
         reform_days: 0,
         reform_ratio: 0.0,
+        ammo: 1.0,
+        fuel: 1.0,
+        fuel_burn: None,
         note: String::new(),
     }
 }
@@ -138,6 +142,7 @@ fn minimal_parts() -> (ModuleMeta, ScenarioDef, MapDef, OobDef) {
         provinces: vec![a, b],
     };
     let oob = OobDef {
+        factions: Vec::new(),
         units: vec![
             unit("cn-1", SideDef::Cn, 10.0, 0),
             unit("jp-1", SideDef::Jp, 10.0, 1),
@@ -389,6 +394,7 @@ fn warns_on_unreachable_unit() {
     let mut map2 = map;
     map2.provinces.push(d);
     let oob = OobDef {
+        factions: Vec::new(),
         units: vec![
             unit("cn-1", SideDef::Cn, 10.0, 3),
             unit("jp-1", SideDef::Jp, 10.0, 0),

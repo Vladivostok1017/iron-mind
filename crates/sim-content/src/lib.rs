@@ -271,6 +271,18 @@ pub fn build_world(module: &LoadedModule) -> World {
         unit.strike_power = Fixed::from_f64_input(u.strike_power.max(0.0));
         unit.reform_days = u.reform_days;
         unit.reform_ratio = Fixed::from_f64_input(u.reform_ratio.clamp(0.0, 1.0));
+        // 预览版弹药/油料：模块不写就是满的，而且完全不影响模拟（开关默认关）。
+        unit.ammo = Fixed::from_f64_input(u.ammo.clamp(0.0, 1.0));
+        unit.fuel = Fixed::from_f64_input(u.fuel.clamp(0.0, 1.0));
+        unit.fuel_burn = match u.fuel_burn {
+            Some(v) => Fixed::from_f64_input(v.clamp(0.0, 1.0)),
+            // 没写就按兵种给个默认：步兵徒步不吃油，机械化才吃。
+            None => match unit.kind {
+                sim_core::UnitKind::Infantry => Fixed::ZERO,
+                sim_core::UnitKind::Armor => Fixed::ratio(12, 100),
+                sim_core::UnitKind::Air | sim_core::UnitKind::Naval => Fixed::ratio(15, 100),
+            },
+        };
         if let Some(c) = &u.commander {
             unit.commander = sim_core::world::Commander::new(
                 &c.name,
@@ -279,7 +291,8 @@ pub fn build_world(module: &LoadedModule) -> World {
                 c.aggression,
                 c.caution,
             )
-            .with_persona(&c.title, &c.persona, &c.agenda);
+            .with_persona(&c.title, &c.persona, &c.agenda)
+            .with_faction(c.faction.as_deref());
         }
         units.push(unit);
     }
@@ -292,6 +305,9 @@ pub fn build_world(module: &LoadedModule) -> World {
     };
 
     let mut world = World::new(seed, provinces, units);
+    // 预览版开关：模块不声明 = 全关 = 第一版发行版的定稿行为。
+    // 这一行是"定稿不被改"的总闸：下面所有新系统都先看这几个布尔值。
+    world.fx = features_from(module.scenario.preview.as_ref());
     world.comms = comms_from(module.scenario.comms.as_ref());
     world.campaign_days = module.scenario.days;
     // 编制实体：按 parent 归组。
@@ -325,6 +341,11 @@ pub fn build_world(module: &LoadedModule) -> World {
     }
     world.endings = endings_from(&module.scenario.endings);
 
+    // 派系（预览版）：把将领按 `faction` 归组，算好部队下标。
+    if world.fx.politics {
+        build_factions(&mut world, &module.oob.factions);
+    }
+
     // 编译模块声明的规则
     let (rule_set, _problems) = rules_from(&module.scenario.rules);
     world.rules = std::sync::Arc::new(rule_set);
@@ -332,8 +353,50 @@ pub fn build_world(module: &LoadedModule) -> World {
     world
 }
 
-/// 从模块配置解析通信条件。
+/// 预览版开关：把模块声明翻成引擎的 `Features`。
 ///
+/// 刻意写成"只有显式 true 才开"：字段漏写、拼错、旧引擎忽略——三种情况都落到全关，
+/// 也就是第一版发行版的行为。这是"定稿不能被悄悄改掉"的那道闸。
+pub fn features_from(def: Option<&PreviewDef>) -> sim_core::Features {
+    match def {
+        None => sim_core::Features::default(),
+        Some(d) => sim_core::Features {
+            ammo_fuel: d.ammo_fuel,
+            rail_damage: d.rail_damage,
+            politics: d.politics,
+        },
+    }
+}
+
+/// 把派系声明装上世界，并按将领的 `faction` 归组。
+///
+/// 忽略的引用不报错：内容层永远可能写错（引用了不存在的派系 id），
+/// 那时候这支部队就算"无派系"，不 panic、也不影响确定性。
+fn build_factions(world: &mut World, defs: &[FactionDef]) {
+    use sim_core::politics::Faction;
+    let mut out: Vec<Faction> = Vec::new();
+    for d in defs {
+        let side = side_of(d.side);
+        let f = Faction::new(
+            &d.id,
+            &d.name,
+            side,
+            Fixed::from_f64_input(d.weight.clamp(0.0, 1.0)),
+        );
+        out.push(f);
+    }
+    for (i, u) in world.units.iter().enumerate() {
+        let Some(fid) = u.commander.faction.as_deref() else {
+            continue;
+        };
+        if let Some(f) = out.iter_mut().find(|f| f.id == fid && f.side == u.side) {
+            f.units.push(i);
+        }
+    }
+    world.factions = out;
+}
+
+/// 从模块配置解析通信条件。///
 /// 引擎不认识"年代"，只认识延迟天数与通信手段的名字。
 /// 这样 1805 年和 1944 年用的是同一套代码，只是参数不同。
 /// 把模块里"人话写的"结局编译成引擎认识的子句。

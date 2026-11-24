@@ -65,6 +65,13 @@ fn main() {
     for w in &module.warnings {
         println!("  [警告] {}: {}", w.code, w.message);
     }
+    // 预览版开关：开着才打这一行。作者/玩家看到它就知道"现在的规则不是定稿那套"。
+    {
+        let fx = sim_content::features_from(module.scenario.preview.as_ref());
+        if fx.any() {
+            println!("  预览版：{}", fx.names().join("、"));
+        }
+    }
 
     // 模块可以自带真实省界；没有就让前端用 Voronoi 兜底（保持向后兼容）
     let geo_path = std::path::Path::new(&module_path).join("provinces_geo.json");
@@ -641,6 +648,9 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 "engine": env!("CARGO_PKG_VERSION"),
                 "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
                 "built": built,
+                // 这个引擎**会**哪些预览版机制。模块声明了但引擎不支持时，
+                // 前端要明说"你的引擎太旧"，而不是默默少几个面板。
+                "preview": ["ammo_fuel", "rail_damage", "politics", "replay"],
             })
             .to_string();
             respond(&mut stream, 200, "application/json", &body)
@@ -2199,6 +2209,10 @@ fn snapshot(w: &World) -> String {
                     "march_target": u.order.target(),
                     "disobeyed": u.disobeyed,
                     "dissent": u.dissent_reason,
+                    // 预览版：弹药/油料（开关关着时恒为 1.0，前端不显示）。
+                    "ammo": round2(u.ammo.to_display_f64()),
+                    "fuel": round2(u.fuel.to_display_f64()),
+                    "faction": u.commander.faction,
                 }))
             })
             .collect();
@@ -2223,6 +2237,8 @@ fn snapshot(w: &World) -> String {
             // 之前只有引擎知道（`Province.rail` 参与补给计算），界面拿不到，
             // 于是"守住南浔铁路"这条最重要的战略提示在图上完全看不见。
             "rail": p.rail,
+            // 预览版：铁路损坏 0-3（0 = 通）。开关关着时恒为 0。
+            "rail_damage": p.rail_damage,
             "neighbors": p.neighbors,
             // 真实高程（米）：地形是怎么判出来的，给玩家一个可核对的数字。
             // 模块没写就是 null，前端据此决定要不要显示。
@@ -2304,6 +2320,30 @@ fn snapshot(w: &World) -> String {
     json!({
         "tick": w.tick,
         "campaign_days": w.campaign_days,
+        // 预览版功能（模块显式声明才有）。前端据此显示"预览"角标与对应面板，
+        // 没开就完全当作不存在——第一版发行版的界面不该多出用不了的按钮。
+        "features": w.fx.names(),
+        // 派系（预览版 politics）：只有模块声明了才有内容。
+        // 影响力是**公开的**（朝中谁说得上话，军中都看得见），
+        // 将领个人的服从度则永远不给玩家——那是模型用的内部量。
+        "factions": w
+            .factions
+            .iter()
+            .map(|f| {
+                json!({
+                    "id": f.id,
+                    "name": f.name,
+                    "cn": f.side == Side::Cn,
+                    "influence": round2(f.influence.to_display_f64()),
+                    "generals": f
+                        .units
+                        .iter()
+                        .filter_map(|&i| w.units.get(i).map(|u| u.commander.name.clone()))
+                        .collect::<Vec<_>>(),
+                    "units": f.units,
+                })
+            })
+            .collect::<Vec<_>>(),
         "plan": plan,
         "outcome": outcome,
         "player": "cn",

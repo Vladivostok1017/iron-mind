@@ -420,6 +420,9 @@
     <div class="stat"><b id="s-prov">—</b><span>控制省份</span></div>
     <div class="stat"><b id="s-enemy">—</b><span>敌军估计</span></div>
     <div class="spacer"></div>
+    <!-- 预览版角标：模块声明了 preview.* 才出现。
+         第一版发行版的界面不该多出奇怪的东西，所以默认 display:none。 -->
+    <div class="pend" id="t-preview" style="display:none" title="">预览版</div>
     <div class="pend" id="pending">战报 —</div>
     <div class="clock" id="clock">第 0 日</div>
   </div>
@@ -1048,6 +1051,20 @@ function renderTop() {
   const pe = $("pending");
   pe.textContent = pend > 0 ? "战报 " + pend + " 份在途" : "战报已清";
   pe.className = "pend" + (pend > 0 ? " hot" : "");
+  // 预览版角标：模块开了 preview.* 才亮。点它说明现在多了哪些机制——
+  // 不说清楚的话，玩家会以为"弹药打光了打不动"是 bug。
+  const fx = S.features || [];
+  const pv = $("t-preview");
+  if (pv) {
+    pv.style.display = fx.length ? "" : "none";
+    if (fx.length) {
+      const NAME = { ammo_fuel: "弹药与油料", rail_damage: "铁路被炸", politics: "派系与人事" };
+      pv.textContent = "预览版 " + fx.filter((f) => NAME[f]).map((f) => NAME[f]).join("·");
+      pv.title = "这个战役用到了第一版发行版之后的实验机制：\n" +
+        fx.map((f) => "· " + (NAME[f] || f)).join("\n") +
+        "\n它们不在定稿平衡里，数值会变。";
+    }
+  }
   $("k-comms").textContent = S.comms.kind;
   $("k-delay").textContent = S.comms.report_delay + " 日";
   $("k-known").textContent = (S.enemy.known_provinces || 0) + " 处";

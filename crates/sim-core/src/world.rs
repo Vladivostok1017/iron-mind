@@ -531,6 +531,11 @@ pub struct Province {
     /// 铁路断了（省丢了），同一支部队的补给立刻塌。
     /// 以前 supply_throughput 只是一个省上的常数，看不出"干线"这件事。
     pub rail: bool,
+    /// 铁路损坏程度 0-3（0 = 通，3 = 断）。**只有 `Features::rail_damage` 开启时才变**；
+    /// 老模块永远是 0，也不进哈希——定稿的行为不受影响。
+    pub rail_damage: u8,
+    /// 抢修进度：攒够天数就减一级损坏。同上，只在预览版里动。
+    pub rail_repair: u8,
     /// 经度。**不参与模拟计算**，只用于渲染时把省份摆到真实位置。
     pub lon: Fixed,
     /// 纬度。同上。
@@ -554,6 +559,8 @@ impl Province {
             owner,
             is_supply_source: false,
             rail: false,
+            rail_damage: 0,
+            rail_repair: 0,
             lon: Fixed::ZERO,
             lat: Fixed::ZERO,
             positions: Vec::new(),
@@ -700,6 +707,11 @@ pub struct Commander {
     pub title: String,
     /// 他的结局。殉国不是一句战报——它会改变这支部队还能不能重建。
     pub fate: Fate,
+    /// 所属派系 id（预览版 `Features::politics`）。None = 无派系。
+    ///
+    /// 为什么不进哈希：它是**内容常量**，同一模块每次加载都一样；
+    /// 会变的是派系影响力，那个已经单独进哈希了。
+    pub faction: Option<String>,
 }
 
 /// 将领的结局。
@@ -757,6 +769,7 @@ impl Commander {
             agenda: String::new(),
             title: String::new(),
             fate: Fate::Active,
+            faction: None,
         }
     }
 
@@ -771,7 +784,14 @@ impl Commander {
             agenda: String::new(),
             title: String::new(),
             fate: Fate::Active,
+            faction: None,
         }
+    }
+
+    /// 挂上派系（预览版 `Features::politics`）。
+    pub fn with_faction(mut self, faction: Option<&str>) -> Self {
+        self.faction = faction.map(|f| f.to_string());
+        self
     }
 
     /// 挂上人物志（只给 LLM 用）。
@@ -846,6 +866,45 @@ impl Order {
             Order::Fortify => "筑工事",
             Order::Rest => "整补",
         }
+    }
+}
+
+/// 预览版功能开关。
+///
+/// 为什么要有它：第一版发行版已经定稿，**默认行为必须逐位不变**。
+/// 新系统（弹药油料、铁路被炸、派系人事）只有在模块显式声明时才参与模拟，
+/// 而且只有开启时才写进状态哈希——所以老模块的哈希序列一个字节都不变。
+///
+/// 这不是"难度选项"：它是**内容格式的扩展**。同一个引擎既跑定稿的旧战役，
+/// 也跑用新机制写的新战役，两者的确定性互不干扰。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Features {
+    /// 弹药与油料：打光了真的打不动。
+    pub ammo_fuel: bool,
+    /// 铁路可被炸断、也会被抢修。
+    pub rail_damage: bool,
+    /// 派系与人事：将领的靠山会变，靠山影响他的服从。
+    pub politics: bool,
+}
+
+impl Features {
+    pub fn any(&self) -> bool {
+        self.ammo_fuel || self.rail_damage || self.politics
+    }
+
+    /// 界面与 SDK 用的能力名（顺序稳定，别随便改）。
+    pub fn names(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.ammo_fuel {
+            v.push("ammo_fuel");
+        }
+        if self.rail_damage {
+            v.push("rail_damage");
+        }
+        if self.politics {
+            v.push("politics");
+        }
+        v
     }
 }
 
@@ -929,6 +988,13 @@ pub struct Unit {
     pub reform_days: u32,
     /// 二次整编后的兵力比例（相对满编）。
     pub reform_ratio: Fixed,
+    /// 弹药存量 0-1（1 = 一个基数满）。**只有 `Features::ammo_fuel` 开启时才变**。
+    /// 老模块永远是 1.0，也不进哈希——所以定稿的行为不受影响。
+    pub ammo: Fixed,
+    /// 油料存量 0-1。同上。
+    pub fuel: Fixed,
+    /// 每动一步消耗的油料 0-1。0 = 不吃油（徒步步兵、马拉炮兵）。
+    pub fuel_burn: Fixed,
 }
 
 impl Unit {
@@ -969,6 +1035,9 @@ impl Unit {
             reform_day: None,
             reform_days: 0,
             reform_ratio: Fixed::ZERO,
+            ammo: Fixed::ONE,
+            fuel: Fixed::ONE,
+            fuel_burn: Fixed::ZERO,
         }
     }
 
@@ -1028,6 +1097,10 @@ pub struct World {
     pub log: Vec<Event>,
     /// 模块声明的编制：兵团（实体，不只是字符串）。
     pub formations: Vec<Formation>,
+    /// 预览版功能开关。全部关闭 = 第一版发行版的定稿行为。
+    pub fx: Features,
+    /// 派系（预览版）。模块不声明就永远是空的，也不进哈希。
+    pub factions: Vec<crate::politics::Faction>,
     /// 战役长度（天）。到日子就判结局。
     pub campaign_days: u32,
     /// 模块声明的结局规则，按 priority 判。
@@ -1061,15 +1134,22 @@ impl World {
             log: Vec::new(),
             in_transit: Vec::new(),
             formations: Vec::new(),
+            fx: Features::default(),
+            factions: Vec::new(),
             campaign_days: u32::MAX,
             endings: Vec::new(),
             outcome: None,
         }
     }
 
+    /// 打开模块声明的预览版功能。**默认全关**，关着就是定稿行为。
+    pub fn with_features(mut self, fx: Features) -> Self {
+        self.fx = fx;
+        self
+    }
+
     /// 某方"在路上"的报告队列。
-    pub fn pending_mut(&mut self, side: Side) -> &mut Vec<PendingReport> {
-        match side {
+    pub fn pending_mut(&mut self, side: Side) -> &mut Vec<PendingReport> {        match side {
             Side::Cn => &mut self.pending_cn,
             Side::Jp => &mut self.pending_jp,
         }
@@ -1270,6 +1350,25 @@ impl World {
             }
         }
 
+        // ---- 预览版状态：只在模块开启对应功能时才写 ----
+        //
+        // 这是"定稿的第一版不受影响"的关键：老模块（fx 全关）走不到下面任何一行，
+        // 哈希字节流与 0.11.0 完全一致，旧回放、旧存档、黄金哈希都还成立。
+        if self.fx.ammo_fuel {
+            for u in &self.units {
+                h.write_i32(u.ammo.raw());
+                h.write_i32(u.fuel.raw());
+            }
+        }
+        if self.fx.rail_damage {
+            for p in &self.provinces {
+                h.write_u8(p.rail_damage);
+                h.write_u8(p.rail_repair);
+            }
+        }
+        if self.fx.politics {
+            crate::politics::hash_into(&mut h, self);
+        }
         h.finish()
     }
 }
