@@ -547,7 +547,41 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             drop(list);
             respond(&mut stream, 200, "application/json", &json!({ "telegrams": arr }).to_string())
         }
-        ("POST", "/api/save") => {
+        // 存档槽位列表：名字、模块、天数、命令条数、修改时间。
+        ("GET", "/api/saves") => {
+            use serde_json::json;
+            let mut arr = Vec::new();
+            let mut files: Vec<_> = std::fs::read_dir("saves")
+                .map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            files.sort();
+            for p in files {
+                if p.extension().and_then(|x| x.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&p) else { continue };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+                let slot = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let modified = p
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                arr.push(json!({
+                    "slot": slot,
+                    "module_id": v.get("module_id").cloned().unwrap_or(json!("")),
+                    "day": v.get("day").cloned().unwrap_or(json!(0)),
+                    "commands": v.get("commands").and_then(|c| c.as_array()).map(|a| a.len()).unwrap_or(0),
+                    "modified": modified,
+                }));
+            }
+            respond(&mut stream, 200, "application/json", &json!({ "saves": arr }).to_string())
+        }        ("POST", "/api/save") => {
             use serde_json::json;
             let out = {
                 let g = state.world.lock().unwrap();
@@ -560,23 +594,40 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     .filter(|c| c.reject.is_none())
                     .cloned()
                     .collect();
+                // 注意：两个 lock() 不能写在同一个结构体字面量里。
+                // 临时 guard 会活到整条语句结束，第二次 lock 就是**自死锁**
+                // （std 的 Mutex 不可重入）。踩过一次：存档请求永远不返回。
+                let (mid, mver) = {
+                    let m = state.module.lock().unwrap();
+                    (m.meta.id.clone(), m.meta.version.clone())
+                };
                 let payload = SaveFile {
                     v: 1,
-                    module_id: state.module.lock().unwrap().meta.id.clone(),
-                    module_version: state.module.lock().unwrap().meta.version.clone(),
+                    module_id: mid,
+                    module_version: mver,
                     seed: w.seed,
                     day: w.tick,
                     state_hash: format!("{:016x}", w.state_hash()),
                     commands: cmds,
                 };
                 let _ = std::fs::create_dir_all("saves");
-                let name = format!(
-                    "saves/save-{}.json",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                );
+                // 槽位：给了名字就用名字，没给就按时间戳（向后兼容）。
+                // 名字要消毒——它会被拼进文件路径，不能让它带 ../ 或分隔符。
+                let slot = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("slot").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                    .map(|s| sanitize_slot(&s))
+                    .filter(|s| !s.is_empty());
+                let name = match slot {
+                    Some(s) => format!("saves/{s}.json"),
+                    None => format!(
+                        "saves/save-{}.json",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    ),
+                };
                 match serde_json::to_string_pretty(&payload) {
                     Ok(s) => match std::fs::write(&name, s) {
                         Ok(_) => {
@@ -600,10 +651,18 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
         }
         ("POST", "/api/load") => {
             use serde_json::json;
-            // 不传 path 就载入最新的一份
-            let want: Option<String> = serde_json::from_str::<serde_json::Value>(&body_str)
-                .ok()
-                .and_then(|v| v.get("path").and_then(|x| x.as_str()).map(|s| s.to_string()));
+            // 三种写法：`slot`（槽位名）、`path`（完整路径）、都不给（载入最新）
+            let body: serde_json::Value =
+                serde_json::from_str(&body_str).unwrap_or_else(|_| json!({}));
+            let want: Option<String> = body
+                .get("slot")
+                .and_then(|x| x.as_str())
+                .map(|s| format!("saves/{}.json", sanitize_slot(s)))
+                .or_else(|| {
+                    body.get("path")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string())
+                });
             let path = match want.or_else(latest_save) {
                 Some(p) => p,
                 None => {
@@ -868,6 +927,25 @@ struct SaveFile {
     day: u32,
     state_hash: String,
     commands: Vec<CmdRecord>,
+}
+
+/// 存档槽位名消毒。
+///
+/// 这个名字会被拼进文件路径，所以只留字母数字、`-`、`_`、下划线以外的
+/// 一概换成 `-`，并砍到 40 字符。空名 = 不指定槽位（走时间戳）。
+fn sanitize_slot(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    cleaned.trim_matches('-').chars().take(40).collect()
 }
 
 /// 找最新的存档（按文件名里的时间戳）。
@@ -1805,3 +1883,25 @@ const BASEMAP: &str = include_str!("../web/basemap.json");
 
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_slot;
+
+    #[test]
+    fn slot_names_cannot_escape_the_saves_directory() {
+        assert_eq!(sanitize_slot("../../../etc/passwd"), "etc-passwd");
+        assert_eq!(sanitize_slot("..\\..\\x"), "x");
+        assert_eq!(sanitize_slot("a/b"), "a-b");
+        assert_eq!(sanitize_slot("  "), "");
+    }
+
+    #[test]
+    fn slot_names_keep_ascii_and_cjk() {
+        assert_eq!(sanitize_slot("nanxun-01"), "nanxun-01");
+        assert_eq!(sanitize_slot("第一局"), "第一局");
+        // 40 字符上限
+        let long: String = "a".repeat(80);
+        assert_eq!(sanitize_slot(&long).len(), 40);
+    }
+}

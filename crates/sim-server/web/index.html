@@ -1602,16 +1602,39 @@ bind("btn-next", "click", () => api("/api/advance", {}));
 // 存档 / 读档。
 // 存的是命令流而不是世界快照：读档时服务端用 (模块, 种子, 命令流) 重跑一遍，
 // 并核对哈希——对得上才说明这一局可复现（见 docs/11）。
+// 存档：可以起名字（槽位）。名字只留字母数字与 - _，由服务端再消毒一次。
 bind("btn-save", "click", async () => {
+  const slot = prompt("存档名（留空 = 按时间戳）", "第" + ((S && S.tick) || 0) + "日");
+  if (slot === null) return;
   try {
-    const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const r = await fetch("/api/save", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot: slot || undefined }),
+    });
     const j = await r.json();
-    toast(j.ok ? "已存档：第 " + j.day + " 日，" + j.commands + " 条命令" : (j.error || "存档失败"));
+    toast(j.ok ? "已存档 " + (j.path || "") + "（第 " + j.day + " 日，" + j.commands + " 条命令）" : (j.error || "存档失败"));
   } catch (e) { toast("存档失败：连不上服务"); }
 });
+// 读档：先列槽位，选一个读。空输入 = 读最新的一份。
 bind("btn-load", "click", async () => {
+  let slot = null;
   try {
-    const r = await fetch("/api/load", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const j = await (await fetch("/api/saves")).json();
+    const list = j.saves || [];
+    if (list.length) {
+      const menu = list.map((s, i) =>
+        (i + 1) + ". " + s.slot + "　第" + s.day + "日 · " + s.commands + " 条命令").join("\n");
+      const pick = prompt("读哪一份？（输入序号，留空 = 最新）\n\n" + menu, "");
+      if (pick === null) return;
+      const idx = parseInt(pick, 10);
+      if (!isNaN(idx) && list[idx - 1]) slot = list[idx - 1].slot;
+    }
+  } catch (e) { /* 列不出来就直接读最新的 */ }
+  try {
+    const r = await fetch("/api/load", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot: slot || undefined }),
+    });
     const j = await r.json();
     if (!j.ok) { toast(j.error || "读档失败"); return; }
     S = j.state;

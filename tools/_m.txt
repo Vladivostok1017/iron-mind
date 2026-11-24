@@ -1,0 +1,20 @@
+P3 收尾：存档槽位（多存档、能列出、能按名字读）
+
+以前只有一个"最新的文件"（saves/save-<时间戳>.json），想回看上周那局没有办法。
+
+- POST /api/save {"slot":"南浔-01"} → saves/<slot>.json；不给 slot 按时间戳（向后兼容）
+- GET /api/saves → 列出槽位（名字/模块/天数/命令条数/修改时间）
+- POST /api/load {"slot":...} → 按槽位读；仍支持 path；都不给读最新
+- 界面：存/读档改成弹框，读档会列出所有槽位让你选序号
+
+槽位名会被拼进文件路径，服务端消毒：只留字母数字（含中文）、-、_，
+其余换成 -，最多 40 字。../../../etc/passwd → etc-passwd，..\..\x → x。
+有单元测试（sanitize_slot 两个用例）。
+
+踩到并修掉一个死锁：SaveFile 结构体字面量里写了两次 state.module.lock()，
+临时 guard 活到整条语句结束，第二次 lock 就是自死锁（std Mutex 不可重入）。
+表现是 POST /api/save 永不返回，而别的请求照常工作——日志里只有一行
+"POST /api/save body=..." 就再没下文。改成先取局部变量再构造。
+
+实测：存 test01 → 列表里出现 → 按槽位读回第 2 日、3 条命令，ok=true。
+共 106 测试全过（新增 sanitize_slot 两个），golden 不变（只动服务端）。
