@@ -1,0 +1,13 @@
+[package]
+name = "sim-testbed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sim-core = { path = "../sim-core" }
+sim-content = { path = "../sim-content" }
+
+[[bin]]
+name = "sim-testbed"
+path = "src/main.rs"

@@ -1,0 +1,11 @@
+[package]
+name = "sim-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "sim_core"
+path = "src/lib.rs"
+# cdylib 用于产出 .wasm 给前端加载；rlib 供本仓库其他 crate 引用。
+crate-type = ["cdylib", "rlib"]

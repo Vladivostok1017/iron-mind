@@ -1,0 +1,10 @@
+{
+  "id": "org.ironmind.demo_1805",
+  "name": "演示 · 1805 前电报时代",
+  "version": "0.1.0",
+  "author": "iron-mind",
+  "description": "一个测试用的极小模块，用来验证同一套引擎能跑不同年代的战役。骑兵传令，命令要三天才能传回。不是史实场景，只是兼容性验证。",
+  "engine": { "min": "0.1.0" },
+  "content_schema": 1,
+  "playable_side": "cn"
+}

@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>钢心 · 南浔线 1938</title>
+<style>
+  :root {
+    --bg: #0b0e12; --sea: #0a1119; --panel: #12161c; --panel-hi: #171d25;
+    --line: #232a34; --text: #cfd6de; --dim: #79828e;
+    --gold: #e3b04b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    user-select: none;
+  }
+  #app { display: grid; grid-template-rows: 46px 1fr 52px; height: 100vh; }
+  #top {
+    display: flex; align-items: center; gap: 18px; padding: 0 16px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  #main { display: grid; grid-template-columns: 1fr 316px; overflow: hidden; }
+  #stage { position: relative; background: var(--sea); overflow: hidden; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; overflow: hidden; }
+  #bottom { display: flex; align-items: center; gap: 8px; padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line); }
+
+  .crest { width: 26px; height: 26px; border-radius: 3px;
+    background: linear-gradient(135deg, #4f8fd4, #2b4d72);
+    display: grid; place-items: center; font-size: 13px; font-weight: 700; color: #dce8f5; }
+  .nation { font-size: 14px; font-weight: 600; letter-spacing: .03em; }
+  .sub { font-size: 11px; color: var(--dim); }
+  .stat { display: flex; flex-direction: column; line-height: 1.25; }
+  .stat b { font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .stat span { font-size: 10px; color: var(--dim); letter-spacing: .06em; }
+  .spacer { flex: 1; }
+  .clock { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); }
+  .pend { padding: 3px 9px; border-radius: 3px; font-size: 11px;
+    background: #1d232c; border: 1px solid var(--line); color: var(--dim); }
+  .pend.hot { color: var(--gold); border-color: #4a3d24; background: #241e12; }
+
+  svg { display: block; width: 100%; height: 100%; }
+  .prov { cursor: pointer; }
+  .prov path { transition: filter .1s; }
+  .prov:hover path.land { filter: brightness(1.22); }
+  .land { stroke: #0d1218; stroke-width: 1.1; stroke-linejoin: round; }
+  .water { stroke: #12303f; stroke-width: .8; stroke-linejoin: round; }
+  .prov.sel path.land, .prov.sel path.water {
+    stroke: var(--gold); stroke-width: 2.2;
+  }
+
+  .name {
+    font-size: 10.5px; fill: #b6c0cc; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0a0e13; stroke-width: 2.6px; stroke-linejoin: round;
+  }
+  .name.enemy { fill: #d2a49c; }
+  .name.unknown { fill: #4f5763; }
+  .est { font-size: 9.5px; fill: #e8c9a0; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
+  .fortmark { font-size: 8px; fill: #b09a63; text-anchor: middle; pointer-events: none; }
+
+  .unit { cursor: pointer; }
+  .unit .plate { stroke: #0a0e13; stroke-width: 1.2; }
+  .unit.mine .plate { fill: #74abdd; }
+  .unit.enemy .plate { fill: #bd5b4e; }
+  .unit.sel .plate { stroke: var(--gold); stroke-width: 2.2; }
+  .unit .glyph { font-size: 7px; fill: #0a0e13; font-weight: 700; text-anchor: middle; pointer-events: none; }
+  .unit .cname { font-size: 8.5px; fill: #bcc7d3; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
+  .unit .nname { font-size: 8px; fill: #93a2b3; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
+  .pulse { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .3 } 50% { opacity: .95 } }
+
+  .sec { border-bottom: 1px solid var(--line); padding: 10px 13px; }
+  .sec h3 { font-size: 10px; letter-spacing: .14em; color: var(--dim); font-weight: 600; margin-bottom: 7px; }
+  .kv { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
+  #node-list .nd { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0;
+    font-size: 11.5px; color: #a8b3c0; cursor: pointer; border-bottom: 1px solid #151b22; }
+  #node-list .nd:hover { color: #dbe8f5; background: #141b23; }
+  #node-list .nd.here { color: var(--gold); cursor: default; }
+  #node-list .nd .w { color: #6f7a86; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #node-list .nd.here .w { color: #8a7a52; }
+  .kv b { font-variant-numeric: tabular-nums; font-weight: 500; }
+  #log { flex: 1; overflow-y: auto; padding: 4px 0; }
+  #log .item { padding: 5px 13px; font-size: 11.5px; color: #8b95a1; border-bottom: 1px solid #191f26; line-height: 1.45; }
+  /* 战报按引擎给的事件类别上色 */
+  #log .item.k-combat { color: #c9a07a; }
+  #log .item.k-occupy { color: #8fb8d8; }
+  #log .item.k-dissent { color: var(--gold); }
+  #log .item.k-retreat { color: #a98b7a; }
+  #log .item.k-intel { color: #7f9a86; }
+  #log .item.k-cmd { color: #cfd8e3; }
+  #log .item.k-supply { color: #9aa6b3; }
+  #log .item.k-rule { color: #6f7a86; }
+  #log .item.hot { color: var(--gold); }
+  #log .item.bad { color: #c47a6e; }
+  #log::-webkit-scrollbar { width: 6px; }
+  #log::-webkit-scrollbar-thumb { background: #2a323c; border-radius: 3px; }
+
+  .modes { display: flex; gap: 2px; }
+  .mode { padding: 6px 11px; font-size: 11.5px; color: var(--dim); background: transparent;
+    border: 1px solid transparent; border-radius: 3px; cursor: pointer; }
+  .mode:hover { background: var(--panel-hi); color: var(--text); }
+  .mode.on { background: #1e2733; color: #cfe0f0; border-color: #2f3d4d; }
+  .sep { width: 1px; height: 22px; background: var(--line); margin: 0 6px; }
+  #hint { font-size: 11.5px; color: var(--dim); flex: 1; }
+  .btn { padding: 7px 16px; font-size: 12.5px; border-radius: 3px; border: 1px solid #2c3846;
+    background: #1b2430; color: #cfdcea; cursor: pointer; font-weight: 500; }
+  .btn:hover { background: #223041; }
+  .btn.primary { background: linear-gradient(180deg, #2f6394, #265079); border-color: #3d7ab5; color: #eaf3fc; }
+  .btn.primary:hover { filter: brightness(1.12); }
+
+  #toast { position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+    background: #1c2530; border: 1px solid #33414f; border-radius: 4px; padding: 7px 15px;
+    font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap; z-index: 10; }
+  #toast.show { opacity: 1; }
+  #tip { position: absolute; pointer-events: none; z-index: 9; background: #161d26;
+    border: 1px solid #2d3947; border-radius: 4px; padding: 8px 11px; font-size: 11.5px;
+    line-height: 1.6; max-width: 220px; display: none; box-shadow: 0 6px 18px rgba(0,0,0,.55); }
+  #tip .t-name { font-weight: 600; color: #dfe7ef; margin-bottom: 3px; }
+  #tip .t-row { color: #8b95a1; }
+  #tip .t-row b { color: #c3ccd6; font-weight: 500; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <div class="crest">中</div>
+    <div>
+      <div class="nation">中华民国 · 第九战区</div>
+      <div class="sub">南浔线 · 第 1 兵团</div>
+    </div>
+    <div class="stat"><b id="s-str">—</b><span>我军兵力</span></div>
+    <div class="stat"><b id="s-prov">—</b><span>控制省份</span></div>
+    <div class="stat"><b id="s-enemy">—</b><span>敌军估计</span></div>
+    <div class="spacer"></div>
+    <div class="pend" id="pending">战报 —</div>
+    <div class="clock" id="clock">第 0 日</div>
+  </div>
+
+  <div id="main">
+    <div id="stage">
+      <svg id="map"></svg>
+      <div id="toast"></div>
+      <div id="tip"></div>
+    </div>
+    <aside>
+      <div class="sec" id="node-sec" style="display:none">
+        <h3>阵地 <span id="node-prov" style="color:#7c8794;font-weight:400"></span></h3>
+        <div id="node-list"></div>
+      </div>
+      <div class="sec">
+        <h3>态势</h3>
+        <div class="kv"><span>通信手段</span><b id="k-comms">—</b></div>
+        <div class="kv"><span>报告延迟</span><b id="k-delay">—</b></div>
+        <div class="kv"><span>已知敌情</span><b id="k-known">—</b></div>
+        <div class="kv"><span>在途战报</span><b id="k-pend">—</b></div>
+      </div>
+      <div class="sec" style="border-bottom:none;padding-bottom:2px"><h3>战报</h3></div>
+      <div id="log"></div>
+    </aside>
+  </div>
+
+  <div id="bottom">
+    <div class="modes" id="modes">
+      <button class="mode on" data-view="owner">归属</button>
+      <button class="mode" data-view="intel">情报</button>
+      <button class="mode" data-view="supply">补给</button>
+      <button class="mode" data-view="terrain">地形</button>
+    </div>
+    <div class="sep"></div>
+    <div class="modes" id="acts">
+      <button class="mode" data-act="fortify">筑工事</button>
+      <button class="mode" data-act="rest">整补</button>
+      <button class="mode" data-act="shift">换阵地</button>
+    </div>
+    <div class="sep"></div>
+    <div id="hint">点选我方单位，再点相邻省份下达命令</div>
+    <button class="btn" id="btn-save">存档</button>
+    <button class="btn" id="btn-load">读档</button>
+    <button class="btn" id="btn-reset">重开</button>
+    <button class="btn" id="btn-3">推进 3 日</button>
+    <button class="btn primary" id="btn-1">推进 1 日 ␣</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const NS = "http://www.w3.org/2000/svg";
+const W = 1000, H = 720, PAD = 26;
+
+// ---- 相机 ----
+// 87 个省挤在一屏里必然看不清，必须能缩放平移。
+// SVG 用 viewBox 当相机：平移缩放改 viewBox，原生命中测试跟着走，不用自己写拾取。
+// （等省+阵地超过约 800 个多边形，再考虑换 Canvas，见 docs/11）
+let cam = { x: 0, y: 0, z: 1 };
+const CAM_MAX = 6;
+
+function camView() {
+  const w = W / cam.z, h = H / cam.z;
+  return { x: cam.x, y: cam.y, w, h };
+}
+
+function applyCam() {
+  const v = camView();
+  const svg = document.getElementById("map");
+  if (svg) svg.setAttribute("viewBox", v.x + " " + v.y + " " + v.w + " " + v.h);
+}
+
+// 把相机限制在地图范围内，别让玩家把地图拖出屏幕外
+function clampCam() {
+  const v = camView();
+  const minX = -v.w * 0.05, maxX = W - v.w * 0.95;
+  const minY = -v.h * 0.05, maxY = H - v.h * 0.95;
+  cam.x = Math.min(maxX, Math.max(minX, cam.x));
+  cam.y = Math.min(maxY, Math.max(minY, cam.y));
+}
+
+let S = null;
+let selUnit = null;
+let view = "owner";
+let curProv = null;
+// 右键查看的省份。null 表示跟随选中单位所在省。
+let nodeProv = null;
+let lastEv = null;
+let geom = null;         // { cells: {id: [[x,y],...]}, centroids: {id:[x,y]}, box }
+const $ = (id) => document.getElementById(id);
+const TERRAIN_CN = { plain: "平原", hill: "丘陵", mountain: "山地", marsh: "沼泽", water: "水域", urban: "城镇" };
+
+/* 顶层 units 不存在于后端快照里，单位是嵌在各省下面的。
+   之前直接写 S.units.find() 会抛异常，导致选中单位后地图渲染中断、
+   整张地图空白——这就是"点兵之后地点全没了"的 bug。 */
+function allUnits() {
+  const out = [];
+  for (const p of S.provinces) {
+    for (const u of (p.units || [])) out.push(u);
+  }
+  return out;
+}
+
+/* ---------- 投影：经纬度 → 画布 ---------- */
+function project() {
+  const lons = S.provinces.map((p) => p.lon);
+  const lats = S.provinces.map((p) => p.lat);
+  const lonMin = Math.min.apply(null, lons), lonMax = Math.max.apply(null, lons);
+  const latMin = Math.min.apply(null, lats), latMax = Math.max.apply(null, lats);
+
+  // 经度按中纬度余弦修正，避免东西向过度拉伸
+  const midLat = (latMin + latMax) / 2;
+  const cosLat = Math.cos(midLat * Math.PI / 180);
+  const wDeg = Math.max((lonMax - lonMin) * cosLat, 1e-4);
+  const hDeg = Math.max(latMax - latMin, 1e-4);
+
+  const availW = W - PAD * 2, availH = H - PAD * 2;
+  const scale = Math.min(availW / wDeg, availH / hDeg);
+  const mapW = wDeg * scale, mapH = hDeg * scale;
+  const ox = (W - mapW) / 2, oy = (H - mapH) / 2;
+
+  return {
+    pt(lon, lat) {
+      return [ox + (lon - lonMin) * cosLat * scale, oy + (latMax - lat) * scale];
+    },
+    box: [ox, oy, ox + mapW, oy + mapH],
+  };
+}
+
+/* ---------- Voronoi：半平面裁剪 ---------- */
+/* 每个省从整个地图矩形开始，依次用它与其他省的中垂线切割，
+   只保留靠近自己的一侧。切完就是这个省的多边形。
+   这样边界天然贴合，不会留缝——比画圆好得多。 */
+function clipHalf(poly, a, b) {
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+  const nx = b[0] - a[0], ny = b[1] - a[1];
+  const out = [];
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const p = poly[i], q = poly[(i + 1) % n];
+    const dp = (p[0] - mx) * nx + (p[1] - my) * ny;
+    const dq = (q[0] - mx) * nx + (q[1] - my) * ny;
+    if (dp <= 0) out.push(p);
+    if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) {
+      const t = dp / (dp - dq);
+      out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+    }
+  }
+  return out;
+}
+
+function buildGeom() {
+  const proj = project();
+  const box = proj.box;
+  const pts = {};
+  for (const p of S.provinces) pts[p.id] = proj.pt(p.lon, p.lat);
+
+  const cells = {};
+  const centroids = {};
+  const ids = Object.keys(pts);
+
+  for (const id of ids) {
+    let poly = [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]];
+    const a = pts[id];
+    for (const other of ids) {
+      if (other === id) continue;
+      poly = clipHalf(poly, a, pts[other]);
+      if (poly.length < 3) break;
+    }
+    cells[id] = poly;
+    // 质心用面积加权，比顶点平均稳
+    let cx = 0, cy = 0, area = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      const cross = p[0] * q[1] - q[0] * p[1];
+      area += cross;
+      cx += (p[0] + q[0]) * cross;
+      cy += (p[1] + q[1]) * cross;
+    }
+    area *= 0.5;
+    if (Math.abs(area) < 1e-6) {
+      centroids[id] = [a[0], a[1]];
+    } else {
+      centroids[id] = [cx / (6 * area), cy / (6 * area)];
+    }
+  }
+  geom = { cells, centroids, box };
+}
+
+function ptsToPath(poly) {
+  if (!poly || poly.length < 3) return "";
+  let d = "M" + poly[0][0].toFixed(1) + "," + poly[0][1].toFixed(1);
+  for (let i = 1; i < poly.length; i++) d += "L" + poly[i][0].toFixed(1) + "," + poly[i][1].toFixed(1);
+  return d + "Z";
+}
+
+/* ---------- 着色 ---------- */
+function landFill(p) {
+  if (view === "terrain") {
+    return { plain: "#3f4d3c", hill: "#4d4638", mountain: "#4a4038", marsh: "#2f4747", urban: "#4d4250", water: "#16303f" }[p.terrain] || "#3a3a3a";
+  }
+  if (view === "intel") {
+    if (p.mine) return "#274866";
+    if (!p.intel.known) return "#171c22";
+    return { "精确": "#8a4038", "近似": "#63372f", "传闻": "#3d2b26" }[p.intel.accuracy] || "#241f1e";
+  }
+  if (view === "supply") {
+    if (p.terrain === "water") return "#14262f";
+    const u = (p.units || []).find((x) => x.mine);
+    if (!u) return p.mine ? "#1c2731" : "#241c1b";
+    const s = u.supply;
+    return "rgb(" + Math.round(28 + s * 22) + "," + Math.round(42 + s * 92) + "," + Math.round(52 + s * 40) + ")";
+  }
+  if (!p.owner_known) return "#242a32";
+  if (p.terrain === "water") return "#14262f";
+  return p.mine ? "#2c5178" : "#753530";
+}
+
+function waterFill(p) {
+  if (view === "intel" && !p.owner_known) return "#101820";
+  return "#14262f";
+}
+
+/* ---------- 渲染 ---------- */
+// 侧栏「阵地」面板：选中单位后列出它所在省的每个阵地。
+// 这是回答"这个山头守的是谁、宽度够不够展开"的地方，
+// 也是调兵的主要入口——点一行就把部队挪过去，不耗天数。
+function renderNodes() {
+  const sec = $("node-sec"), list = $("node-list");
+  const u = selUnit !== null ? allUnits().find((x) => x.index === selUnit) : null;
+  const uProv = u ? S.provinces.find((q) => (q.units || []).some((x) => x.index === u.index)) : null;
+  // 右键看的是"这个省"，选中单位看的是"我的部队所在省"。右键优先。
+  const pid = nodeProv !== null ? nodeProv : (uProv ? uProv.id : null);
+  if (pid === null) { sec.style.display = "none"; return; }
+  const p = S.provinces.find((q) => q.id === pid);
+  if (!p || !p.positions || !p.positions.length) { sec.style.display = "none"; return; }
+
+  const here = uProv && uProv.id === p.id ? u.node : -1;
+
+  sec.style.display = "";
+  $("node-prov").textContent =
+    p.positions.length > 1 ? p.name + "（" + p.positions.length + " 个阵地）" : p.name + "（未拆阵地）";
+  list.innerHTML = "";
+  p.positions.forEach((nd, i) => {
+    const isHere = i === here;
+    const d = document.createElement("div");
+    d.className = "nd" + (isHere ? " here" : "");
+    const left = document.createElement("span");
+    left.textContent = (isHere ? "▸ " : "") + nd.name + (nd.fort ? "　砦" + nd.fort : "");
+    const right = document.createElement("span");
+    right.className = "w";
+    right.textContent = "宽 " + Math.round(nd.width * 100) + "%" + (isHere || here < 0 ? "" : " →");
+    d.appendChild(left);
+    d.appendChild(right);
+    if (here >= 0 && !isHere) {
+      d.title = "调到" + nd.name + "（不耗天数）";
+      d.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        api("/api/order", { unit: selUnit, kind: "shift", target: i });
+        toast("调兵 → " + nd.name);
+      });
+    } else if (here < 0) {
+      d.title = "选中一支在本省的部队后，点这一行可以把部队调过来";
+    }
+    list.appendChild(d);
+  });
+  // 单阵地省：标题已经写明"未拆阵地"，不再多发一行
+}
+
+function render() {
+  if (!S) return;
+  // 渲染出错不该让整张地图变白：捕获并提示，界面保持上一帧。
+  try {
+    if (!geom) buildGeom();
+    renderTop();
+    renderMap();
+    renderNodes();
+    renderPanel();
+  } catch (e) {
+    console.error(e);
+    toast("界面渲染出错：" + e.message);
+  }
+}
+
+function renderTop() {
+  $("s-str").textContent = S.side.strength.toFixed(1) + " 千";
+  $("s-prov").textContent = S.side.provinces + " / " + S.provinces.length;
+  $("s-enemy").textContent = S.enemy.estimated_strength.toFixed(1) + " 千";
+  $("clock").textContent = "第 " + S.tick + " 日";
+  const pend = S.side.pending_reports;
+  const pe = $("pending");
+  pe.textContent = pend > 0 ? "战报 " + pend + " 份在途" : "战报已清";
+  pe.className = "pend" + (pend > 0 ? " hot" : "");
+  $("k-comms").textContent = S.comms.kind;
+  $("k-delay").textContent = S.comms.report_delay + " 日";
+  $("k-known").textContent = (S.enemy.known_provinces || 0) + " 处";
+  $("k-pend").textContent = pend + " 份";
+}
+
+function renderMap() {
+  const svg = $("map");
+  svg.innerHTML = "";
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  applyCam();
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+  const sel = selUnit !== null ? allUnits().find((u) => u.index === selUnit) : null;
+  // 没选单位时，筑工事/整补/换阵地这三个按钮没有意义，藏起来
+  const acts = $("acts");
+  if (acts) acts.style.display = selUnit === null ? "none" : "flex";
+  const reach = new Set();
+  if (sel) {
+    const cp = S.provinces.find((p) => p.id === curProv);
+    if (cp) for (const nb of cp.neighbors) reach.add(nb);
+  }
+
+  // ---- 作战地图纸 ----
+  // 战区是南北长条，画布是宽的，两侧必然留白。
+  // 与其空着，不如做成"摊开的地图"：纸面略亮、有经纬网、纸外更暗。
+  const bx = geom.box[0], by = geom.box[1];
+  const bw = geom.box[2] - bx, bh = geom.box[3] - by;
+
+  el("rect", {
+    x: bx - 10, y: by - 10, width: bw + 20, height: bh + 20,
+    fill: "#080b0f",
+  }, svg);
+
+  el("rect", {
+    x: bx, y: by, width: bw, height: bh,
+    fill: "#0d141b", stroke: "#1e2833", "stroke-width": 1,
+  }, svg);
+
+  // 经纬网（每 0.2 度一格，纯装饰，帮人判断方位与距离）
+  const grid = el("g", { opacity: ".5" }, svg);
+  const steps = 6;
+  for (let i = 1; i < steps; i++) {
+    const y = by + (bh / steps) * i;
+    el("line", { x1: bx, y1: y, x2: bx + bw, y2: y, stroke: "#161f28", "stroke-width": 1 }, grid);
+  }
+  for (let i = 1; i < 4; i++) {
+    const x = bx + (bw / 4) * i;
+    el("line", { x1: x, y1: by, x2: x, y2: by + bh, stroke: "#161f28", "stroke-width": 1 }, grid);
+  }
+
+  // 纬向标注（北/南）
+  const nb = el("text", {
+    x: bx + bw / 2, y: by - 2, "text-anchor": "middle",
+    "font-size": "9", fill: "#3f4a57", "letter-spacing": ".2em",
+  }, svg);
+  nb.textContent = "北";
+  const sb = el("text", {
+    x: bx + bw / 2, y: by + bh + 11, "text-anchor": "middle",
+    "font-size": "9", fill: "#3f4a57", "letter-spacing": ".2em",
+  }, svg);
+  sb.textContent = "南";
+
+  // 省份多边形
+  for (const p of S.provinces) {
+    const poly = geom.cells[p.id];
+    if (!poly || poly.length < 3) continue;
+
+    // 水域只铺一层很暗的底色（湖面、江面），省界和敌情都不画，
+    // 之后再叠一条水道带（见下方「水道」一段）。
+    // 不铺底色的话，水域会露出纸面，看起来像地图破了洞。
+    if (p.terrain === "water") {
+      el("path", { d: ptsToPath(poly), fill: "#0e1a22", class: "water" }, svg);
+      continue;
+    }
+
+    const g = el("g", { class: "prov" + (selUnit !== null && curProv === p.id ? " sel" : ""), "data-prov": p.id }, svg);
+
+    el("path", {
+      d: ptsToPath(poly),
+      fill: landFill(p),
+      class: "land",
+    }, g);
+
+    // 敌情精度：外描边
+    if (!p.mine && p.intel.known) {
+      const acc = p.intel.accuracy_code;
+      el("path", {
+        d: ptsToPath(poly), fill: "none",
+        stroke: acc === 3 ? "#d9a15e" : (acc === 2 ? "#8f6a34" : "#5a4a2e"),
+        "stroke-width": acc === 3 ? 1.6 : 1,
+        "stroke-dasharray": acc === 3 ? "none" : (acc === 2 ? "5 3" : "2 4"),
+        opacity: ".85",
+      }, g);
+    }
+
+    // 可达高亮
+    if (reach.has(p.id)) {
+      el("path", {
+        d: ptsToPath(poly), fill: "#e3b04b", "fill-opacity": ".13",
+        stroke: "#e3b04b", "stroke-width": 1.6, "stroke-dasharray": "5 3",
+        class: "pulse",
+      }, g);
+    }
+
+    g.addEventListener("click", (ev) => { ev.stopPropagation(); onProvince(p); });
+    // 右键 = 查看这个省的阵地（不需要先选部队）
+    g.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      nodeProv = p.id;
+      hideTip();
+      render();
+      const n = (p.positions || []).length;
+      toast(p.name + "：" + (n > 1 ? n + " 个阵地，见右侧" : "未拆阵地"));
+    });
+    g.addEventListener("mouseenter", (ev) => showTip(ev, p));
+    g.addEventListener("mousemove", (ev) => moveTip(ev));
+    g.addEventListener("mouseleave", hideTip);
+  }
+
+  // ---- 水道 ----
+  // 同一条水系（名字里 "·" 之前的部分）按 id 顺序连成折线，画成一条带。
+  // id 顺序就是作者写清单的顺序，也就是上游到下游，所以连出来就是河道走向。
+  {
+    const groups = new Map();
+    for (const p of S.provinces) {
+      if (p.terrain !== "water") continue;
+      const key = p.name.indexOf("·") >= 0 ? p.name.split("·")[0] : "水";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    const wg = el("g", {}, svg);
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.id - b.id);
+      const cs = list.map((p) => geom.centroids[p.id]).filter(Boolean);
+      if (cs.length < 2) continue;
+      const d = cs
+        .map((c, i) => (i ? "L" : "M") + c[0].toFixed(1) + " " + c[1].toFixed(1))
+        .join(" ");
+      el("path", {
+        d, fill: "none", stroke: "#0b1822", "stroke-width": 16,
+        "stroke-linecap": "round", "stroke-linejoin": "round",
+      }, wg);
+      el("path", {
+        d, fill: "none", stroke: "#1d4152", "stroke-width": 11,
+        "stroke-linecap": "round", "stroke-linejoin": "round",
+      }, wg);
+    }
+    // 每个水域省留一个透明小圆作点击目标，否则舰队没法下令
+    for (const p of S.provinces) {
+      if (p.terrain !== "water") continue;
+      const c = geom.centroids[p.id];
+      if (!c) continue;
+      const hit = el("circle", {
+        cx: c[0], cy: c[1], r: 11, fill: "transparent",
+        style: "cursor:pointer",
+      }, wg);
+      hit.addEventListener("click", (ev) => { ev.stopPropagation(); onProvince(p); });
+      hit.addEventListener("mouseenter", (ev) => showTip(ev, p));
+      hit.addEventListener("mousemove", (ev) => moveTip(ev));
+      hit.addEventListener("mouseleave", hideTip);
+    }
+  }
+
+  // 名称与标记（画在多边形之上，避免被覆盖）
+  for (const p of S.provinces) {
+    const c = geom.centroids[p.id];
+    if (!c) continue;
+    const g = el("g", {}, svg);
+    const isWater = p.terrain === "water";
+
+    // ---- 标签密度 ----
+    // 90 个省摊在一张图上，每个都写名字必然糊成一片。
+    // 只给"格子装得下"的省写名字，装不下的靠悬停提示和选中态显示。
+    // 省名是低价值信息，边界和归属才是要读的。
+    const poly = geom.cells[p.id];
+    let minx = 1e9, maxx = -1e9;
+    if (poly) {
+      for (const pt of poly) {
+        if (pt[0] < minx) minx = pt[0];
+        if (pt[0] > maxx) maxx = pt[0];
+      }
+    }
+    // 水道名很长（长江·田家镇），显示时只留后半截
+    const label = p.name.indexOf("·") >= 0 ? p.name.split("·")[1] : p.name;
+    const fits = maxx - minx >= label.length * 13;
+
+    if (fits) {
+      const cls = "name" + (p.mine ? "" : (p.owner_known ? " enemy" : " unknown"));
+      const nm = el("text", { x: c[0], y: c[1] + (isWater ? 18 : 4), class: cls }, g);
+      nm.textContent = label;
+    }
+
+    if (fits && !p.mine && p.intel.known && p.intel.strength > 0) {
+      const es = el("text", { x: c[0], y: c[1] + 16, class: "est" }, g);
+      es.textContent = "≈" + p.intel.strength.toFixed(0);
+    }
+
+    if (fits && p.fort > 0) {
+      const f = el("text", { x: c[0] + 26, y: c[1] - 10, class: "fortmark" }, g);
+      f.textContent = "砦" + p.fort;
+    }
+
+    // 单位
+    const units = p.units || [];
+    units.forEach((u, k) => {
+      const ux = c[0] + (k - (units.length - 1) / 2) * 15;
+      const uy = c[1] - 16;
+      const ug = el("g", { class: "unit " + (u.mine ? "mine" : "enemy") + (selUnit === u.index ? " sel" : "") }, g);
+      el("rect", { x: ux - 7, y: uy - 7, width: 14, height: 14, rx: 2, class: "plate" }, ug);
+      const gl = el("text", { x: ux, y: uy + 2.6, class: "glyph" }, ug);
+      gl.textContent = u.kind_code === 2 ? "机" : (u.kind_code === 3 ? "舰" : "兵");
+      const cn = el("text", { x: ux, y: uy + 17, class: "cname" }, ug);
+      cn.textContent = u.commander.slice(0, 3);
+      // 多阵地省：只给**选中**的单位显示阵地名。
+      // 全显示的话，一个省三四个单位就糊成一团，反而看不清地图。
+      if (p.positions && p.positions.length > 1 && p.positions[u.node] && selUnit === u.index) {
+        const nd = el("text", { x: ux, y: uy + 26, class: "nname" }, ug);
+        nd.textContent = p.positions[u.node].name;
+      }
+      ug.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (!u.mine) return;
+        selUnit = u.index;
+        curProv = p.id;
+        nodeProv = null; // 侧栏跟回"我的部队所在省"
+        $("hint").textContent = "已选 " + u.name + "（" + u.commander + "，" +
+          u.strength.toFixed(1) + " 千）→ 点金色虚线的相邻省份执行命令；右键任意省看阵地";
+        render();
+      });
+    });
+  }
+
+  svg.addEventListener("click", () => {
+    if (selUnit !== null) {
+      selUnit = null; curProv = null;
+      $("hint").textContent = "点选我方单位，再点相邻省份下达命令";
+      render();
+    }
+  });
+}
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) if (attrs[k] !== null && attrs[k] !== undefined) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function toast(m) {
+  const t = $("toast");
+  t.textContent = m; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1700);
+}
+
+async function api(path, body) {
+  const opt = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
+  try {
+    const r = await fetch(path, opt);
+    const j = await r.json();
+    if (j.error) toast(j.error);
+    S = j.state || j;
+    if (selUnit !== null && !allUnits().find((u) => u.index === selUnit)) { selUnit = null; curProv = null; }
+    render();
+  } catch (e) { toast("连接失败，检查服务是否运行"); }
+}
+
+function showTip(ev, p) {
+  const t = $("tip");
+  const rows = ["<div class='t-name'>" + p.name + "</div>"];
+  rows.push("<div class='t-row'>地形：<b>" + (TERRAIN_CN[p.terrain] || p.terrain) + "</b>" +
+    (p.fort ? "　工事：<b>" + p.fort + "</b>" : "") + "</div>");
+  rows.push("<div class='t-row'>归属：<b>" + (p.mine ? "我方" : (p.owner_known ? "敌方" : "未知")) + "</b></div>");
+  if (p.supply_source) rows.push("<div class='t-row'>补给源</div>");
+  // 阵地：多阵地省把每个阵地的宽度与工事列出来，
+  // 玩家才能判断"这个山头放不放得下我一个军"。
+  if (p.positions && p.positions.length > 1) {
+    rows.push("<div class='t-row'>阵地：" + p.positions
+      .map((x, i) => "<b>" + x.name + "</b>(" + Math.round(x.width * 100) + "%" +
+        (x.fort ? "·砦" + x.fort : "") + ")")
+      .join("　") + "</div>");
+  }
+  if (p.intel.known && !p.mine) {
+    rows.push("<div class='t-row'>敌情：<b>" + p.intel.accuracy + "</b>　约 <b>" + p.intel.strength.toFixed(1) + "</b> 千</div>");
+  }
+  for (const u of p.units || []) {
+    rows.push("<div class='t-row'>" + (u.mine ? "我" : "敌") + "：<b>" + u.name + "</b> " +
+      u.strength.toFixed(1) + " 千" + (u.disobeyed ? " ⚠" : "") + "</div>");
+  }
+  t.innerHTML = rows.join("");
+  t.style.display = "block";
+  moveTip(ev);
+}
+function moveTip(ev) {
+  const t = $("tip"), rect = $("stage").getBoundingClientRect();
+  let x = ev.clientX - rect.left + 16, y = ev.clientY - rect.top + 12;
+  if (x + 230 > rect.width) x -= 250;
+  if (y + 150 > rect.height) y -= 160;
+  t.style.left = x + "px"; t.style.top = y + "px";
+}
+function hideTip() { $("tip").style.display = "none"; }
+
+function onProvince(p) {
+  if (suppressClick) return; // 刚拖过地图，这一下不算点击
+  if (selUnit === null) {
+    toast((p.units || []).some((u) => u.mine) ? "点单位标记选中它" : "先点选我方单位");
+    return;
+  }
+  const cp = S.provinces.find((x) => x.id === curProv);
+  if (!cp) return;
+  if (p.id === curProv) {
+    api("/api/order", { unit: selUnit, kind: "hold" });
+    toast("已下令固守 " + p.name);
+    return;
+  }
+  if (cp.neighbors.indexOf(p.id) < 0) { toast("只能对相邻省份下令"); return; }
+  const e = lastEv || {};
+  // 目标归属决定命令类别：自己的省只能移防，敌方空省是推进，敌方有兵才是进攻。
+  // 服务端会做同样的校正，这里只是让提示文字说实话。
+  const enemyHere = (p.units || []).some((u) => !u.mine);
+  let kind = e.altKey ? "retreat" : "attack";
+  if (e.shiftKey) kind = "move";
+  if (kind === "attack" && (p.mine || !enemyHere)) kind = "move";
+  const verb = kind === "retreat" ? "撤退" : (p.mine ? "增援" : (enemyHere ? "进攻" : "推进"));
+  api("/api/order", { unit: selUnit, kind: kind, target: p.id });
+  toast("已下令：" + verb + " " + p.name);
+}
+
+function renderPanel() {
+  const box = $("log");
+  box.innerHTML = "";
+  const lines = S.log || [];
+  if (!lines.length) {
+    box.innerHTML = "<div class='item'>暂无战报。推进时间后，前线情报会陆续送到。</div>";
+    return;
+  }
+  // 连续重复的战报折叠成一条并计数。
+  // 模块规则（比如"山地行军非战斗减员"）每 tick 都会为每个单位推一条同样的文字，
+  // 不折叠的话整栏都是同一句话，真正的战况反而看不见。
+  const runs = [];
+  for (const ev of lines) {
+    const last = runs[runs.length - 1];
+    if (last && last.text === ev.text) last.n++;
+    else runs.push({ text: ev.text, kind: ev.kind, tick: ev.tick, n: 1 });
+  }
+  for (const r of runs) {
+    const d = document.createElement("div");
+    // 样式按引擎给的事件类别走，不再用正则匹配中文措辞
+    d.className = "item k-" + r.kind;
+    d.textContent = "[" + r.tick + "] " + r.text + (r.n > 1 ? "　×" + r.n : "");
+    box.appendChild(d);
+  }
+}
+
+$("modes").addEventListener("click", (e) => {
+  const b = e.target.closest(".mode");
+  if (!b) return;
+  view = b.dataset.view;
+  document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("on", x === b));
+  render();
+});
+document.addEventListener("click", (e) => { lastEv = e; }, true);
+
+// ---- 相机操作：滚轮缩放、拖拽平移、双击复位 ----
+// 拖拽超过 5px 就吃掉随后的 click，否则"拖一下地图"会顺手给一个省下令。
+let dragging = false;
+let dragMoved = false;
+let dragFrom = null;
+let suppressClick = false;
+
+(function wireCamera() {
+  const stage = $("stage");
+
+  stage.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const rect = $("map").getBoundingClientRect();
+    const v = camView();
+    // 光标在世界坐标里的位置，缩放前后保持不动
+    const fx = (ev.clientX - rect.left) / rect.width;
+    const fy = (ev.clientY - rect.top) / rect.height;
+    const wx = v.x + fx * v.w;
+    const wy = v.y + fy * v.h;
+    const factor = ev.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const nz = Math.min(CAM_MAX, Math.max(1, cam.z * factor));
+    if (nz === cam.z) return;
+    cam.z = nz;
+    const nv = camView();
+    cam.x = wx - fx * nv.w;
+    cam.y = wy - fy * nv.h;
+    clampCam();
+    applyCam();
+  }, { passive: false });
+
+  stage.addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0) return;
+    dragging = true;
+    dragMoved = false;
+    dragFrom = { x: ev.clientX, y: ev.clientY, cx: cam.x, cy: cam.y };
+  });
+
+  window.addEventListener("mousemove", (ev) => {
+    if (!dragging) return;
+    const dx = ev.clientX - dragFrom.x;
+    const dy = ev.clientY - dragFrom.y;
+    if (!dragMoved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+    dragMoved = true;
+    const rect = $("map").getBoundingClientRect();
+    const k = camView().w / rect.width;
+    cam.x = dragFrom.cx - dx * k;
+    cam.y = dragFrom.cy - dy * k;
+    clampCam();
+    applyCam();
+    $("stage").style.cursor = "grabbing";
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    suppressClick = dragMoved;
+    dragMoved = false;
+    $("stage").style.cursor = "";
+    // 下一帧再解除，让这次的 click 被吃掉
+    setTimeout(() => { suppressClick = false; }, 0);
+  });
+
+  // 双击 = 复位视角
+  stage.addEventListener("dblclick", (ev) => {
+    if (ev.target.closest(".unit")) return;
+    cam = { x: 0, y: 0, z: 1 };
+    applyCam();
+    toast("视角复位");
+  });
+})();
+
+// 原地命令：筑工事 / 整补 / 换阵地。
+// 「换阵地」就是在省内把部队从一个阵地挪到另一个——这是预备队的用法，
+// 不消耗天数。阵地少了就循环。
+$("acts").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b || selUnit === null) return;
+  e.stopPropagation();
+  const act = b.dataset.act;
+  if (act === "shift") {
+    const u = allUnits().find((x) => x.index === selUnit);
+    const p = u ? S.provinces.find((q) => (q.units || []).some((x) => x.index === u.index)) : null;
+    const n = p && p.positions ? p.positions.length : 1;
+    if (n < 2) { toast("这个省只有一个阵地"); return; }
+    const next = ((u.node || 0) + 1) % n;
+    api("/api/order", { unit: selUnit, kind: "shift", target: next });
+    toast("调兵：" + p.positions[next].name);
+    return;
+  }
+  api("/api/order", { unit: selUnit, kind: act });
+  toast(act === "fortify" ? "已下令筑工事（三日一级）" : "已下令整补");
+});
+$("btn-1").addEventListener("click", () => api("/api/tick", { days: 1 }));
+$("btn-3").addEventListener("click", () => api("/api/tick", { days: 3 }));
+
+// 存档 / 读档。
+// 存的是命令流而不是世界快照：读档时服务端用 (模块, 种子, 命令流) 重跑一遍，
+// 并核对哈希——对得上才说明这一局可复现（见 docs/11）。
+$("btn-save").addEventListener("click", async () => {
+  try {
+    const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const j = await r.json();
+    toast(j.ok ? "已存档：第 " + j.day + " 日，" + j.commands + " 条命令" : (j.error || "存档失败"));
+  } catch (e) { toast("存档失败：连不上服务"); }
+});
+$("btn-load").addEventListener("click", async () => {
+  try {
+    const r = await fetch("/api/load", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "读档失败"); return; }
+    S = j.state;
+    selUnit = null; curProv = null; nodeProv = null; geom = null;
+    render();
+    toast("读档到第 " + j.day + " 日" + (j.hash_matched ? "（哈希一致）" : "，⚠ 哈希不一致"));
+  } catch (e) { toast("读档失败：连不上服务"); }
+});
+$("btn-reset").addEventListener("click", () => {
+  selUnit = null; curProv = null; geom = null;
+  api("/api/reset", {}).then(() => toast("已重开"));
+});
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space") { e.preventDefault(); api("/api/tick", { days: 1 }); }
+  if (e.code === "Escape") {
+    selUnit = null; curProv = null;
+    $("hint").textContent = "点选我方单位，再点相邻省份下达命令";
+    render();
+  }
+});
+
+api("/api/state");
+</script>
+</body>
+</html>
+
+
+

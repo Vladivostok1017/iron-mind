@@ -1,0 +1,10 @@
+{
+  "id": "scen.demo1805",
+  "name": "1805 年演示战线",
+  "start_date": "1805-12-02",
+  "days": 20,
+  "seed": 18051202,
+  "comms": {
+    "preset": "courier"
+  }
+}

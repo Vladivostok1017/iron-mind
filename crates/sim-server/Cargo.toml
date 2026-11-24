@@ -1,0 +1,15 @@
+[package]
+name = "sim-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sim-core = { path = "../sim-core" }
+sim-content = { path = "../sim-content" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "sim-server"
+path = "src/main.rs"

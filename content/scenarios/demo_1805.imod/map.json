@@ -1,0 +1,21 @@
+{
+  "bbox": null,
+  "projection": "wgs84",
+  "provinces": [
+    {
+      "id": 0, "name": "北营", "terrain": "plain", "owner": "cn",
+      "supply_source": true, "supply_throughput": 1.0,
+      "neighbors": [1], "note": "演示用，非史实"
+    },
+    {
+      "id": 1, "name": "中间高地", "terrain": "hill", "owner": "cn",
+      "supply_throughput": 0.7, "neighbors": [0, 2],
+      "prototype": "ridge_line", "note": "争夺要点"
+    },
+    {
+      "id": 2, "name": "南营", "terrain": "plain", "owner": "jp",
+      "supply_source": true, "supply_throughput": 1.0,
+      "neighbors": [1], "note": "演示用，非史实"
+    }
+  ]
+}

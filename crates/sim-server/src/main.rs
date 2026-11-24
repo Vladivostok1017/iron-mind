@@ -1,0 +1,763 @@
+//! 极简 HTTP 服务：把模拟核心暴露给浏览器。
+//!
+//! 为什么不用 axum/actix：这个服务的全部职责是"收几个请求、回几个 JSON"，
+//! 手写 200 行比引入一个异步框架更可控，也更容易看清数据流。
+//!
+//! 端点：
+//! - `GET  /`            前端页面
+//! - `GET  /api/state`   当前状态（**已按情报过滤**，不是真值）
+//! - `POST /api/tick`    推进 N 天
+//! - `POST /api/order`   给某个单位下达意图
+//! - `POST /api/reset`   重开
+//!
+//! 安全边界：只监听 127.0.0.1，不处理任何外部输入之外的副作用。
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use sim_core::world::{Order, Side, Terrain, World};
+use sim_core::Accuracy;
+use sim_content::{build_world, load_module, LoadedModule};
+
+const DEFAULT_PORT: u16 = 8899;
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let module_path = args
+        .iter()
+        .position(|a| a == "--module")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "content/scenarios/nanxun_1938.imod".to_string());
+
+    let dir = PathBuf::from(&module_path);
+    let module = match load_module(&dir) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("加载模块失败：{e}");
+            std::process::exit(2);
+        }
+    };
+
+    println!("== Iron Mind · 本地服务 ==");
+    println!("模块：{} v{}", module.meta.name, module.meta.version);
+    println!(
+        "省份 {} · 单位 {} · 战役 {} 天",
+        module.map.provinces.len(),
+        module.oob.units.len(),
+        module.scenario.days
+    );
+    for w in &module.warnings {
+        println!("  [警告] {}: {}", w.code, w.message);
+    }
+
+    let state = Arc::new(ServerState {
+        module,
+        world: std::sync::Mutex::new(None),
+        commands: std::sync::Mutex::new(Vec::new()),
+    });
+    {
+        let mut w = state.world.lock().unwrap();
+        let mut world = build_world(&state.module);
+        // 开局先做一次侦察，否则玩家看到的是一片全黑
+        sim_core::intel::run_intel(&mut world);
+        *w = Some(world);
+    }
+
+    let port: u16 = args
+        .iter()
+        .position(|a| a == "--port")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+    let listen = format!("127.0.0.1:{port}");
+
+    let listener = match TcpListener::bind(&listen) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("无法监听 {listen}: {e}");
+            std::process::exit(3);
+        }
+    };
+    println!("\n打开浏览器访问：http://{listen}/");
+    println!("（Ctrl+C 退出）\n");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(s) => {
+                // 每条连接一个线程。
+                //
+                // 原来是单线程顺序处理：浏览器只要开一条"预连接"（连上了但还没发请求），
+                // 服务器就会在 read_line 上死等，整个服务卡住——前端所有请求
+                // （包括状态刷新）一起挂起，表现就是"点什么都没反应"。
+                // 世界状态本来就在 Mutex 后面，多线程不会破坏确定性。
+                let st = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    if let Err(e) = handle(s, &st) {
+                        eprintln!("请求处理出错：{e}");
+                    }
+                });
+            }
+            Err(e) => eprintln!("连接错误：{e}"),
+        }
+    }
+}
+
+struct ServerState {
+    module: LoadedModule,
+    world: std::sync::Mutex<Option<World>>,
+    /// 玩家命令流。`(模块, 种子, 命令流)` 就是一份完整存档。
+    commands: std::sync::Mutex<Vec<CmdRecord>>,
+}
+
+fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()> {
+    // 读写都要有超时。浏览器会开预连接、也会中途放弃请求；
+    // 没有超时的话这条连接会一直占着（单线程时就是整台服务器）。
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+
+    let mut request_line = String::new();
+    match reader.read_line(&mut request_line) {
+        Ok(0) => return Ok(()),
+        Ok(_) => {}
+        // 超时/对端断开都当正常结束，不当错误刷屏
+        Err(_) => return Ok(()),
+    }
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return respond(&mut stream, 400, "text/plain", "bad request");
+    }
+    let method = parts[0];
+    let path = parts[1].split('?').next().unwrap_or("/");
+
+    // 读头，取 Content-Length
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() {
+            break;
+        }
+        if line.is_empty() {
+            break;
+        }
+        let t = line.trim();
+        if t.is_empty() {
+            break;
+        }
+        let lower = t.to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix("content-length:") {
+            content_length = rest.trim().parse().unwrap_or(0);
+        }
+    }
+
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body)?;
+    }
+    let body_str = String::from_utf8_lossy(&body).to_string();
+
+    // 请求日志。目的很具体：玩家报"点了没反应"时，要能查到那一刻到底发生了什么——
+    // 是点击没发出去、被服务端拒了、还是模拟里被别的东西覆盖了。
+    let brief: String = body_str.chars().take(200).collect();
+    trace(format!(
+        "{method} {path}{}",
+        if brief.is_empty() { String::new() } else { format!(" body={brief}") }
+    ));
+
+    match (method, path) {
+        ("GET", "/") => respond(&mut stream, 200, "text/html; charset=utf-8", PAGE),
+        ("GET", "/api/log") => {
+            // 把日志尾部当纯文本吐出来，方便直接贴给人看
+            let all = std::fs::read_to_string("logs/server.log")
+                .unwrap_or_else(|_| "(还没有日志)".to_string());
+            let tail: Vec<&str> = all.lines().rev().take(200).collect();
+            let text: Vec<String> = tail.into_iter().rev().map(|s| s.to_string()).collect();
+            respond(&mut stream, 200, "text/plain; charset=utf-8", &text.join("\n"))
+        }
+        ("GET", "/api/state") => {
+            let json = {
+                let w = state.world.lock().unwrap();
+                snapshot(w.as_ref().unwrap())
+            };
+            respond(&mut stream, 200, "application/json", &json)
+        }
+        ("POST", "/api/tick") => {
+            let days: u32 = serde_json::from_str::<serde_json::Value>(&body_str)
+                .ok()
+                .and_then(|v| v.get("days").and_then(|d| d.as_u64()))
+                .unwrap_or(1) as u32;
+            let json = {
+                let mut guard = state.world.lock().unwrap();
+                let w = guard.as_mut().unwrap();
+                for _ in 0..days.min(30) {
+                    sim_core::systems::tick(w);
+                }
+                trace(format!("   tick → {} (第 {} 日)", w.tick, w.tick));
+                snapshot(w)
+            };
+            respond(&mut stream, 200, "application/json", &json)
+        }
+        ("POST", "/api/order") => {
+            let json = {
+                let mut guard = state.world.lock().unwrap();
+                let w = guard.as_mut().unwrap();
+                // 记录命令：day 取应用时的天数，回放时按同样顺序重放
+                let day = w.tick;
+                let parsed = serde_json::from_str::<serde_json::Value>(&body_str).ok();
+                let unit = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("unit").and_then(|x| x.as_u64()))
+                    .unwrap_or(0) as usize;
+                let kind = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("kind").and_then(|x| x.as_str()))
+                    .unwrap_or("hold")
+                    .to_string();
+                let target = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("target").and_then(|x| x.as_u64()))
+                    .map(|x| x as u32);
+
+                let result = apply_order(w, &body_str);
+                state.commands.lock().unwrap().push(CmdRecord {
+                    day,
+                    unit,
+                    kind,
+                    target,
+                    reject: result.clone(),
+                });
+                match &result {
+                    Some(err) => trace(format!("   指令被拒：{err}")),
+                    None => trace("   指令已写入".to_string()),
+                }
+                let mut v = snapshot(w);
+                if let Some(err) = result {
+                    v = format!("{{\"error\":\"{err}\",\"state\":{v}}}");
+                }
+                v
+            };
+            respond(&mut stream, 200, "application/json", &json)
+        }
+        ("GET", "/api/replay-check") => {
+            let (live_hash, live_tick) = {
+                let g = state.world.lock().unwrap();
+                let w = g.as_ref().unwrap();
+                (w.state_hash(), w.tick)
+            };
+            let cmds = state.commands.lock().unwrap().clone();
+            let json = replay_check(&state.module, live_hash, live_tick, &cmds);
+            respond(&mut stream, 200, "application/json", &json)
+        }
+        ("POST", "/api/save") => {
+            use serde_json::json;
+            let out = {
+                let g = state.world.lock().unwrap();
+                let w = g.as_ref().unwrap();
+                let cmds: Vec<CmdRecord> = state
+                    .commands
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|c| c.reject.is_none())
+                    .cloned()
+                    .collect();
+                let payload = SaveFile {
+                    v: 1,
+                    module_id: state.module.meta.id.clone(),
+                    module_version: state.module.meta.version.clone(),
+                    seed: w.seed,
+                    day: w.tick,
+                    state_hash: format!("{:016x}", w.state_hash()),
+                    commands: cmds,
+                };
+                let _ = std::fs::create_dir_all("saves");
+                let name = format!(
+                    "saves/save-{}.json",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                );
+                match serde_json::to_string_pretty(&payload) {
+                    Ok(s) => match std::fs::write(&name, s) {
+                        Ok(_) => {
+                            trace(format!(
+                                "   存档 {} （第 {} 日，{} 条命令）",
+                                name,
+                                payload.day,
+                                payload.commands.len()
+                            ));
+                            json!({
+                                "ok": true, "path": name, "day": payload.day,
+                                "commands": payload.commands.len(),
+                            })
+                        }
+                        Err(e) => json!({ "ok": false, "error": format!("写文件失败：{e}") }),
+                    },
+                    Err(e) => json!({ "ok": false, "error": format!("序列化失败：{e}") }),
+                }
+            };
+            respond(&mut stream, 200, "application/json", &out.to_string())
+        }
+        ("POST", "/api/load") => {
+            use serde_json::json;
+            // 不传 path 就载入最新的一份
+            let want: Option<String> = serde_json::from_str::<serde_json::Value>(&body_str)
+                .ok()
+                .and_then(|v| v.get("path").and_then(|x| x.as_str()).map(|s| s.to_string()));
+            let path = match want.or_else(latest_save) {
+                Some(p) => p,
+                None => {
+                    let msg = json!({ "ok": false, "error": "没有存档" }).to_string();
+                    return respond(&mut stream, 200, "application/json", &msg);
+                }
+            };
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let parsed: Result<SaveFile, _> = serde_json::from_str(&text);
+            match parsed {
+                Ok(sv) => {
+                    if sv.module_id != state.module.meta.id {
+                        let msg = json!({
+                            "ok": false,
+                            "error": format!("存档属于模块 {}，当前是 {}", sv.module_id, state.module.meta.id),
+                        })
+                        .to_string();
+                        return respond(&mut stream, 200, "application/json", &msg);
+                    }
+                    let world = rebuild(&state.module, &sv.commands, sv.day);
+                    let hash = world.state_hash();
+                    let expect = u64::from_str_radix(sv.state_hash.trim(), 16).unwrap_or(0);
+                    let matched = hash == expect;
+                    {
+                        let mut g = state.world.lock().unwrap();
+                        *g = Some(world);
+                        *state.commands.lock().unwrap() = sv.commands.clone();
+                    }
+                    trace(format!(
+                        "   读档 {} （第 {} 日，{} 条命令，哈希{}）",
+                        path,
+                        sv.day,
+                        sv.commands.len(),
+                        if matched { "一致" } else { "不一致！" }
+                    ));
+                    let g = state.world.lock().unwrap();
+                    let snap = snapshot(g.as_ref().unwrap());
+                    drop(g);
+                    let msg = json!({
+                        "ok": true,
+                        "path": path,
+                        "day": sv.day,
+                        "hash_matched": matched,
+                        "state": serde_json::from_str::<serde_json::Value>(&snap).unwrap_or(json!({})),
+                    })
+                    .to_string();
+                    respond(&mut stream, 200, "application/json", &msg)
+                }
+                Err(e) => {
+                    let msg = json!({ "ok": false, "error": format!("存档解析失败：{e}") }).to_string();
+                    respond(&mut stream, 200, "application/json", &msg)
+                }
+            }
+        }
+        ("POST", "/api/reset") => {
+            let json = {
+                let mut guard = state.world.lock().unwrap();
+                let mut nw = build_world(&state.module);
+                sim_core::intel::run_intel(&mut nw);
+                *guard = Some(nw);
+                // 重开 = 清空命令流，否则回放会带着上一局的命令
+                state.commands.lock().unwrap().clear();
+                snapshot(guard.as_ref().unwrap())
+            };
+            respond(&mut stream, 200, "application/json", &json)
+        }
+        _ => respond(&mut stream, 404, "text/plain", "not found"),
+    }
+}
+
+/// 处理一条意图指令。
+///
+/// 请求体：`{"unit": 3, "kind": "attack", "target": 5}`
+/// `kind` 可以是 hold / attack / move / retreat。
+/// 玩家的意图会写进单位的 `order`，下一 tick 由将领解释（可能抗命）。
+fn apply_order(w: &mut World, body: &str) -> Option<String> {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return Some(format!("JSON 解析失败：{e}")),
+    };
+    let unit_idx = v.get("unit").and_then(|x| x.as_u64())? as usize;
+    let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("hold");
+    let target = v.get("target").and_then(|x| x.as_u64()).map(|x| x as u32);
+    apply_typed(w, unit_idx, kind, target)
+}
+
+/// 真正执行一条命令。**回放用的也是这个函数**，所以校验与副作用必须全在这里。
+///
+/// 这就是 OpenRA `ResolveOrder` 的角色：命令是数据，执行是纯函数式的
+/// `(world, command) -> Option<拒绝原因>`，回放时喂同一串命令就能重建世界。
+fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) -> Option<String> {
+    let u = w.units.get(unit_idx)?;
+    if !u.is_alive() {
+        return Some("该单位已不存在".into());
+    }
+    let from = u.position;
+    let side = u.side;
+    let is_ground = u.kind.is_ground();
+
+    // 语义校正：前端只发"我点了哪个省"，进攻还是增援由目标归属决定。
+    //
+    // 之前的写法把 `kind` 原样写进 order，于是点击一个**自己控制的**省
+    // 也会变成 `Order::Attack(自己的省)`，界面还显示"已下令：进攻 沙河"。
+    // 同阵营并不会真的打起来，但这是明显的语义错误；再叠上堆叠上限，
+    // 表现就是"点了没反应"。
+    let (kind, target) = match (kind, target) {
+        ("fortify", _) => ("fortify", None),
+        ("rest", _) => ("rest", None),
+        ("shift", Some(n)) => ("shift", Some(n)),
+        ("attack" | "move" | "retreat", Some(t)) => {
+            if t as usize >= w.provinces.len() {
+                return Some("目标省份不存在".into());
+            }
+            if t == from {
+                ("hold", None) // 点自己所在的省 = 固守
+            } else if !w.provinces[from as usize].neighbors.contains(&t) {
+                return Some("只能对相邻省份下令".into());
+            } else {
+                let dest = &w.provinces[t as usize];
+                if is_ground && dest.terrain == Terrain::Water {
+                    return Some("地面部队不能进入水域".into());
+                }
+                // 敌方空省：走进去就是占领，不该报"进攻"
+                let empty_enemy = dest.owner != side
+                    && w.units_in(t).iter().all(|&i| {
+                        let x = &w.units[i as usize];
+                        x.side == side || !x.kind.is_ground()
+                    });
+                let kind = match kind {
+                    "attack" if dest.owner == side => "move", // 我方省 = 移防/增援
+                    "attack" if empty_enemy => "move",
+                    other => other,
+                };
+                (kind, Some(t))
+            }
+        }
+        _ => ("hold", None),
+    };
+
+    let final_kind = kind;
+    let u = w.units.get_mut(unit_idx)?;
+    // 只有 "auto" 交还控制权，其余都算玩家亲自下的命令。
+    u.manual = final_kind != "auto";
+    u.order = match (final_kind, target) {
+        ("attack", Some(t)) => Order::Attack(t),
+        ("move", Some(t)) => Order::Move(t),
+        ("retreat", Some(t)) => Order::Retreat(t),
+        ("shift", Some(n)) => Order::Shift(n as u8),
+        ("fortify", _) => Order::Fortify,
+        ("rest", _) => Order::Rest,
+        _ => Order::Hold,
+    };
+    None
+}
+
+/// 一条玩家命令的记录。`(模块, 种子, 命令流)` 就是一份完整存档。
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct CmdRecord {
+    day: u32,
+    unit: usize,
+    kind: String,
+    target: Option<u32>,
+    #[serde(default)]
+    reject: Option<String>,
+}
+
+/// 用命令流重建世界（回放、读档共用同一段代码）。
+///
+/// 这是整套架构的地基：世界 = `(模块, 种子, 命令流)` 的确定性函数。
+/// 只要这条成立，存档就只是把命令流写下来，回放就是再跑一遍。
+fn rebuild(module: &sim_content::LoadedModule, cmds: &[CmdRecord], until_day: u32) -> World {
+    let mut w = build_world(module);
+    sim_core::intel::run_intel(&mut w);
+    for day in 0..=until_day {
+        for c in cmds.iter().filter(|c| c.day == day && c.reject.is_none()) {
+            let _ = apply_typed(&mut w, c.unit, &c.kind, c.target);
+        }
+        if day == until_day {
+            break;
+        }
+        sim_core::systems::tick(&mut w);
+    }
+    w
+}
+
+/// 用命令流重建世界，和实时世界比对哈希。
+///
+/// 通过 = 这一局是 `(模块, 种子, 命令流)` 的确定性函数，回放/存档/复现 bug 都成立。
+/// 不通过 = 有状态没被命令流覆盖（漏记命令、或者模拟里用了隐藏的全局状态）。
+fn replay_check(
+    module: &sim_content::LoadedModule,
+    live_hash: u64,
+    live_tick: u32,
+    cmds: &[CmdRecord],
+) -> String {
+    use serde_json::json;
+    let fresh = rebuild(module, cmds, live_tick);
+    let applied = cmds.iter().filter(|c| c.day <= live_tick && c.reject.is_none()).count();
+    let fh = fresh.state_hash();
+    json!({
+        "ok": live_hash == fh,
+        "day": live_tick,
+        "live_hash": format!("{live_hash:016x}"),
+        "replay_hash": format!("{fh:016x}"),
+        "commands": cmds.len(),
+        "applied": applied,
+    })
+    .to_string()
+}
+
+/// 存档内容。命令流 + 元信息，不含世界快照。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SaveFile {
+    v: u32,
+    module_id: String,
+    module_version: String,
+    seed: u64,
+    day: u32,
+    state_hash: String,
+    commands: Vec<CmdRecord>,
+}
+
+/// 找最新的存档（按文件名里的时间戳）。
+fn latest_save() -> Option<String> {
+    let dir = std::fs::read_dir("saves").ok()?;
+    let mut best: Option<(u64, String)> = None;
+    for e in dir.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !name.starts_with("save-") || !name.ends_with(".json") {
+            continue;
+        }
+        let secs: u64 = name
+            .trim_start_matches("save-")
+            .trim_end_matches(".json")
+            .parse()
+            .unwrap_or(0);
+        if best.as_ref().map_or(true, |(b, _)| secs > *b) {
+            best = Some((secs, format!("saves/{name}")));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// 生成给前端的快照。
+///
+/// **关键：只输出中方的情报视图，不输出真值。**
+/// 这也是"玩家不是上帝"在接口层的落地。
+fn snapshot(w: &World) -> String {
+    use serde_json::json;
+
+    let viewer = Side::Cn;
+    let intel = w.intel(viewer);
+
+    let mut provinces = Vec::new();
+    for (i, p) in w.provinces.iter().enumerate() {
+        let i_intel = intel.get(i).copied().unwrap_or_else(|| {
+            sim_core::ProvinceIntel::unknown()
+        });
+
+        let units_here: Vec<_> = w
+            .units_in(i as u32)
+            .into_iter()
+            .filter_map(|ui| {
+                let u = &w.units[ui as usize];
+                if !u.is_alive() {
+                    return None;
+                }
+                let mine = u.side == viewer;
+                if !mine && i_intel.accuracy == Accuracy::Unknown {
+                    return None; // 没侦察到就不显示
+                }
+                Some(json!({
+                    "index": ui,
+                    "name": u.name,
+                    "commander": u.commander.name,
+                    "kind": u.kind.label(),
+                    "kind_code": u.kind.code(),
+                    "side": if mine { "cn" } else { "jp" },
+                    "mine": mine,
+                    "strength": round1(u.strength.to_display_f64()),
+                    "morale": round2(u.morale.to_display_f64()),
+                    "supply": round2(u.supply.to_display_f64()),
+                    "order": u.order.label(),
+                    "order_code": u.order.code().1,
+                    "node": u.node,
+                    "disobeyed": u.disobeyed,
+                    "dissent": u.dissent_reason,
+                }))
+            })
+            .collect();
+
+        provinces.push(json!({
+            "id": i,
+            "name": p.name,
+            "terrain": format!("{:?}", p.terrain).to_lowercase(),
+            // 敌方控制省的归属本身也是情报：没侦察到就显示 unknown。
+            // 这是"非上帝视角"的最后一道口子——如果归属全暴露，
+            // 玩家就知道整条战线在哪，侦察就没意义了。
+            "owner": if p.owner == viewer {
+                "cn"
+            } else if i_intel.is_known() {
+                match p.owner { Side::Cn => "cn", Side::Jp => "jp" }
+            } else {
+                "unknown"
+            },
+            "owner_known": p.owner == viewer || i_intel.is_known(),
+            "mine": p.owner == viewer,
+            "fort": p.fort.max(p.positions.iter().map(|x| x.fort).max().unwrap_or(0)),
+            "positions": p.positions.iter().map(|x| json!({
+                "name": x.name,
+                "terrain": format!("{:?}", x.terrain).to_lowercase(),
+                "width": round2(x.width.to_display_f64()),
+                "fort": x.fort,
+            })).collect::<Vec<_>>(),
+            "fort": p.fort,
+            "supply_source": p.is_supply_source,
+            "neighbors": p.neighbors,
+            "lon": round2(p.lon.to_display_f64()),
+            "lat": round2(p.lat.to_display_f64()),
+            "intel": {
+                "accuracy": i_intel.accuracy.label(),
+                "accuracy_code": i_intel.accuracy.code(),
+                "strength": round1(i_intel.enemy_strength.to_display_f64()),
+                "stale": i_intel.is_known() && w.tick > i_intel.seen_tick + 3,
+                "known": i_intel.is_known(),
+            },
+            "units": units_here,
+        }));
+    }
+
+    let edges: Vec<(u32, u32)> = {
+        let mut out = Vec::new();
+        for (i, p) in w.provinces.iter().enumerate() {
+            for &nb in &p.neighbors {
+                if (nb as usize) > i {
+                    out.push((i as u32, nb));
+                }
+            }
+        }
+        out
+    };
+
+    let cn_strength = w.total_strength(Side::Cn).to_display_f64();
+    let jp_provinces = w.provinces.iter().filter(|p| p.owner == Side::Jp).count();
+    let cn_provinces = w.provinces.iter().filter(|p| p.owner == Side::Cn).count();
+    let jp_estimate: f64 = intel
+        .iter()
+        .filter(|x| x.enemy_strength.raw() > 0)
+        .map(|x| x.enemy_strength.to_display_f64())
+        .sum();
+
+    json!({
+        "tick": w.tick,
+        "player": "cn",
+        "side": {
+            "strength": round1(cn_strength),
+            "provinces": cn_provinces,
+            "pending_reports": w.pending_count(Side::Cn),
+        },
+        "enemy": {
+            "provinces": jp_provinces,
+            "estimated_strength": round1(jp_estimate),
+            // 玩家已经侦察到的敌方省份数——用来衡量情报覆盖
+            "known_provinces": intel.iter().filter(|x| x.is_known()).count(),
+        },
+        "comms": {
+            "kind": w.comms.kind.label(),
+            "report_delay": w.comms.report_delay(),
+            "staff": w.comms.staff,
+            "transmission": w.comms.transmission,
+        },
+        "provinces": provinces,
+        "edges": edges,
+        // 战报改成类型化事件：tick + kind + text。
+        // 前端按 kind 上色，不再用正则去匹配中文措辞。
+        "log": w
+            .log
+            .iter()
+            .rev()
+            .take(40)
+            .map(|e| json!({ "tick": e.tick, "kind": e.kind.code(), "text": e.text }))
+            .collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+fn round1(v: f64) -> f64 {
+    let r = (v * 10.0).round() / 10.0;
+    // 避免 JSON 里出现 -0
+    if r == 0.0 { 0.0 } else { r }
+}
+fn round2(v: f64) -> f64 {
+    let r = (v * 100.0).round() / 100.0;
+    if r == 0.0 { 0.0 } else { r }
+}
+
+/// 写一行操作日志（同时打到 stderr）。
+///
+/// 追加到 `logs/server.log`，并可由 `GET /api/log` 取回尾部。
+/// 时间戳是 UTC，够用来对齐"我几点点的"。
+fn trace(msg: String) {
+    use std::io::Write;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (hh, mm, ss) = ((now / 3600) % 24, (now / 60) % 60, now % 60);
+    let line = format!("[{hh:02}:{mm:02}:{ss:02}Z] {msg}\n");
+    eprintln!("{}", line.trim_end());
+    let _ = std::fs::create_dir_all("logs");
+    let path = "logs/server.log";
+    // 超过 1MB 就重开一个，免得长跑把盘写满
+    if std::fs::metadata(path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+fn respond(
+    stream: &mut TcpStream,
+    code: u16,
+    content_type: &str,
+    body: &str,
+) -> std::io::Result<()> {
+    let status = match code {
+        200 => "200 OK",
+        400 => "400 Bad Request",
+        404 => "404 Not Found",
+        _ => "500 Internal Server Error",
+    };
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        body.as_bytes().len()
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(body.as_bytes())?;
+    stream.flush()
+}
+
+/// 前端页面（内嵌，避免额外文件依赖）。
+const PAGE: &str = include_str!("../web/index.html");
+
+
+
+
+
+

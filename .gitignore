@@ -1,0 +1,28 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 系统
+Thumbs.db
+.DS_Store
+
+# ---- 运行产物 ----
+/logs/
+/saves/
+
+# ---- 视频精读的派生素材（约 300MB，不入库）----
+# 需要重现时按 docs/02 的流程从原视频重新截帧。
+# 注意只忽略派生帧，不忽略 docs/_video 下的脚本与 OCR 文本。
+/docs/_video/frames/
+/docs/_video/ocr_frames/
+/frames/
+/frames2/
+/framesB/
+/groups/
+/strips/
+/_ref/

@@ -1,0 +1,38 @@
+{
+  "units": [
+    {
+      "id": "cn.line",
+      "name": "北军步兵团",
+      "side": "cn",
+      "kind": "infantry",
+      "strength": 8.0,
+      "position": 0,
+      "effectiveness": 1.0,
+      "supply_reach": 0.05,
+      "estimated": true,
+      "commander": {
+        "name": "北军统领",
+        "obedience": 0.8, "initiative": 0.5,
+        "aggression": 0.6, "caution": 0.5
+      },
+      "note": "演示用"
+    },
+    {
+      "id": "jp.line",
+      "name": "南军步兵团",
+      "side": "jp",
+      "kind": "infantry",
+      "strength": 9.0,
+      "position": 2,
+      "effectiveness": 1.0,
+      "supply_reach": 0.05,
+      "estimated": true,
+      "commander": {
+        "name": "南军统领",
+        "obedience": 0.75, "initiative": 0.6,
+        "aggression": 0.7, "caution": 0.4
+      },
+      "note": "演示用"
+    }
+  ]
+}

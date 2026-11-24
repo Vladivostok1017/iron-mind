@@ -1,0 +1,44 @@
+{
+  "id": "scen.nanxun",
+  "name": "南浔线作战",
+  "start_date": "1938-07-26",
+  "days": 77,
+  "seed": 20250924,
+  "comms": {
+    "preset": "wire_telegraph",
+    "air_delay": 1,
+    "local_delay": 0,
+    "adjacent_delay": 1
+  },
+  "rules": [
+    {
+      "phase": "post_movement",
+      "id": "mountain_attrition",
+      "then": [
+        {
+          "modify_strength_pct": -0.004
+        },
+        {
+          "log": "山地行军，部队出现非战斗减员"
+        }
+      ],
+      "when": {
+        "terrain": "mountain"
+      },
+      "priority": 0
+    },
+    {
+      "phase": "post_combat",
+      "id": "wanjialing_morale_boost",
+      "then": [
+        {
+          "modify_morale": 0.01
+        }
+      ],
+      "when": {
+        "province_owner": "cn"
+      },
+      "priority": 0
+    }
+  ]
+}
