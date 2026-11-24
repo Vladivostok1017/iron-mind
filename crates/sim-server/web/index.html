@@ -442,17 +442,18 @@ function renderNodes() {
 
 function render() {
   if (!S) return;
-  // 渲染出错不该让整张地图变白：捕获并提示，界面保持上一帧。
-  try {
-    if (!geom) buildGeom();
-    renderTop();
-    renderMap();
-    renderNodes();
-    renderOutliner();
-    renderPanel();
-  } catch (e) {
-    console.error(e);
-    toast("界面渲染出错：" + e.message);
+  // 每个面板单独 try：一块面板的 bug 不该让整张地图变白。
+  // （之前是整块 try，一个未定义变量就把地图和右栏一起搞没了。
+  //   分块之后，出错的那一块自己在控制台报，其余照常显示。）
+  const parts = [["top", renderTop], ["map", renderMap], ["nodes", renderNodes], ["outliner", renderOutliner], ["panel", renderPanel]];
+  try { if (!geom) buildGeom(); } catch (e) { console.error("buildGeom", e); }
+  for (const [name, fn] of parts) {
+    try {
+      fn();
+    } catch (e) {
+      console.error("render:" + name, e);
+      toast("界面「" + name + "」渲染出错：" + e.message);
+    }
   }
 }
 
@@ -860,13 +861,6 @@ function renderOutliner() {
     };
     box.appendChild(d);
   }
-  if (rest > 0) {
-    const more = document.createElement("div");
-    more.className = "ol";
-    more.style.cursor = "default";
-    more.textContent = "另有 " + rest + " 条已处理公文";
-    box.appendChild(more);
-  }
 }
 // 侧栏显示将领大脑在用谁：真模型 / 模拟 / 规则
 async function refreshLlm() {
@@ -968,13 +962,6 @@ function renderPanel() {
     d.className = "item k-" + r.kind;
     d.textContent = "[" + r.tick + "] " + r.text + (r.n > 1 ? "　×" + r.n : "");
     box.appendChild(d);
-  }
-  if (rest > 0) {
-    const more = document.createElement("div");
-    more.className = "ol";
-    more.style.cursor = "default";
-    more.textContent = "另有 " + rest + " 条已处理公文";
-    box.appendChild(more);
   }
 }
 
