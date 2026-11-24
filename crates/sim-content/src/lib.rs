@@ -138,6 +138,8 @@ pub fn build_world(module: &LoadedModule) -> World {
         let owner = d.owner.map(side_of).unwrap_or(Side::Cn);
         let mut p = Province::new(&d.name, terrain_of(d.terrain), owner);
         p.fort = d.fort.min(5);
+        p.elev = d.elev;
+        p.relief = d.relief;
         p.supply_throughput = Fixed::from_f64_input(d.supply_throughput).clamp(Fixed::ZERO, Fixed::ONE);
         p.neighbors = d.neighbors.clone();
         p.is_supply_source = d.supply_source;

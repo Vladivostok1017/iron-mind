@@ -1377,7 +1377,10 @@ fn snapshot(w: &World) -> String {
             },
             "owner_known": p.owner == viewer || i_intel.is_known(),
             "mine": p.owner == viewer,
-            "fort": p.fort.max(p.positions.iter().map(|x| x.fort).max().unwrap_or(0)),
+            // 真实高程（米）：地形是怎么判出来的，给玩家一个可核对的数字。
+            // 模块没写就是 null，前端据此决定要不要显示。
+            "elev": p.elev,
+            "relief": p.relief,
             "positions": p.positions.iter().map(|x| json!({
                 "name": x.name,
                 "terrain": format!("{:?}", x.terrain).to_lowercase(),

@@ -31,5 +31,8 @@ Thumbs.db
 /strips/
 /_ref/
 
-# Natural Earth 原始数据缓存（只在重新生成 basemap.json 时需要，产物已入库）
+# Natural Earth / DEM 原始数据缓存（只在重新生成地图资产时需要，产物已入库）
 /tools/mapgen/_geo/
+
+# 截图验证产物（node tools/shot.js 生成，不入库）
+/tools/_shots/

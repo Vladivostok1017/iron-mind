@@ -177,6 +177,13 @@
   #tip .t-name { font-weight: 600; color: #dfe7ef; margin-bottom: 3px; }
   #tip .t-row { color: #8b95a1; }
   #tip .t-row b { color: #c3ccd6; font-weight: 500; }
+  /* 地形视图的高程色标 */
+  #hypso-leg { position: absolute; left: 14px; bottom: 14px; width: 190px; display: none;
+    background: rgba(16,22,29,.86); border: 1px solid #2d3947; border-radius: 4px;
+    padding: 6px 8px 4px; font-size: 10px; color: #8b95a1; z-index: 8; pointer-events: none; }
+  #hypso-leg.on { display: block; }
+  #hypso-leg .hl-bar { height: 8px; border-radius: 2px; }
+  #hypso-leg .hl-ticks { display: flex; justify-content: space-between; margin-top: 3px; }
 </style>
 </head>
 <body>
@@ -200,6 +207,12 @@
       <svg id="map"></svg>
       <div id="toast"></div>
       <div id="tip"></div>
+      <!-- 地形视图 = 真实高程图，所以要有一条色标，否则颜色只是一团好看的绿。
+           数字就是判地形的输入（tools/mapgen/terrain.js 从 DEM 采样）。 -->
+      <div id="hypso-leg">
+        <div class="hl-bar" id="hl-bar"></div>
+        <div class="hl-ticks"><span>0</span><span>200</span><span>500</span><span>900</span><span>1300 米</span></div>
+      </div>
     </div>
     <aside>
       <!-- 电报台：玩家唯一的指挥手段。地图只用来查看。 -->
@@ -516,9 +529,48 @@ function ptsToPath(poly) {
 }
 
 /* ---------- 着色 ---------- */
+/* 地形视图 = 真实高程图。
+   色带从低地暗绿到山地灰白，输入是 map.json 的 `elev`（米），
+   而 `elev` 和 `terrain` 出自同一份 DEM 采样（tools/mapgen/terrain.js）。
+   所以"这里为什么是山地"在图上自己就回答了一半。 */
+const HYPSO = [
+  [0, [47, 74, 56]],
+  [150, [74, 82, 48]],
+  [400, [107, 91, 57]],
+  [800, [139, 125, 102]],
+  [1300, [185, 178, 166]],
+];
+function hypso(elev) {
+  let i = 1;
+  while (i < HYPSO.length && elev > HYPSO[i][0]) i++;
+  const [h1, c1] = HYPSO[Math.min(i, HYPSO.length - 1)];
+  const [h0, c0] = HYPSO[Math.max(0, Math.min(i, HYPSO.length - 1) - 1)];
+  const k = h1 === h0 ? 0 : Math.max(0, Math.min(1, (elev - h0) / (h1 - h0)));
+  const rgb = c0.map((v, j) => Math.round(v + (c1[j] - v) * k));
+  return "rgb(" + rgb.join(",") + ")";
+}
+
+/* 色标条：只在"地形"视图显示。渐变必须和 hypso() 同源，所以直接从头到尾渲染一遍。 */
+function paintHypsLegend() {
+  const leg = document.getElementById("hypso-leg");
+  const bar = document.getElementById("hl-bar");
+  if (!leg || !bar) return;
+  leg.classList.toggle("on", view === "terrain");
+  if (!bar.dataset.filled) {
+    const stops = [];
+    for (let e = 0; e <= 1300; e += 20) stops.push(hypso(e) + " " + ((e / 1300) * 100).toFixed(1) + "%");
+    bar.style.background = "linear-gradient(90deg," + stops.join(",") + ")";
+    bar.dataset.filled = "1";
+  }
+}
+
 function landFill(p) {
   if (view === "terrain") {
-    return { plain: "#3f4d3c", hill: "#4d4638", mountain: "#4a4038", marsh: "#2f4747", urban: "#4d4250", water: "#16303f" }[p.terrain] || "#3a3a3a";
+    if (p.terrain === "water") return "#16303f";
+    if (p.terrain === "urban") return "#4d4250";
+    if (p.terrain === "marsh") return "#2f4747";
+    if (p.elev != null) return hypso(p.elev);
+    return { plain: "#3f4d3c", hill: "#4d4638", mountain: "#4a4038" }[p.terrain] || "#3a3a3a";
   }
   if (view === "intel") {
     if (p.mine) return "#274866";
@@ -590,6 +642,7 @@ function renderNodes() {
 
 function render() {
   if (!S) return;
+  paintHypsLegend();
   // 每个面板单独 try：一块面板的 bug 不该让整张地图变白。
   // （之前是整块 try，一个未定义变量就把地图和右栏一起搞没了。
   //   分块之后，出错的那一块自己在控制台报，其余照常显示。）
@@ -1197,6 +1250,7 @@ function showTip(ev, p) {
   const t = $("tip");
   const rows = ["<div class='t-name'>" + p.name + "</div>"];
   rows.push("<div class='t-row'>地形：<b>" + (TERRAIN_CN[p.terrain] || p.terrain) + "</b>" +
+    (p.elev != null ? "<span style='color:#7d8794'>　海拔 " + p.elev + " 米 · 高差 " + p.relief + " 米</span>" : "") +
     (p.fort ? "　工事：<b>" + p.fort + "</b>" : "") + "</div>");
   rows.push("<div class='t-row'>归属：<b>" + (p.mine ? "我方" : (p.owner_known ? "敌方" : "未知")) + "</b></div>");
   if (p.supply_source) rows.push("<div class='t-row'>补给源</div>");
@@ -1269,6 +1323,7 @@ bind("modes", "click", (e) => {
   if (!b) return;
   view = b.dataset.view;
   document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("on", x === b));
+  paintHypsLegend();
   render();
 });
 document.addEventListener("click", (e) => { lastEv = e; }, true);

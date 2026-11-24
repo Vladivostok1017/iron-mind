@@ -458,6 +458,10 @@ pub struct Province {
     pub lat: Fixed,
     /// 省内阵地。至少一个；模块不写就自动生成一个（向后兼容）。
     pub positions: Vec<Position>,
+    /// 平均海拔（米）。**不参与模拟**，只是给玩家看的"为什么这里是山地"。
+    pub elev: Option<i32>,
+    /// 省内相对高差（米）。同上。
+    pub relief: Option<i32>,
 }
 
 impl Province {
@@ -473,7 +477,16 @@ impl Province {
             lon: Fixed::ZERO,
             lat: Fixed::ZERO,
             positions: Vec::new(),
+            elev: None,
+            relief: None,
         }
+    }
+
+    /// 记下真实高程（米）。由内容层从 DEM 采样后填，模拟不读。
+    pub fn with_elevation(mut self, elev: Option<i32>, relief: Option<i32>) -> Self {
+        self.elev = elev;
+        self.relief = relief;
+        self
     }
 
     /// 阵地数（至少 1）。

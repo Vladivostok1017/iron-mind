@@ -55,6 +55,8 @@ fn prov(id: u32, name: &str, owner: SideDef, nb: &[u32]) -> ProvinceDef {
         supply_source: false,
         fort: 0,
         positions: Vec::new(),
+        elev: None,
+        relief: None,
         supply_throughput: 1.0,
         neighbors: nb.to_vec(),
         victory_points: 0,

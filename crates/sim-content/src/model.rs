@@ -308,6 +308,13 @@ pub struct ProvinceDef {
     /// 写了之后，战斗、工事、调兵都在阵地粒度上进行。
     #[serde(default)]
     pub positions: Vec<PositionDef>,
+    /// 平均海拔（米）。由 `tools/mapgen/terrain.js` 从真实高程（DEM）采样得来，
+    /// 和 `terrain` 出自同一份数据。模拟**不读**它，只是"为什么这里是山地"的说明。
+    #[serde(default)]
+    pub elev: Option<i32>,
+    /// 省内相对高差（米，p95−p5）。同上，只用来说明。
+    #[serde(default)]
+    pub relief: Option<i32>,
     /// 备注，供作者记录出处。
     #[serde(default)]
     pub note: String,
