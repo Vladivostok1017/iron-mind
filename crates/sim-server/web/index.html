@@ -2352,7 +2352,7 @@ const Dossier = (() => {
       const head = Dlg.h("div", "ds-head", card);
       Dlg.h("b", null, head, r.unit_name + "（" + r.general + "）");
       Dlg.h("span", "ds-day", head, "第 " + r.day + " 日 · 截止 " + r.deadline);
-      Dlg.h("div", "ds-title", card, "请示：" + r.title);
+      Dlg.h("div", "ds-title", card, (r.from_telegram ? "请示：" : "自请：") + r.title);
       if (r.text) Dlg.h("div", "ds-text", card, r.text);
       const act = Dlg.h("div", "ds-act", card);
       const mk = (label, cls, choice) => {
@@ -2374,8 +2374,15 @@ const Dossier = (() => {
         });
         act.appendChild(b);
       };
-      mk("准他改令", "primary", "yes");
-      mk("驳回，维持原令", "", "no");
+      // 有原令才叫"改令"；他自己想改自己的命令时，玩家没下过令，
+      // 只能说"准许执行 / 不许"——措辞不对，玩家会以为系统记错了。
+      if (r.from_telegram) {
+        mk("准他改令", "primary", "yes");
+        mk("驳回，维持原令", "", "no");
+      } else {
+        mk("准许执行", "primary", "yes");
+        mk("不许", "", "no");
+      }
     }
     Dlg.open({ title: "请示 · " + list.length + " 件待批", body, actions: [{ label: "稍后处理" }] });
   }

@@ -644,7 +644,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         "text": r.text,
                         "options": r.options,
                         "deadline": r.deadline,
-                        "status": r.status,
+                        "status": r.status, "from_telegram": r.from_telegram,
                     })
                 })
                 .collect();
@@ -709,7 +709,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         day_sent: w.tick,
                         arrive_day: arrive,
                         to: to.clone(),
-                        text: text.clone(),
+                        text: text.split("　回电：").next().unwrap_or(&text).to_string(),
                         status: "enroute",
                         reply: String::new(),
                         traces: Vec::new(),
@@ -750,7 +750,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             // 先把上下文取出来再放锁：模型要几秒，不能把整个世界锁住
             let ask = {
                 let g = state.world.lock().unwrap();
-                g.as_ref().and_then(|w| build_ask(&state, w, idx, ""))
+                g.as_ref().and_then(|w| build_ask_kind(&state, w, idx, "", false))
             };
             let Some(ask) = ask else {
                 let msg = json!({ "ok": false, "error": "这个番号联系不上" });
@@ -929,6 +929,11 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 *guard = Some(nw);
                 // 重开 = 清空命令流，否则回放会带着上一局的命令
                 state.commands.lock().unwrap().clear();
+                // 电报和公文也是上一局的。不清的话"重开"之后电报台上
+                // 还挂着上一局的电报、公文堆还挂着上一局的请示——
+                // 玩家会以为重开没生效（实际发生过）。
+                state.telegrams.lock().unwrap().clear();
+                state.reports.lock().unwrap().clear();
                 snapshot(guard.as_ref().unwrap())
             };
             respond(&mut stream, 200, "application/json", &json)
@@ -1284,7 +1289,10 @@ struct Report {
     /// 请示的选项文案
     options: Vec<String>,
     deadline: u32,
-    status: &'static str, // pending / approved / denied / expired
+    status: &'static str,
+    /// 这件公文是不是由某封电报引出来的。没有原令时界面措辞要换（准许执行/不许），
+    /// 不能叫"准他改令"——玩家根本没下过令。
+    from_telegram: bool,
 }
 
 /// 追加一条公文，返回 id。
@@ -1525,8 +1533,13 @@ fn memory_for(state: &Arc<ServerState>, w: &World, idx: usize) -> Vec<String> {
 /// 给一个单位准备"问将领"的材料。**只放他自己知道的东西**：
 /// 邻接敌情用的是本方情报估计，不是真值。
 fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &str) -> Option<llm::Ask> {
+    build_ask_kind(state, w, idx, incoming, true)
+}
+
+/// require_ground = false 时允许空军/海军也生成问询（通话要用）。
+fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &str, require_ground: bool) -> Option<llm::Ask> {
     let u = w.units.get(idx)?;
-    if !u.is_alive() || !u.kind.is_ground() {
+    if !u.is_alive() || (require_ground && !u.kind.is_ground()) {
         return None;
     }
     let p = w.provinces.get(u.position as usize)?;
@@ -1782,11 +1795,12 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
                     unit_name: unit_name.clone(),
                     general: general.clone(),
                     title: title.trim().to_string(),
-                    text: text.clone(),
+                    text: text.split("　回电：").next().unwrap_or(&text).to_string(),
                     proposed: Some((kind.to_string(), target)),
                     options: vec!["准他改令".into(), "驳回，维持原令".into()],
                     deadline: day + 2,
                     status: "pending",
+                    from_telegram: ready.telegram.is_some(),
                 },
             );
             notes.push((
