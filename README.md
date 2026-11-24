@@ -1,19 +1,33 @@
 # 钢心 / Iron Mind
 
+> **你只能发电报，不能拖部队。** 一个 AI 驱动的战役级大战略引擎：将军们按自己的性格理解你的命令，可能追问、可能打折扣、也可能抗命。
+>
+> 引擎只提供框架——每个战役都是可导入的**模块**，引擎里不认识任何一场具体的战争。
+
+[![CI](https://github.com/Vladivostok1017/iron-mind/actions/workflows/ci.yml/badge.svg)](https://github.com/Vladivostok1017/iron-mind/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![engine 0.12](https://img.shields.io/badge/engine-0.12-2f6f4f)
+
+**三个仓库：**
+
+| 仓库 | 作用 |
+|---|---|
+| **iron-mind**（这里） | 引擎：内核 / 系统 / 规则 / 服务端 / 单文件前端 |
+| [iron-mind-sdk](https://github.com/Vladivostok1017/iron-mind-sdk) | 作者工具：存盘即重载的开发循环、零警告脚手架 |
+| [nanxun-1938](https://github.com/Vladivostok1017/nanxun-1938) | 首个战役模块：1938 年 7–10 月的南浔线，87 省 / 18 个单位 |
+
 > **接手开发请看 [`HANDOFF.md`](HANDOFF.md)** —— 项目现状、代码地图、设计决策、已知的坑、下一步建议。10 分钟能上手。
-AI 驱动的战役级大战略游戏。
 
 **个人项目，非商业，免费发布。** 不设商业模式，不做付费内容，不做在线平台。
 
 **产品形态：引擎 + 模块。** 游戏本体只提供框架，每个战役都是可导入的模块，玩家可以自己创作。
-
-**首个战役模块在另一个仓库**：[`../nanxun-1938`](../nanxun-1938)（南浔线 1938）。
-本仓库只有引擎：Kernel / Systems / Rules / 服务端 / 前端 / 作者工具。
+本仓库只有引擎：Kernel / Systems / Rules / 服务端 / 前端。
 里面**不应该出现"1938""日本""中国"这类字样**——那是模块的事。
 
 ```powershell
-$env:IRONMIND_MODULES = "F:\dsh\nanxun-1938"   # 告诉引擎去哪个目录找模块
-cargo run -p sim-server                        # 默认捡到的就是南浔线
+git clone https://github.com/Vladivostok1017/nanxun-1938 ..\nanxun-1938
+$env:IRONMIND_MODULES = "..\nanxun-1938"   # 告诉引擎去哪个目录找模块
+cargo run -p sim-server                    # 默认捡到的就是南浔线
 ```
 
 ---

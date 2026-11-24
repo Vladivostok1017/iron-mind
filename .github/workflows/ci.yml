@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # 注意：不用 --release。workspace 的 release profile 开了 panic=abort，
+      # 测试进程不会 unwind，一个断言失败会直接 abort掉整个二进制。
+      - name: cargo test
+        run: cargo test --workspace
+      # 严格模式抓"字段名拼错"：模块里多写一个不存在的字段就直接失败。
+      - name: strict module schema
+        run: cargo test -p sim-content --features strict
