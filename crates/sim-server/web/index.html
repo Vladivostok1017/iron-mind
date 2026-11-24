@@ -193,6 +193,15 @@
   .call-row input:focus { outline: none; border-color: #3d5a7a; }
   #call-to { width: 100%; margin-bottom: 8px; background: #0f151b; color: #cfd8e3;
     border: 1px solid #2a3542; border-radius: 4px; padding: 6px 8px; font-size: 12px; }
+  /* 要闻：一行一条，按事件类型上色，和战报信箱同一套 */
+  .br-row { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px dashed #232d38; font-size: 12px; }
+  .br-k { width: 56px; color: #6f7a86; flex-shrink: 0; font-size: 11px; }
+  .br-v { color: #b9c4d0; line-height: 1.6; }
+  .br-row.k-combat .br-v { color: #c9a07a; }
+  .br-row.k-occupy .br-v { color: #8fb8d8; }
+  .br-row.k-dissent .br-v { color: var(--gold); }
+  .br-row.k-retreat .br-v { color: #a98b7a; }
+  .br-row.k-supply .br-v { color: #9aa6b3; }
   /* 指挥链：一行一环，把"我的电报变成了什么"摊开 */
   .ch-row { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed #232d38;
     font-size: 12px; }
@@ -1437,7 +1446,10 @@ async function api(path, body) {
     refreshReports();
     refreshTelegrams();
     // 请示优先：推进完之后如果有人在等批示，直接把大窗弹出来
-    try { Dossier.popup(false); } catch (e) {}
+    try {
+      // 请示优先：要玩家点头的先弹；没有再弹当天的要闻（只读，已阅即可）
+      Dossier.popup(false).then(() => { try { Briefing.popup(); } catch (e) {} });
+    } catch (e) {}
   } catch (e) { toast("连接失败，检查服务是否运行"); }
 }
 
@@ -2385,6 +2397,47 @@ const Dossier = (() => {
       }
     }
     Dlg.open({ title: "请示 · " + list.length + " 件待批", body, actions: [{ label: "稍后处理" }] });
+  }
+  return { popup };
+})();
+
+
+// ── 战报：一天过完，该看的自己送上来 ──
+// 请示要你点头，战报只要你**知道**。两件都弹大窗，但按钮不同：
+// 请示是"准 / 驳"，战报只有一个"已阅"——不逼你做事，只保证你没漏看。
+const Briefing = (() => {
+  // 基线 = 进入游戏那天的前一天。用 S.tick 而不是"日志里最新事件"：
+  // 新开一局的日志是空的，拿空日志当基线会把第一天的要闻吞掉（踩过）。
+  let lastSeen = null;
+  // 只报"要紧的"：规则类的非战斗减员（山地行军掉几十人）每 tick 每个单位一条，
+  // 全弹出来会把真正的事淹掉。
+  const IMPORTANT = new Set(["combat", "occupy", "retreat", "supply", "oob", "dissent", "cmd"]);
+  function popup() {
+    if (!S || !S.log || !S.log.length) return;
+    const maxTick = S.log.reduce((m, e) => Math.max(m, e.tick), 0);
+    // 刚进游戏：如果有历史，把基线推到最新（不补弹旧战报）；`n    // 如果日志是空的（新开一局），别消耗掉基线——否则第一次推进的要闻就被吞了。`n    if (lastSeen === null) lastSeen = S.tick - 1;
+    if (maxTick <= lastSeen) return;
+    // 取"上次之后的所有要闻"，不是"最新那一天的要闻"。
+    // 踩过的坑：山地行军每个单位每 tick 打一条 rule，最新一天往往只有 rule，
+    // 按天过滤就会把前一天的战斗/易手全漏掉，而且 lastSeen 已经推过去了。
+    const lines = S.log.filter((e) => e.tick > lastSeen && IMPORTANT.has(e.kind));
+    const day = lines.length ? lines[0].tick : maxTick;
+    lastSeen = maxTick;
+    if (!lines.length) return; // 这天没有要紧的事，不打扰
+    // 已经开着别的窗（请示/设置/引导/首次设置）就别叠上去
+    if ($("dlg").classList.contains("on") || Setup.isOpen() || Guide.isOn()) return;
+
+    const body = document.createElement("div");
+    Dlg.h("p", "dg-note", body, "第 " + day + " 日起 · " + lines.length + " 条要闻");
+    for (const e of lines.slice(0, 12)) {
+      const row = Dlg.h("div", "br-row k-" + e.kind, body);
+      Dlg.h("span", "br-k", row, KIND_CN[e.kind] || e.kind);
+      Dlg.h("span", "br-v", row, e.text);
+    }
+    if (lines.length > 12) {
+      Dlg.h("p", "dg-note", body, "另有 " + (lines.length - 12) + " 条，在「战报信箱」里。");
+    }
+    Dlg.open({ title: "要闻", body, actions: [{ label: "已阅", primary: true }] });
   }
   return { popup };
 })();

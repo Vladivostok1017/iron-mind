@@ -91,6 +91,7 @@ fn main() {
         brain: llm::Broker::new(Arc::clone(&llm_cfg)),
         hq: llm::HqDriver::new(Arc::clone(&llm_cfg)),
         hq_plan: std::sync::Mutex::new(String::new()),
+        talk_log: std::sync::Mutex::new(std::collections::HashMap::new()),
         hq_last_day: std::sync::Mutex::new(0),
         reports: std::sync::Mutex::new(Vec::new()),
         next_report_id: std::sync::atomic::AtomicU32::new(1),
@@ -160,6 +161,10 @@ struct ServerState {
     /// 敌方统帅部（AI 玩家）：独立线程 + 上一次的方针。
     hq: llm::HqDriver,
     hq_plan: std::sync::Mutex<String>,
+    /// 每次通话的问答（单位索引 → 最近几句）。
+    ///
+    /// 进将领的提示词，但不进世界状态：它影响**判断**，不影响回放。
+    talk_log: std::sync::Mutex<std::collections::HashMap<usize, Vec<String>>>,
     hq_last_day: std::sync::Mutex<u32>,
     /// 公文堆（请示 / 抗命 / 通报）
     reports: std::sync::Mutex<Vec<Report>>,
@@ -762,6 +767,15 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 Err(e) => format!("（联络不上：{e}）"),
             };
             trace(format!("   通话 {who}：{text} → {reply}"));
+            {
+                // 他说过的话要记住：下一封电报的判断该受影响。
+                let mut g = state.talk_log.lock().unwrap();
+                let e = g.entry(idx).or_default();
+                e.push(format!("（通话）上峰问：{text}"));
+                e.push(format!("（通话）{who}答：{reply}"));
+                let n = e.len();
+                if n > 12 { e.drain(0..n - 12); }
+            }
             respond(
                 &mut stream,
                 200,
@@ -1498,6 +1512,19 @@ fn memory_for(state: &Arc<ServerState>, w: &World, idx: usize) -> Vec<String> {
         return out;
     }
     let day = w.tick;
+    // 通话里说过的话也算记忆。
+    //
+    // "务必坚守，党国看好你"这种嘱咐，下一封电报的判断就该受影响——
+    // 否则通话只是一次性闲聊，玩家不会认真对待它。
+    // 只进提示词，不进世界状态：它改变**判断**，不改变回放。
+    {
+        let log = state.talk_log.lock().unwrap();
+        if let Some(lines) = log.get(&idx) {
+            for l in lines.iter().rev().take(6) {
+                out.push(l.clone());
+            }
+        }
+    }
     {
         let cmds = state.commands.lock().unwrap();
         for c in cmds
@@ -1777,7 +1804,20 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
 
         // 中方的将领要向上报：抗命不是立刻执行，而是**请你点头**。
         // 日方由 AI 全权指挥，没有上级可问，直接执行。
-        if w.units[idx].side == Side::Cn {
+        // 什么才值得"请示"？
+        //
+        // 只有两种情况要玩家点头：
+        //   · 他在回应你**明确下过的令**（电报）——他要么照办，要么请你改；
+        //   · 改动代价很大：撤退，或者放弃工事/驻地开拔。
+        //
+        // 其余（自己微调目标、闲着去挖工事、换个方向推进）一律**直接执行**
+        // 并进战报。以前只要"和他的现行命令不一致"就开请示，于是玩家
+        // 每三天被敲一次门，而请示本来该是"这事要你担责任"。
+        let high_cost = matches!(kind, "retreat")
+            || (matches!(cur, Order::Fortify | Order::Hold)
+                && matches!(kind, "move" | "attack"));
+        let needs_blessing = ready.telegram.is_some() || high_cost;
+        if w.units[idx].side == Side::Cn && needs_blessing {
             // 公文标题用中文命令名。以前这里直接拼 `kind`（引擎内部代号），
             // 公文堆里于是出现"请示：attack 万家岭 准不准？"——半句英文。
             let title = format!(
