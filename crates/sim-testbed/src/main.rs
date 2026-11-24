@@ -17,6 +17,11 @@ fn main() {
     let seed_override: Option<u64> = arg_or_opt(&args, "--seed");
     let verbose = args.iter().any(|a| a == "--verbose");
     let module_dir = arg_str(&args, "--module");
+    // --trace 第101师团：逐 tick 打某个单位的位置序列。
+    //
+    // 为什么要这个：快照会骗人。"一个师团突然出现在后方"到底是一天走一省
+    // 渗透过来的，还是被某段代码瞬移过去的，只有**时序**能回答。
+    let trace = arg_str(&args, "--trace");
 
     println!("== Iron Mind · 无头测试台 ==\n");
 
@@ -66,8 +71,8 @@ fn main() {
     println!("\n【{label}】种子 {seed} · {ticks} tick\n");
 
     // ---- 确定性：同输入两次 ----
-    let (world_a, hashes_a) = simulate(world.clone(), ticks, verbose);
-    let (_world_b, hashes_b) = simulate(world.clone(), ticks, false);
+    let (world_a, hashes_a) = simulate(world.clone(), ticks, verbose, trace.as_deref());
+    let (_world_b, hashes_b) = simulate(world.clone(), ticks, false, None);
 
     if hashes_a == hashes_b {
         println!("[OK] 确定性通过：{ticks} 个 tick 的哈希序列完全一致");
@@ -88,7 +93,7 @@ fn main() {
     // ---- 换种子应产生不同演化 ----
     let mut other = world.clone();
     other.seed = seed.wrapping_add(1);
-    let (_, hashes_c) = simulate(other, ticks, false);
+    let (_, hashes_c) = simulate(other, ticks, false, None);
     if hashes_c.last() != hashes_a.last() {
         println!("[OK] 随机流生效：不同种子得到不同结局");
     } else {
@@ -134,11 +139,46 @@ fn arg_or_opt<T: std::str::FromStr>(args: &[String], key: &str) -> Option<T> {
         .and_then(|v| v.parse().ok())
 }
 
-fn simulate(mut world: World, ticks: u32, verbose: bool) -> (World, Vec<u64>) {
+fn simulate(mut world: World, ticks: u32, verbose: bool, trace: Option<&str>) -> (World, Vec<u64>) {
     let mut hashes = Vec::with_capacity(ticks as usize);
+    // 被追踪单位的索引（按名字找一次）
+    let traced = trace.and_then(|name| {
+        world
+            .units
+            .iter()
+            .position(|u| u.name.contains(name))
+            .map(|i| (i, name.to_string()))
+    });
+    if let Some((_, name)) = &traced {
+        println!("-- 追踪 {name}（逐 tick 位置）--");
+    }
     for t in 0..ticks {
         systems::tick(&mut world);
         hashes.push(world.state_hash());
+        if let Some((i, _)) = traced {
+            if i < world.units.len() {
+                let u = &world.units[i];
+                let prov = &world.provinces[u.position as usize];
+                let target = u
+                    .order
+                    .target()
+                    .and_then(|t| world.provinces.get(t as usize))
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "-".to_string());
+                println!(
+                    "  tick {:3}  {:8} 兵{:5.1} 补{:.2} 归{} →{}",
+                    world.tick,
+                    prov.name,
+                    u.strength.to_display_f64(),
+                    u.supply.to_display_f64(),
+                    match prov.owner {
+                        Side::Cn => "国",
+                        Side::Jp => "日",
+                    },
+                    target
+                );
+            }
+        }
         if verbose && t % 15 == 0 {
             println!("-- tick {} --", world.tick);
             report(&world);

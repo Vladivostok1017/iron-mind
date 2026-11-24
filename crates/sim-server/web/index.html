@@ -178,6 +178,12 @@
   #tip .t-row { color: #8b95a1; }
   #tip .t-row b { color: #c3ccd6; font-weight: 500; }
   /* 行军线：虚线 + 剩余天数 */
+  /* 铁路：底色一条 + 上面一条暖色虚线当枕木。
+     补给每过一省乘"通路损耗 × 省吞吐"（铁路 0.95 / 水路 0.85 / 陆路 0.75），
+     所以铁路是这张图上最重要的战略提示——以前它根本没画出来。 */
+  .rail { pointer-events: none; }
+  .rail .railbed { stroke: #151c24; stroke-width: 3.4; stroke-linecap: round; opacity: .85; }
+  .rail .rails { stroke: #8a7448; stroke-width: 1.4; stroke-dasharray: 5 4; stroke-linecap: round; }
   .marchline text { fill: #c9a227; font-size: 9px; font-weight: 600;
     text-anchor: middle; paint-order: stroke; stroke: #0b1016; stroke-width: 2.4px; }
   /* 地形视图的高程色标 */
@@ -1144,6 +1150,34 @@ function renderMap() {
 
   // 真实水系压在最上面：省色是"归属"，河湖是"地理"，两层叠起来才像地图
   drawBasemap(svg);
+
+  // ---- 铁路 ----
+  // 补给每过一省要乘"通路损耗 × 省吞吐"：铁路 0.95、水路 0.85、陆路 0.75。
+  // 也就是说"守住南浔铁路"是这场战役最重要的战略提示，
+  // 但以前这条线在图上**完全看不见**——玩家只能从侧栏的补给数字猜。
+  // 画法：底色一条粗暗线，上面叠一条暖色虚线当枕木；相邻两省都通铁路才连。
+  {
+    const railG = el("g", { class: "rail" }, svg);
+    const byId = new Map(S.provinces.map((p) => [p.id, p]));
+    const drawn = new Set();
+    for (const p of S.provinces) {
+      if (!p.rail) continue;
+      const a = geom.centroids[p.id];
+      if (!a) continue;
+      for (const nb of p.neighbors || []) {
+        const q = byId.get(nb);
+        if (!q || !q.rail) continue; // 两端都是铁路省才成线
+        const key = p.id < nb ? p.id + ":" + nb : nb + ":" + p.id;
+        if (drawn.has(key)) continue;
+        drawn.add(key);
+        const b = geom.centroids[nb];
+        if (!b) continue;
+        const seg = { x1: a[0], y1: a[1], x2: b[0], y2: b[1] };
+        el("line", Object.assign({ class: "railbed" }, seg), railG);
+        el("line", Object.assign({ class: "rails" }, seg), railG);
+      }
+    }
+  }
 
   // 名称与标记（画在多边形之上，避免被覆盖）
   for (const p of S.provinces) {

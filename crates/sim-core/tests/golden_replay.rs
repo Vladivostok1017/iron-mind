@@ -89,7 +89,7 @@ fn golden_hash_is_stable() {
 ///   现在本国 0.25 / 敌境 0.5 兜着；断粮改成
 ///   `四面皆敌 || (本方有补给源 && BFS 到不了)`。
 ///   区别是：**离补给源远 = 缺粮（战力差）**，**被切断 = 断粮（日损）**。
-const GOLDEN_LAST_HASH: u64 = 0x9d4c_3bd1_d2a0_9aab;
+const GOLDEN_LAST_HASH: u64 = 0x09fd_d15c_7ee8_37d8;
 
 #[test]
 fn different_seeds_diverge() {
@@ -126,7 +126,14 @@ fn simulation_terminates_with_a_winner_or_standoff() {
     // "溃退—追击—再溃退"这条链跑到底的样子。所以断言改成
     // "日军占到过省"，仍然抓得住"谁也不动"这类真问题。
     let jp_prov = w.provinces.iter().filter(|p| p.owner == Side::Jp).count();
-    assert!(jp_prov > 0, "推进逻辑没生效：日军一个省都没占下来");
+    // "攻占过"而不是"现在占着"：加了战线连续性（`can_step`）之后，
+    // 一条八省直线上的日军可能打进去又被推回来。这不影响断言的本意——
+    // 抓的是"谁也不动"这种真问题，不是某一天的旗子。
+    let captured = w.log.iter().any(|e| e.text.contains("日军攻占"));
+    assert!(
+        jp_prov > 0 || captured,
+        "推进逻辑没生效：日军既没占下省，也从没攻占过任何省"
+    );
     assert_eq!(w.units.len(), 5, "单位数量不该变（死亡是状态，不是删除）");
 }
 

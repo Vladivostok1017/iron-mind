@@ -1944,6 +1944,11 @@ fn snapshot(w: &World) -> String {
             },
             "owner_known": p.owner == viewer || i_intel.is_known(),
             "mine": p.owner == viewer,
+            // 铁路：地形视图里要画出来。
+            // 之前只有引擎知道（`Province.rail` 参与补给计算），界面拿不到，
+            // 于是"守住南浔铁路"这条最重要的战略提示在图上完全看不见。
+            "rail": p.rail,
+            "neighbors": p.neighbors,
             // 真实高程（米）：地形是怎么判出来的，给玩家一个可核对的数字。
             // 模块没写就是 null，前端据此决定要不要显示。
             "elev": p.elev,

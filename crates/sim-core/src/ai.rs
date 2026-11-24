@@ -17,7 +17,7 @@ use std::collections::BinaryHeap;
 
 use crate::fixed::Fixed;
 use crate::rng::{stream, Rng};
-use crate::world::{Commander, Order, Side, Stance, Terrain, World};
+use crate::world::{Commander, Order, Side, Stance, Terrain, UnitKind, World};
 
 /// 进入敌方控制省的额外代价。
 ///
@@ -335,8 +335,33 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         let neighbors = world.provinces[pos as usize].neighbors.clone();
 
         // 找最值得打的邻接敌省
-        let (weakest, empty) = pick_target(world, &neighbors, side);
+        let (weakest, empty) = pick_target(world, &neighbors, side, u.kind);
 
+        // ---- 先把手里的省吃下来 ----
+        //
+        // 站在一个**还没归我**的省里、省里又没有敌军：那就别急着走。
+        // 不走才轮得到占领判定（要"邻接没有敌军"才生效）。
+        //
+        // 没有这条会发生什么（实测）：第101师团在星子/隘口之间一天掉一次头，
+        // 连着二十天，两个省都还是国军的——因为每次它刚到，旁边有我们的
+        // 部队，占不下来；下一 tick 它又挑另一个空省走。玩家看到的是
+        // "敌军在我后院里跳舞，旗子却一直没换"。
+        let here = &world.provinces[pos as usize];
+        let enemy_here = world.units_in(pos).iter().any(|&j| {
+            let x = &world.units[j as usize];
+            x.side != side && x.kind.is_ground() && x.is_alive()
+        });
+        // 只有"守得住"才值得停下来等占领：邻接省里还有敌军时，
+        // 占领判定本来就不会生效（见 run_movement 里的 enemy_adjacent），
+        // 停下来就是干等——那种情况应该去打旁边那支敌军。
+        let other = if side == Side::Cn { Side::Jp } else { Side::Cn };
+        let capture_blocked = here.neighbors.iter().any(|&n| {
+            world.units_in(n).iter().any(|&j| {
+                let x = &world.units[j as usize];
+                x.side == other && x.kind.is_ground() && x.is_alive()
+            })
+        });
+        let need_consolidate = here.owner != side && !enemy_here && !capture_blocked;
 
         // ---- 上级意图（统帅部） ----
         //
@@ -345,7 +370,18 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         //
         // 之前这里由 AI 自己判断"打不过就不打"，结果将领永远没有抗命的理由——
         // 因为它跟自己完全一致。分了这两级，才有"上级要打、我按兵不动"的空间。
-        let intended = if exhausted {
+        let intended = if enemy_here {
+            // 敌军就在这个省里：**打完再说**。
+            //
+            // 少了这条会看到什么（实测）：第101师团追着国军进星子，
+            // 一进去就"挑下一个空省"走到隘口，回头看见星子有守军又走回来——
+            // 一天掉一次头，连着二十天，两边都在挨打却谁也打不着谁。
+            // 挨着打的时候不许换目标，这是常识。
+            Order::Attack(pos)
+        } else if need_consolidate && !exhausted {
+            // 站在还没归我的省里，先守住，等占领判定生效
+            Order::Hold
+        } else if exhausted {
             // 打残了：这是将领自己的保存实力判断，优先级最高
             match retreat_target(world, &neighbors, side, &enemy_field) {
                 Some(dst) => Order::Retreat(dst),
@@ -411,7 +447,7 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         let neighbors = world.provinces[u.position as usize].neighbors.clone();
 
         // 和上级意图用同一个目标口径：先打有敌人的省，再考虑空省
-        let (weakest, _) = pick_target(world, &neighbors, side);
+        let (weakest, _) = pick_target(world, &neighbors, side, u.kind);
 
         // 进攻方需要明显优势才"打得动"，所以判定门槛要留余量：
         // 上级下令进攻时，只要我方战力不到守军的 1.3 倍（含工事折算），
@@ -492,6 +528,7 @@ fn pick_target(
     world: &World,
     neighbors: &[u32],
     side: Side,
+    kind: UnitKind,
 ) -> (Option<(u32, Fixed)>, Option<u32>) {
     let mut weakest: Option<(u32, Fixed)> = None;
     let mut empty: Option<u32> = None;
@@ -500,6 +537,11 @@ fn pick_target(
         // 水域不是地面单位的目标。不加这一条，沿江的每一步都会让部队
         // "进攻"江面，到移动阶段被 `can_enter` 挡住，表现为原地不动。
         if np.owner == side || np.terrain == Terrain::Water {
+            continue;
+        }
+        // 还得真的走得到。战线不连续时（比如目标只在湖对岸有我们的旗子）
+        // 这条命令落不了地，部队会揣着一个永远走不到的目标干站着。
+        if !crate::systems::can_step(world, side, kind, nb) {
             continue;
         }
         let enemy_present = world.units_in(nb).iter().any(|&j| {

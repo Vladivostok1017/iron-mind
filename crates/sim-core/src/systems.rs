@@ -32,6 +32,70 @@ pub fn can_enter(kind: UnitKind, terrain: Terrain) -> bool {
     }
 }
 
+/// 能不能踏进这一省：地形之外，还要看**战线是否连续**。
+///
+/// 没有这一条时发生过什么（真实对局日志）：
+///
+/// ```text
+/// 第101师团  星子 → 隘口 → … → 金官桥 → 吴城 → 东牯岭 → 永修 → 南昌
+/// ```
+///
+/// 一个师团从缺口一路"穿"了七八个省，最后走进我们的省会南昌。
+/// 它踩过的省都还挂着国军的旗子——既没打（省里没人），也没占
+/// （占领要求"邻接无敌军"，而被穿过的省恰恰邻着我们的部队）。
+/// 于是它在引擎里合法地"走"了过去，在玩家眼里就是**敌军从地里长出来**。
+///
+/// 现在的规矩：进入敌占省，这一省必须挨着**本方控制区**。
+/// 想深入，就得一省一省地占下来——也就是"推进"，而不是"渗透"。
+/// 自己领土内的调动不受影响（千里奔袭照旧）。
+pub fn can_step(world: &World, side: Side, kind: UnitKind, to: u32) -> bool {
+    let Some(p) = world.provinces.get(to as usize) else {
+        return false;
+    };
+    if !can_enter(kind, p.terrain) {
+        return false;
+    }
+    if p.owner == side {
+        return true;
+    }
+    // 这条只约束**地面**部队。舰队在江面上换段本来就不看"战线连不连续"
+    // （它自己的补给与炮战是另一套），历史上日军舰队就是沿长江一路开上去的。
+    if !matches!(kind, UnitKind::Infantry | UnitKind::Armor) {
+        return true;
+    }
+    // 敌占省：
+    //   · 里面有敌军 → 永远可以进（那是进攻，不是行军）
+    //   · 空省 → 必须挨着本方控制区，或者挨着本方地面部队
+    //
+    // 这条约束针对的正是"空省穿行"：第101师团曾经从缺口一路穿到南昌，
+    // 它踩过的省都**没有守军**，所以既不触发战斗，也因为邻接有我军
+    // 而占不下来——在引擎里完全合法，在玩家眼里就是凭空长出来。
+    // 有守军的省不受限：想打就打，只是打不打得动是另一回事。
+    let defended = world.units_in(to).iter().any(|&j| {
+        let x = &world.units[j as usize];
+        x.side != side && x.kind.is_ground() && x.is_alive()
+    });
+    if defended {
+        return true;
+    }
+    p.neighbors.iter().any(|&n| {
+        let Some(q) = world.provinces.get(n as usize) else {
+            return false;
+        };
+        if !can_enter(kind, q.terrain) {
+            return false;
+        }
+        if q.owner == side {
+            return true;
+        }
+        // 挨着本方部队也算前沿（集团推进：两个师可以交替前推）
+        world.units_in(n).iter().any(|&j| {
+            let x = &world.units[j as usize];
+            x.side == side && x.kind.is_ground() && x.is_alive()
+        })
+    })
+}
+
 /// 一次广度松弛的结果：到各省的代价、第一步往哪走、还要走几步。
 struct Walk {
     /// 到各省的最小加权代价（沿途地形的通行消耗之和）。
@@ -88,7 +152,7 @@ fn walk(world: &World, from: u32, side: Side, kind: UnitKind) -> Walk {
                 if qi >= n || qi == p {
                     continue;
                 }
-                if !can_enter(kind, world.provinces[qi].terrain) {
+                if !can_step(world, side, kind, q) {
                     continue;
                 }
                 let mut cost = world.provinces[qi].terrain.move_cost();
@@ -478,12 +542,14 @@ fn run_movement(world: &mut World) {
         // 目标可以不相邻：远距离调动沿最省力的路一天走一省（见 `walk`）。
         // AI 给出非法目标时静默忽略，而不是 panic——内容层永远可能出错。
         let prov = &world.provinces[u.position as usize];
-        let step = if prov.neighbors.contains(&target) {
+        // 相邻目标也要过 can_step：地形对、但战线不连续时不该走过去
+        // （见 can_step 注释：一个师团曾经从缺口一路穿到南昌）。
+        let step = if prov.neighbors.contains(&target) && can_step(world, u.side, u.kind, target) {
             target
         } else {
             match next_hop(world, u.position, target, u.side, u.kind) {
-                Some(n) => n,
-                None => continue, // 走不通（要跨海、或根本没有陆路）
+                Some(n) if can_step(world, u.side, u.kind, n) => n,
+                _ => continue, // 走不通：要跨海、战线不连续、或根本没有陆路
             }
         };
         let dest_terrain = world.provinces[step as usize].terrain;
