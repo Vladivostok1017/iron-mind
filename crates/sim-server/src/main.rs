@@ -224,13 +224,14 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     }
                     request_due(&state, w);
                     sim_core::systems::tick(w);
-                    for (dissent, text) in notes {
+                    for (dissent, text, side) in notes {
                         let kind = if dissent {
                             sim_core::world::EventKind::Dissent
                         } else {
                             sim_core::world::EventKind::Command
                         };
-                        w.report(kind, text);
+                        // 将领的话是内部文件：按方标记，服务端只把本方那些发给前端
+                        w.report_for(kind, text, side);
                     }
                 }
                 trace(format!("   tick → {} (第 {} 日)", w.tick, w.tick));
@@ -1034,7 +1035,7 @@ fn node_by_name(w: &World, prov: u32, name: &str) -> Option<u8> {
 /// 规则：
 /// - 判断与现有命令**一致**（`dissent=false`）→ 不改命令，只记一条战报（他表了态）。
 /// - 判断不同 → 覆盖命令，记一条抗命战报。**这就是"将领向你上报"的落点。**
-fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, String)> {
+fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, String, Side)> {
     let taken: Vec<(usize, llm::Ready)> = {
         let mut ready = state.brain.ready.lock().unwrap();
         // 允许"迟到"：模型要几秒，判断几乎总在当日 tick 之后才回来。
@@ -1049,7 +1050,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             .collect()
     };
 
-    let mut notes = Vec::new();
+    let mut notes: Vec<(bool, String, Side)> = Vec::new();
     for (idx, ready) in taken {
         if idx >= w.units.len() || !w.units[idx].is_alive() {
             continue;
@@ -1058,6 +1059,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         let general = w.units[idx].commander.name.clone();
         let unit_name = w.units[idx].name.clone();
         let cur = w.units[idx].order;
+        let side = w.units[idx].side;
 
         // 把模型的输出翻译成引擎命令
         let kind = j.order.as_str();
@@ -1125,7 +1127,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
         if same {
             // 同意上级：不改命令，只表态
             let t = if misgiving { format!("{text}〔有异议，仍照办〕") } else { text };
-            notes.push((false, t));
+            notes.push((false, t, side));
             continue;
         }
 
@@ -1164,6 +1166,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             notes.push((
                 true,
                 format!("{text}〔请示 #{rid}：请裁示是否准他改令〕"),
+                side,
             ));
             continue;
         }
@@ -1175,12 +1178,13 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             notes.push((
                 false,
                 format!("{unit_name}（{general}）提出的「{kind} {tgt}」不合法，已驳回"),
+                side,
             ));
             continue;
         }
         state.commands.lock().unwrap().push(rec.clone());
         apply_record(w, &rec);
-        notes.push((true, format!("{text}（擅自改为 {kind}）")));
+        notes.push((true, format!("{text}（擅自改为 {kind}）"), side));
     }
     notes
 }
@@ -1424,10 +1428,13 @@ fn snapshot(w: &World) -> String {
         "edges": edges,
         // 战报改成类型化事件：tick + kind + text。
         // 前端按 kind 上色，不再用正则去匹配中文措辞。
+        // 只把"客观事实"和"本方内部文件"发给玩家。
+        // 敌方将领的判断、回电、抗命理由属于内部消息——玩家不该看到敌人的心里话。
         "log": w
             .log
             .iter()
             .rev()
+            .filter(|e| e.side.is_none() || e.side == Some(viewer))
             .take(40)
             .map(|e| json!({ "tick": e.tick, "kind": e.kind.code(), "text": e.text }))
             .collect::<Vec<_>>(),

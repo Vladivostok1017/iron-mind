@@ -221,11 +221,9 @@ fn apply(w: &mut World, u: usize, prim: &Primitive) {
                 // 以前只写"山地行军，部队出现非战斗减员"，一排全一样，等于没说。
                 let name = w.units[u].name.clone();
                 let text = format!("{name}：{s}");
-                w.log.push(crate::world::Event::new(
-                    tick,
-                    crate::world::EventKind::Rule,
-                    text,
-                ));
+                let side = w.units[u].side;
+                let _ = tick;
+                w.report_for(crate::world::EventKind::Rule, text, side);
             }
         }
     }

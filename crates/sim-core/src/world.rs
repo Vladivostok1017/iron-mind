@@ -389,11 +389,23 @@ pub struct Event {
     pub tick: u32,
     pub kind: EventKind,
     pub text: String,
+    /// 这条消息属于哪一方。`None` = 双方都看得到的客观事实（交火、易手）。
+    ///
+    /// 为什么要有这一位：将领的判断与回电是**内部文件**。
+    /// 不加这一位，日军将领的"我不服命令"会直接出现在我方战报里——
+    /// 玩家不该知道敌人心里怎么想，那是上帝视角。
+    pub side: Option<Side>,
 }
 
 impl Event {
+    /// 客观事实：双方都能看到。
     pub fn new(tick: u32, kind: EventKind, text: impl Into<String>) -> Self {
-        Self { tick, kind, text: text.into() }
+        Self { tick, kind, text: text.into(), side: None }
+    }
+
+    /// 某一方的内部消息：只有这一方能看见。
+    pub fn sided(tick: u32, kind: EventKind, text: impl Into<String>, side: Side) -> Self {
+        Self { tick, kind, text: text.into(), side: Some(side) }
     }
 
     /// 纯文本（无头测试台、控制台用）。
@@ -403,7 +415,7 @@ impl Event {
 }
 
 impl World {
-    /// 追加一条战报。
+    /// 追加一条公开战报（双方可见）。
     ///
     /// 上限 400 条：模拟会跑上千 tick，不封顶会把内存和前端都拖垮。
     pub fn report(&mut self, kind: EventKind, text: impl Into<String>) {
@@ -412,6 +424,16 @@ impl World {
         }
         let tick = self.tick;
         self.log.push(Event::new(tick, kind, text));
+    }
+
+    /// 追加一条**某一方内部**的战报（将领的判断、回电、抗命理由）。
+    pub fn report_for(&mut self, kind: EventKind, text: impl Into<String>, side: Side) {
+        // 内部消息：只有本方看得到（服务端按视角过滤）
+        if self.log.len() >= 400 {
+            return;
+        }
+        let tick = self.tick;
+        self.log.push(Event::sided(tick, kind, text, side));
     }
 }
 

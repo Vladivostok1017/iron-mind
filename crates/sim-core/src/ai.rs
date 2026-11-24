@@ -348,9 +348,12 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
             let name = u.name.clone();
             let cmd = u.commander.name.clone();
             let why = u.dissent_reason.clone().unwrap_or_default();
-            world.report(
+            let side = u.side;
+            // 抗命是内部通报：只有这一方的玩家能看到，敌方将领的抱怨不该出现在我方战报里
+            world.report_for(
                 crate::world::EventKind::Dissent,
                 format!("{name}（{cmd}）{why}"),
+                side,
             );
         }
     }
