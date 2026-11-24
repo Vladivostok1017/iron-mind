@@ -227,6 +227,9 @@ pub fn tick(world: &mut World) {
     run_naval(world, seed, now);
     rules.run(world, Phase::PostCombat);
     run_morale(world);
+    // 溃退：士气崩了且当面有敌 → 退，退不掉就被围歼。
+    // 这是伤亡不对称的来源（对射本身几乎对称）。
+    run_rout(world, now, seed);
     // 断粮：补给见底就真的会死人。放在士气之后——
     // 它读本 tick 的补给值，减员从下一 tick 起影响战斗力。
     run_starvation(world, now);
@@ -451,23 +454,32 @@ fn run_movement(world: &mut World) {
     //
     // 先算"留在原地的地面单位"，再按单位序号依次放行。
     // 顺序固定，所以结果可重放；挤不进去的单位原地不动，下一 tick 再试。
-    let mut occupancy = vec![0u32; world.provinces.len()];
+    //
+    // **按方计位**，不是按省计总数。
+    //
+    // 这条踩得很深：原来 3 个位是"一个省最多 3 个地面单位，不分敌我"，
+    // 于是守方只要在每个前线省摆满 3 个师，攻方就**永远进不来**，
+    // 战斗也就永远不会发生——战线在第 5 天冻结，之后双方只是被非战斗减员
+    // 慢慢磨死。一个 35 公里宽的省，双方各驻几个师相持，才是战场常态。
+    // 现在每方各限 3 个：一个省最多 3 个守军 + 3 个攻军。
+    let mut occupancy = vec![[0u32; 2]; world.provinces.len()];
     let mut is_moving = vec![false; world.units.len()];
     for &(i, _, _) in &moves {
         is_moving[i] = true;
     }
     for (i, u) in world.units.iter().enumerate() {
         if u.kind.is_ground() && u.is_alive() && !is_moving[i] {
-            occupancy[u.position as usize] += 1;
+            occupancy[u.position as usize][u.side.index() as usize] += 1;
         }
     }
     let mut accepted: Vec<(usize, u32, u8)> = Vec::with_capacity(moves.len());
     for &(i, dest, node) in &moves {
         let d = dest as usize;
-        if occupancy[d] >= STACK_LIMIT {
+        let s = world.units[i].side.index() as usize;
+        if occupancy[d][s] >= STACK_LIMIT {
             continue; // 挤不进去，按兵不动
         }
-        occupancy[d] += 1;
+        occupancy[d][s] += 1;
         accepted.push((i, dest, node));
     }
     let moves = accepted;
@@ -794,7 +806,10 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
 
         // 基础损耗率：每 tick 最多 6%，按对方战力占比分配。
         // 太高会让一场战斗三周内结束，体现不出"反复易手"。
-        let intensity = Fixed::ratio(6, 100);
+        // 每天最多削 2.5%。原来的 6% 在"天天都在打"的情况下 60 天就能把
+        // 双方一起磨光（实测两边各掉七成）；战役是有节奏的，
+        // 一份伤亡数字摊到 77 天里，2.5% 才是"苦战"而不是"互相蒸发"。
+        let intensity = Fixed::ratio(25, 1000);
         let mut cn_loss = jp_eff / total * intensity;
         let mut jp_loss = cn_eff / total * intensity;
 
@@ -809,6 +824,30 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
         jp_loss = (jp_loss * jp_jitter).clamp(Fixed::ZERO, Fixed::ratio(60, 100));
 
         // 应用损耗
+        //
+        // 士气打击分两块：
+        // 1. 伤亡本身带来的动摇（按自己的损失率）；
+        // 2. **知道自己打不过**——双方火力差距带来的持续泄气。
+        //
+        // 第 2 条以前没有，于是"打不过"只体现在兵掉得快，士气几乎不动，
+        // 部队永远不崩、也就永远不会溃退。可战场上的实情是：
+        // 火力被压制的部队不是被一个个打死，是**崩了**——
+        // 这才是伤亡不对称的来源（对射本身几乎对称）。
+        const SHOCK_CAP: Fixed = Fixed::ratio_const(6, 100);
+        let shock = |own: Fixed, foe: Fixed| -> Fixed {
+            if own.is_zero() {
+                return SHOCK_CAP;
+            }
+            let ratio = foe / own;
+            if ratio <= Fixed::ONE {
+                Fixed::ZERO
+            } else {
+                ((ratio - Fixed::ONE) * Fixed::ratio(8, 100)).clamp(Fixed::ZERO, SHOCK_CAP)
+            }
+        };
+        let cn_shock = shock(cn_eff, jp_eff);
+        let jp_shock = shock(jp_eff, cn_eff);
+
         let mut cn_lost = Fixed::ZERO;
         let mut jp_lost = Fixed::ZERO;
         for &i in &cn {
@@ -816,7 +855,7 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
             let delta = u.strength * cn_loss;
             u.strength -= delta;
             u.losses += delta;
-            u.morale -= cn_loss * Fixed::ratio(5, 10);
+            u.morale -= cn_loss * Fixed::ratio(5, 10) + cn_shock;
             u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
             cn_lost += delta;
         }
@@ -825,7 +864,7 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
             let delta = u.strength * jp_loss;
             u.strength -= delta;
             u.losses += delta;
-            u.morale -= jp_loss * Fixed::ratio(5, 10);
+            u.morale -= jp_loss * Fixed::ratio(5, 10) + jp_shock;
             u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
             jp_lost += delta;
         }
@@ -865,6 +904,167 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
 
         // 阵地归属由 tick 开头的占领结算按"阵地数过半"统一处理，
         // 这里不再直接改省的颜色：一个阵地打赢了不代表整省易手。
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 溃退
+
+/// 士气低于它、且正在交火 → 崩。0.25 是个经验值：
+/// 低于这个数，部队已经打不成建制，只剩各自逃命。
+const ROUT_MORALE: (i32, i32) = (25, 100);
+/// 溃退时丢掉的兵力：丢辎重、掉队、被追歼。一成二。
+const ROUT_LOSS: (i32, i32) = (6, 100);
+
+/// 溃退与围歼。
+///
+/// 为什么这条对"真实"最关键：以前伤亡只是双方火力对冲的结果，
+/// 谁火力占比高谁掉得少，于是**双方伤亡必然接近对称**。
+/// 而武汉会战的实际形状是中方伤亡约为日军的 3–4 倍——
+/// 差距不在对射，而在**崩了之后**：丢掉装备、掉队、被追、被围歼。
+///
+/// 现在：士气崩 (<0.25) 且当面有敌 → 退向邻接的己方空省，
+/// 一路丢一成二的兵；**无路可退就是被围歼**（走 `end_unit`，
+/// 连将领结局与整编资格一起结算）。
+///
+/// 这条不需要新机制：士气、合围、覆灭都已经有了，它只是把它们接起来。
+fn run_rout(world: &mut World, now: u32, seed: u64) {
+    use crate::world::EventKind;
+
+    // 先收集，再动手：借用规则简单，也保证顺序固定（确定性）
+    let threshold = Fixed::ratio(ROUT_MORALE.0, ROUT_MORALE.1);
+    let mut plans: Vec<(usize, Option<u32>)> = Vec::new();
+
+    for i in 0..world.units.len() {
+        let u = &world.units[i];
+        if !u.in_being() || !u.kind.is_ground() {
+            continue;
+        }
+        if u.morale >= threshold {
+            continue;
+        }
+        let pos = u.position;
+        let side = u.side;
+        // 只在"同一阵地上当面有敌"时才算崩。士气低但没打仗的部队
+        // 不该自己跑掉——那是下一 tick 的事，不是溃退。
+        let engaged = world.units_in(pos).iter().any(|&j| {
+            let x = &world.units[j as usize];
+            x.side != side && x.kind.is_ground() && x.is_alive() && x.node == u.node
+        });
+        if !engaged {
+            continue;
+        }
+
+        // 打不赢才崩。士气低但**占着上风**的部队不该跑——
+        // 少了这一条，一支火力占优的部队也会因为士气压到地板而溃退，
+        // 于是出现"赢着赢着把阵地让出去"的怪事（内置场景跑到第 200 天
+        // 曾把国军的省份全丢光，兵力却还在）。
+        let mut own_power = Fixed::ZERO;
+        let mut foe_power = Fixed::ZERO;
+        for &j in &world.units_in(pos) {
+            let x = &world.units[j as usize];
+            if !x.is_alive() || !x.kind.is_ground() || x.node != u.node {
+                continue;
+            }
+            if x.side == side {
+                own_power += x.combat_power();
+            } else {
+                foe_power += x.combat_power();
+            }
+        }
+        if own_power >= foe_power {
+            continue;
+        }
+
+        // 找退路：邻接、陆地、没有敌军。
+        //
+        // 三轮，依次放宽：
+        // 1. 己方控制 + 放得下；
+        // 2. 己方控制（挤也要去——自己的后方堵住不该等于全军覆没）；
+        // 3. **别人的地也行，只要没有敌军**（溃兵往乡下跑，不会站着等死）。
+        //
+        // 第 3 轮是必须的：进攻方在敌境里崩溃时，背后没有"自己的省"——
+        // 只有它一路打过来的那些地方。以前只认己方省份，于是日军每个
+        // 被打崩的师团都判"无路可退 → 围歼"，60 天就把自己打光了
+        // （实测 96.5 千 → 9.5 千）。围歼应当是"四面都是敌人"，
+        // 不是"前后没有自己的旗子"。
+        let mut dest: Option<u32> = None;
+        for (owner_only, require_room) in [(true, true), (true, false), (false, false)] {
+            for nb in world.provinces[pos as usize].neighbors.clone() {
+                let np = &world.provinces[nb as usize];
+                if np.terrain == Terrain::Water {
+                    continue;
+                }
+                if owner_only && np.owner != side {
+                    continue;
+                }
+                if world.units_in(nb).iter().any(|&j| {
+                    let x = &world.units[j as usize];
+                    x.side != side && x.kind.is_ground() && x.is_alive()
+                }) {
+                    continue;
+                }
+                if require_room {
+                    // 也只数**本方**的部队
+                    let own_here = world
+                        .units_in(nb)
+                        .iter()
+                        .filter(|&&j| {
+                            let x = &world.units[j as usize];
+                            x.kind.is_ground() && x.side == side
+                        })
+                        .count();
+                    if own_here as u32 >= STACK_LIMIT {
+                        continue;
+                    }
+                }
+                dest = Some(nb);
+                break; // 邻接顺序固定 → 退路固定 → 确定性
+            }
+            if dest.is_some() {
+                break;
+            }
+        }
+        plans.push((i, dest));
+    }
+
+    for (i, dest) in plans {
+        let name = world.units[i].name.clone();
+        let from = world.provinces[world.units[i].position as usize].name.clone();
+        let side = world.units[i].side;
+        let loss = world.units[i].strength * Fixed::ratio(ROUT_LOSS.0, ROUT_LOSS.1);
+
+        match dest {
+            Some(dest) => {
+                let to = world.provinces[dest as usize].name.clone();
+                let u = &mut world.units[i];
+                u.strength -= loss;
+                u.losses += loss;
+                u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
+                u.position = dest;
+                u.node = 0;
+                u.moving_to = None;
+                u.order = crate::world::Order::Hold;
+                // 溃退之后这支部队已经不听上级的了，交还给规则 AI 收拾
+                u.manual = false;
+                u.dissent_reason = None;
+                u.disobeyed = false;
+                world.report(
+                    EventKind::Retreat,
+                    format!("{name} 从 {from} 溃退至 {to}，损失 {:.2} 千", loss.to_display_f64()),
+                );
+                let _ = side;
+            }
+            None => {
+                // 无路可退：被围歼。走统一的覆灭结算（将领结局、整编资格都在里面）
+                let u = &mut world.units[i];
+                u.strength = Fixed::ZERO;
+                world.report(
+                    EventKind::Retreat,
+                    format!("{name} 在 {from} 突围无路，被围歼"),
+                );
+                end_unit(world, i, world.units[i].position, now, seed);
+            }
         }
     }
 }

@@ -80,7 +80,10 @@ fn golden_hash_is_stable() {
 ///   断粮（<0.15）每天减员 0.5%。这两条直接改变兵力与补给值，属于行为变更。
 /// - 覆灭阈值从"不足 1 千"改为"不足 200 人"后重算：
 ///   老口径会把 800–1500 人的空军飞行团一夜之间判成全军覆没。
-const GOLDEN_LAST_HASH: u64 = 0x9974_8ea1_5e72_944c;
+/// - **加入溃退与围歼**（docs/23）后重算：士气 <0.25 且当面打不赢就退向
+///   己方空省、丢一成二的兵；无路可退则被围歼。这是"伤亡不对称"的来源
+///   ——对射本身几乎对称，差距在崩了之后。
+const GOLDEN_LAST_HASH: u64 = 0xe833_dda6_98b6_d5ba;
 
 #[test]
 fn different_seeds_diverge() {
@@ -110,9 +113,15 @@ fn simulation_terminates_with_a_winner_or_standoff() {
         cn.raw() > 0 || jp.raw() > 0,
         "双方都不应有兵力，模拟可能已损坏"
     );
-    // 地图归属应当发生变化（否则推进逻辑没生效）
-    let cn_prov = w.provinces.iter().filter(|p| p.owner == Side::Cn).count();
-    assert!(cn_prov > 0);
+    // 推进逻辑应当生效：日军至少要打下过省。
+    //
+    // 这里原来还断言"国军至少留一个省"。加入溃退之后，内置场景
+    // （八省一条直线）完全可能被一路推平——那不是 bug，是
+    // "溃退—追击—再溃退"这条链跑到底的样子。所以断言改成
+    // "日军占到过省"，仍然抓得住"谁也不动"这类真问题。
+    let jp_prov = w.provinces.iter().filter(|p| p.owner == Side::Jp).count();
+    assert!(jp_prov > 0, "推进逻辑没生效：日军一个省都没占下来");
+    assert_eq!(w.units.len(), 5, "单位数量不该变（死亡是状态，不是删除）");
 }
 
 

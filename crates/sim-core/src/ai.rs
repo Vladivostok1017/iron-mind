@@ -221,19 +221,8 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         let exhausted = u.strength < u.max_strength * EXHAUSTED_RATIO;
         let neighbors = world.provinces[pos as usize].neighbors.clone();
 
-        // 找最弱的邻接敌省
-        let mut weakest: Option<(u32, Fixed)> = None;
-        for &nb in &neighbors {
-            let np = &world.provinces[nb as usize];
-            // 水域不是地面单位的目标。不加这一条，沿江的每一步都会
-            // 让部队"进攻"江面，到移动阶段被 `can_enter` 挡住，表现为原地不动。
-            if np.owner != side && np.terrain != Terrain::Water {
-                let ep = world.enemy_estimate(side, nb); // 基于情报，不是真值
-                if weakest.map_or(true, |(_, p)| ep < p) {
-                    weakest = Some((nb, ep));
-                }
-            }
-        }
+        // 找最值得打的邻接敌省
+        let (weakest, empty) = pick_target(world, &neighbors, side);
 
 
         // ---- 上级意图（统帅部） ----
@@ -276,12 +265,20 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
                 Order::Hold
             }
         } else {
+            // 有敌人就打敌人；没有敌人才去占空省。
+            //
+            // 顺序颠倒过一次，后果很严重：以前按"兵力估计最小"挑目标，
+            // 而空省永远是 0，于是日军一路绕开国军去涂空省——60 天里
+            // 一场陆战都没打，战线在第 5 天就冻住，双方只是被非战斗减员
+            // 慢慢磨。进攻方的目标必须是**对方的部队**，不是地图颜色。
             match weakest {
-                Some((target, ep)) if ep.is_zero() => Order::Move(target),
                 Some((target, _)) => Order::Attack(target),
-                None => match advance_target(&neighbors, &enemy_field) {
-                    Some(dst) => Order::Move(dst),
-                    None => Order::Hold,
+                None => match empty {
+                    Some(target) => Order::Move(target),
+                    None => match advance_target(&neighbors, &enemy_field) {
+                        Some(dst) => Order::Move(dst),
+                        None => Order::Hold,
+                    },
                 },
             }
         };
@@ -300,18 +297,8 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         let power = u.combat_power();
         let neighbors = world.provinces[u.position as usize].neighbors.clone();
 
-        let mut weakest: Option<(u32, Fixed)> = None;
-        for &nb in &neighbors {
-            let np = &world.provinces[nb as usize];
-            // 水域不是地面单位的目标。不加这一条，沿江的每一步都会
-            // 让部队"进攻"江面，到移动阶段被 `can_enter` 挡住，表现为原地不动。
-            if np.owner != side && np.terrain != Terrain::Water {
-                let ep = world.enemy_estimate(side, nb); // 基于情报，不是真值
-                if weakest.map_or(true, |(_, p)| ep < p) {
-                    weakest = Some((nb, ep));
-                }
-            }
-        }
+        // 和上级意图用同一个目标口径：先打有敌人的省，再考虑空省
+        let (weakest, _) = pick_target(world, &neighbors, side);
 
         // 进攻方需要明显优势才"打得动"，所以判定门槛要留余量：
         // 上级下令进攻时，只要我方战力不到守军的 1.3 倍（含工事折算），
@@ -378,6 +365,51 @@ fn retreat_target(world: &World, neighbors: &[u32], side: Side, field: &[u32]) -
         }
     }
     best.map(|(_, nb)| nb)
+}
+
+/// 挑目标：**先打有敌人的省，再考虑空省**。
+///
+/// 返回 `(有敌人的最弱邻省, 第一个可进的空邻省)`。
+///
+/// 为什么要把这两种分开：以前的写法是"按兵力估计挑最小的"，而空省永远
+/// 是 0，于是进攻方一路绕开守军去涂空省——60 天里一场陆战都没打，
+/// 战线第 5 天就冻住，双方只是被非战斗减员磨死。
+/// 进攻方的目标是**对方的部队**，不是地图上的颜色。
+fn pick_target(
+    world: &World,
+    neighbors: &[u32],
+    side: Side,
+) -> (Option<(u32, Fixed)>, Option<u32>) {
+    let mut weakest: Option<(u32, Fixed)> = None;
+    let mut empty: Option<u32> = None;
+    for &nb in neighbors {
+        let np = &world.provinces[nb as usize];
+        // 水域不是地面单位的目标。不加这一条，沿江的每一步都会让部队
+        // "进攻"江面，到移动阶段被 `can_enter` 挡住，表现为原地不动。
+        if np.owner == side || np.terrain == Terrain::Water {
+            continue;
+        }
+        let enemy_present = world.units_in(nb).iter().any(|&j| {
+            let x = &world.units[j as usize];
+            x.side != side && x.kind.is_ground() && x.is_alive()
+        });
+        if enemy_present {
+            let mut ep = world.enemy_estimate(side, nb); // 基于情报，不是真值
+            // 没侦察到的敌军，估计值是 0。不能拿 0 当"这里没有守军"：
+            // 那会让进攻方闭着眼睛撞进两三个师的阵地（实测：日军 60 天
+            // 把自己打光，只剩 9.5 千）。按"至少一个师"折算，
+            // 逼它先把侦察与判断做完再下手。
+            if ep.is_zero() {
+                ep = Fixed::from_int(10);
+            }
+            if weakest.map_or(true, |(_, p)| ep < p) {
+                weakest = Some((nb, ep));
+            }
+        } else if empty.is_none() {
+            empty = Some(nb);
+        }
+    }
+    (weakest, empty)
 }
 
 /// 推进目标：邻接省中离敌人最近的那个。
