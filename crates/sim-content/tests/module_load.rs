@@ -10,10 +10,44 @@ use sim_content::model::*;
 use sim_content::{build_world, from_parts, load_module, LoadError};
 use sim_core::run_ticks;
 
-const MODULE_REL: &str = "../../content/scenarios/nanxun_1938.imod";
+// 南浔线模块现在住在**另一个仓库**（`../nanxun-1938`）。
+// 引擎自己的回归不该依赖它：找不到时这几条测试会明确打印"跳过"并返回，
+// 而不是假装通过；也不该为了测试把模块再复制一份进引擎仓库。
+//
+// 想跑这几条：设 IRONMIND_TEST_MODULE，或者把两个仓库放成兄弟目录（默认会找到）。
+const MODULE_CANDIDATES: &[&str] = &[
+    "../../../nanxun-1938/nanxun_1938.imod",
+    "../../content/scenarios/nanxun_1938.imod",
+];
 
-fn module_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(MODULE_REL)
+fn module_dir() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("IRONMIND_TEST_MODULE") {
+        let p = std::path::PathBuf::from(p);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for rel in MODULE_CANDIDATES {
+        let p = base.join(rel);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// 拿不到模块就跳过，并把原因打出来。
+macro_rules! need_module {
+    () => {
+        match module_dir() {
+            Some(d) => d,
+            None => {
+                eprintln!("[跳过] 找不到南浔线模块（设 IRONMIND_TEST_MODULE，或把 nanxun-1938 放成兄弟目录）");
+                return;
+            }
+        }
+    };
 }
 
 fn meta(id: &str) -> ModuleMeta {
@@ -28,6 +62,7 @@ fn meta(id: &str) -> ModuleMeta {
             max: None,
         },
         content_schema: 1,
+        hq: None,
         playable_side: SideDef::Cn,
         scale: ScaleDef::Theater,
         domains: vec![DomainDef::Land],
@@ -113,7 +148,7 @@ fn minimal_parts() -> (ModuleMeta, ScenarioDef, MapDef, OobDef) {
 
 #[test]
 fn loads_bundled_module() {
-    let dir = module_dir();
+    let dir = need_module!();
     assert!(dir.exists(), "示例模块目录应存在：{}", dir.display());
     let m = load_module(&dir).expect("示例模块应能加载");
 
@@ -130,7 +165,7 @@ fn loads_bundled_module() {
 
 #[test]
 fn bundled_module_simulation_is_deterministic() {
-    let m = load_module(&module_dir()).expect("加载失败");
+    let m = load_module(&need_module!()).expect("加载失败");
     let mut a = build_world(&m);
     let ha = run_ticks(&mut a, 60);
     let mut b = build_world(&m);
@@ -142,7 +177,7 @@ fn bundled_module_simulation_is_deterministic() {
 fn module_units_keep_moving() {
     // 回归测试：单位不能原地打转。
     // 曾经的 bug 是 AI 给出"去自己所在省"的指令，被移动系统忽略后全体僵死。
-    let m = load_module(&module_dir()).expect("加载失败");
+    let m = load_module(&need_module!()).expect("加载失败");
     let mut w = build_world(&m);
     let mut moved_days = 0;
     let mut prev: Vec<u32> = w.units.iter().map(|u| u.position).collect();
@@ -162,7 +197,7 @@ fn module_units_keep_moving() {
 
 #[test]
 fn bundled_module_has_no_errors() {
-    let m = load_module(&module_dir()).expect("加载失败");
+    let m = load_module(&need_module!()).expect("加载失败");
     // 只有警告是允许的
     for w in &m.warnings {
         assert!(!w.message.is_empty(), "警告文案不能为空");

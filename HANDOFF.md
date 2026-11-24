@@ -13,20 +13,38 @@
 
 ---
 
+## 0 两个项目
+
+从 2026-11 起，**引擎与战役分成两个仓库**：
+
+| 仓库 | 负责 | 不该出现的东西 |
+|---|---|---|
+| F:\dsh\iron-mind（本仓库） | Kernel / Systems / Rules / 服务端 / 前端 / 作者工具 | 任何"1938""日本""中国"的硬编码 |
+| F:\dsh\nanxun-1938 | 地图、序列、将领、规则、结局、战役文档 | 任何引擎逻辑 |
+
+引擎通过 IRONMIND_MODULES 找模块，也可以命令行 --module 指定任意路径；
+浏览器左下角的下拉框会把两边仓库的模块都列出来。
+
+---
+
 ## 1 怎么跑
 
 ```bash
 # 需要 Rust 1.80+（已装好 1.100）
 cd F:\dsh\iron-mind
 
-# 全部测试（64 个）
+# 全部测试（121 个；南浔线那几条找不到模块时会明确跳过）
 cargo test --workspace
 
 # 玩：启动服务，然后浏览器打开 http://127.0.0.1:8899/
-cargo run -p sim-server -- --module content/scenarios/nanxun_1938.imod
+# 战役模块现在住在**另一个仓库**（F:\dsh\nanxun-1938），告诉引擎去哪里找：
+$env:IRONMIND_MODULES = "F:\dsh\nanxun-1938"
+cargo run -p sim-server                    # 默认捡到南浔线
+# 或者显式指定：
+cargo run -p sim-server -- --module ../nanxun-1938/nanxun_1938.imod
 
-# 无头跑批，看战局演化
-cargo run -p sim-testbed -- --module content/scenarios/nanxun_1938.imod --ticks 60 --verbose
+# 无头跑批，看战局演化（同样要 IRONMIND_MODULES）
+cargo run -p sim-testbed -- --module ../nanxun-1938/nanxun_1938.imod --ticks 60
 
 # 编 WASM（还没接前端，只是验证能编）
 cargo build --target wasm32-unknown-unknown -p sim-core

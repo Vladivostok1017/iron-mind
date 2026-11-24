@@ -743,7 +743,7 @@ pub fn ask_hq(cfg: &Config, a: &HqAsk) -> Result<HqJudgement, String> {
     let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("").to_string();
     let mut orders = Vec::new();
     if let Some(arr) = v.get("orders").and_then(|x| x.as_array()) {
-        for o in arr.iter().take(3) {
+        for o in arr.iter().take(4) {
             let to = o.get("to").and_then(|x| x.as_str()).unwrap_or("").trim();
             let text = o.get("text").and_then(|x| x.as_str()).unwrap_or("").trim();
             if !to.is_empty() && !text.is_empty() {

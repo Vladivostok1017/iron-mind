@@ -32,7 +32,11 @@ fn main() {
         .position(|a| a == "--module")
         .and_then(|i| args.get(i + 1))
         .cloned()
-        .unwrap_or_else(|| "content/scenarios/nanxun_1938.imod".to_string());
+        .or_else(|| std::env::var("IRONMIND_MODULE").ok())
+        .or_else(|| discover_modules().into_iter().next().map(|p| p.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "content/scenarios/demo_1805.imod".to_string());
+    println!("模块根目录：{:?}", module_roots());
+    println!("可用模块：{} 个", discover_modules().len());
 
     let dir = PathBuf::from(&module_path);
     let module = match load_module(&dir) {
@@ -395,24 +399,18 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             // 路径比较要抹平分隔符：命令行给的是 `/`，read_dir 在 Windows 上给的是 `\`
             let cur = state.module_path.lock().unwrap().replace('\\', "/");
             let mut list = Vec::new();
-            if let Ok(rd) = std::fs::read_dir("content/scenarios") {
-                let mut dirs: Vec<_> = rd.flatten().map(|e| e.path()).collect();
-                dirs.sort();
-                for p in dirs {
-                    if !p.is_dir() || p.extension().and_then(|x| x.to_str()) != Some("imod") {
-                        continue;
-                    }
-                    let meta = std::fs::read_to_string(p.join("module.json"))
-                        .ok()
-                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-                    let path = p.to_string_lossy().replace('\\', "/");
-                    list.push(json!({
-                        "path": path,
-                        "name": meta.as_ref().and_then(|m| m.get("name")).and_then(|v| v.as_str()).unwrap_or("?"),
-                        "scale": meta.as_ref().and_then(|m| m.get("scale")).and_then(|v| v.as_str()).unwrap_or(""),
-                        "current": path == cur,
-                    }));
-                }
+            // 引擎自带的示例 + 外部模块仓库（IRONMIND_MODULES）
+            for p in discover_modules() {
+                let meta = std::fs::read_to_string(p.join("module.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+                let path = p.to_string_lossy().replace('\\', "/");
+                list.push(json!({
+                    "path": path,
+                    "name": meta.as_ref().and_then(|m| m.get("name")).and_then(|v| v.as_str()).unwrap_or("?"),
+                    "scale": meta.as_ref().and_then(|m| m.get("scale")).and_then(|v| v.as_str()).unwrap_or(""),
+                    "current": path == cur,
+                }));
             }
             respond(&mut stream, 200, "application/json", &json!({ "modules": list }).to_string())
         }
@@ -421,10 +419,19 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             use serde_json::json;
             let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
             let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string();
-            // 只允许 content/scenarios 下的 .imod，别让一个网页把服务器指向任意目录
-            let ok_path = path.starts_with("content/scenarios")
-                && path.ends_with(".imod")
-                && !path.contains("..");
+            // 只允许"某个模块根目录下的 .imod"：根 = IRONMIND_MODULES 里列的 + content/scenarios。
+            // 别让一个网页把服务器指向任意目录。
+            let p = PathBuf::from(&path);
+            let canon = std::fs::canonicalize(&p).ok();
+            let ok_path = path.ends_with(".imod")
+                && !path.contains("..")
+                && canon.as_ref().map_or(false, |c| {
+                    module_roots().iter().any(|r| {
+                        std::fs::canonicalize(r)
+                            .map(|rc| c.starts_with(&rc))
+                            .unwrap_or(false)
+                    })
+                });
             if !ok_path {
                 let _ = respond(&mut stream, 400, "application/json", "{\"error\":\"模块路径不合法\"}");
                 return Ok(());
@@ -1941,7 +1948,7 @@ fn hq_due(state: &Arc<ServerState>, w: &World) -> bool {
     let interval = std::env::var("IRONMIND_HQ_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(4);
+        .unwrap_or(2);
     let last = *state.hq_last_day.lock().unwrap();
     w.tick >= last + interval
 }
@@ -2057,4 +2064,44 @@ fn run_hq(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, Strin
     }
 
     notes
+}
+
+// 模块根目录：外部模块仓库优先（IRONMIND_MODULES，分隔符 ; 或 ,），
+// 然后是引擎自带的 content/scenarios。
+//
+// 为什么要有它：模块现在住在**别的仓库**里（例如 F:\dsh\nanxun-1938）。
+// 引擎不该假设"模块一定在 content/scenarios 下"——那等于把两个项目又绑回去。
+fn module_roots() -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(v) = std::env::var("IRONMIND_MODULES") {
+        for part in v.split([';', ',']) {
+            let p = part.trim();
+            if !p.is_empty() && !roots.iter().any(|r| r == std::path::Path::new(p)) {
+                roots.push(std::path::PathBuf::from(p));
+            }
+        }
+    }
+    let builtin = std::path::PathBuf::from("content/scenarios");
+    if !roots.contains(&builtin) {
+        roots.push(builtin);
+    }
+    roots
+}
+
+/// 扫出所有模块目录（`*.imod`），按根目录顺序、路径排序，保证确定性。
+fn discover_modules() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for root in module_roots() {
+        let Ok(rd) = std::fs::read_dir(&root) else { continue };
+        let mut dirs: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        dirs.sort();
+        for p in dirs {
+            if p.is_dir() && p.extension().and_then(|x| x.to_str()) == Some("imod") {
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
 }
