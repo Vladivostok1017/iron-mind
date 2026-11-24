@@ -118,3 +118,52 @@ fn commander_default_has_no_fate_until_it_ends() {
     assert_eq!(c.fate, sim_core::world::Fate::Active);
     assert!(c.fate.can_lead());
 }
+
+#[test]
+fn encirclement_zeroes_supply_even_on_own_soil() {
+    // 0（我方，守着）— 1（敌方）— 2（我方后方）
+    let mut a = Province::new("被围点", Terrain::Plain, Side::Cn);
+    a.neighbors = vec![1, 2];
+    a.is_supply_source = true;
+    let mut b = Province::new("敌阵地", Terrain::Plain, Side::Jp);
+    b.neighbors = vec![0];
+    let mut c = Province::new("后方", Terrain::Plain, Side::Cn);
+    c.neighbors = vec![0];
+    c.is_supply_source = true;
+
+    let mut u = Unit::new("守军", Side::Cn, 0, 6);
+    u.manual = true;
+    u.order = Order::Hold;
+    let mut w = World::new(1, vec![a, b, c], vec![u]);
+    w.campaign_days = u32::MAX;
+
+    sim_core::run_ticks(&mut w, 1);
+    let before = w.units[0].supply.to_display_f64();
+    assert!(before > 0.5, "后方连通时补给正常（{before}）");
+    assert!(!w.units[0].encircled);
+
+    // 后方也丢了 → 四面皆敌
+    w.provinces[2].owner = Side::Jp;
+    sim_core::run_ticks(&mut w, 1);
+    assert!(w.units[0].encircled, "所有邻省都不是自己的，应当判定被围");
+    assert_eq!(w.units[0].supply.to_display_f64(), 0.0, "被围补给归零");
+}
+
+#[test]
+fn encirclement_is_reported_once() {
+    let mut a = Province::new("被围点", Terrain::Plain, Side::Cn);
+    a.neighbors = vec![1];
+    let mut b = Province::new("敌阵地", Terrain::Plain, Side::Jp);
+    b.neighbors = vec![0];
+    let mut u = Unit::new("守军", Side::Cn, 0, 6);
+    u.manual = true;
+    u.order = Order::Hold;
+    let mut w = World::new(1, vec![a, b], vec![u]);
+    w.campaign_days = u32::MAX;
+    w.comms.transmission = 0;
+    w.comms.staff = 0;
+
+    sim_core::run_ticks(&mut w, 5);
+    let n = w.log.iter().filter(|e| e.text.contains("被合围")).count();
+    assert_eq!(n, 1, "只报一次（不是每天一条）：{}", n);
+}

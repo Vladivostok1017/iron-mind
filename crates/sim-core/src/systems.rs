@@ -341,8 +341,44 @@ fn run_supply(world: &mut World) {
             extended
         };
 
+        // ---- 合围 ----
+        //
+        // 所有邻省都不在自己手里 = 被围。这时候补给归零（不是"变差"，是断），
+        // 断粮判定（<0.15）会接着每天减员——两条规则自然接上，不用特判。
+        //
+        // 为什么这条重要：以前断供只能靠"补给线上有敌人"，而真正的围歼
+        // （万家岭）是"四面都是敌人"。玩家把三个师摆成一个圈，
+        // 效果会立刻出现在被围部队的补给上。
+        let encircled = is_encircled(world, pos, side);
+        let effective = if encircled { Fixed::ZERO } else { effective };
+        if encircled && !world.units[i].encircled {
+            let name = world.units[i].name.clone();
+            let where_ = world.provinces[pos as usize].name.clone();
+            world.report_for(
+                crate::world::EventKind::Supply,
+                format!("{name} 在 {where_} 被合围"),
+                side,
+            );
+        }
+        world.units[i].encircled = encircled;
+
         world.units[i].supply = effective.clamp(Fixed::ZERO, Fixed::ONE);
     }
+}
+
+/// 这个省的所有邻省都不在本方手里 → 被围。
+///
+/// 只看**省归属**，不看敌军动向：围歼的判定要稳定、可预期，
+/// 玩家能看懂"我这支部队四面都是敌人的旗子"。敌军巡逻队恰好路过
+/// 不应该让一支部队突然断粮。
+fn is_encircled(world: &World, pos: u32, side: Side) -> bool {
+    let p = &world.provinces[pos as usize];
+    if p.neighbors.is_empty() {
+        return false;
+    }
+    p.neighbors
+        .iter()
+        .all(|&nb| world.provinces[nb as usize].owner != side)
 }
 
 // ---------------------------------------------------------------- 移动

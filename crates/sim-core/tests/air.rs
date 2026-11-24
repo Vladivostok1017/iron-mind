@@ -20,11 +20,16 @@ fn star() -> World {
     b.neighbors = vec![0];
     b.is_supply_source = true;
     let mut c = Province::new("敌甲", Terrain::Plain, Side::Jp);
-    c.neighbors = vec![0];
+    c.neighbors = vec![0, 4];
     c.is_supply_source = true;
     let mut d = Province::new("敌乙", Terrain::Plain, Side::Jp);
-    d.neighbors = vec![0];
+    d.neighbors = vec![0, 4];
     d.is_supply_source = true;
+    // 敌方后方：让 2、3 号省不算"被合围"。
+    // （合围会把补给打成 0，两位守军会同时饿掉兵，这个测试就测不出空袭了。）
+    let mut e = Province::new("敌后方", Terrain::Plain, Side::Jp);
+    e.neighbors = vec![2, 3];
+    e.is_supply_source = true;
 
     let mut air = Unit::new("某飞行团", Side::Cn, 0, 1);
     air.kind = UnitKind::Air;
@@ -37,7 +42,7 @@ fn star() -> World {
         Unit::new("敌甲队", Side::Jp, 2, 6),
         Unit::new("敌乙队", Side::Jp, 3, 6),
     ];
-    let mut w = World::new(1, vec![a, b, c, d], units);
+    let mut w = World::new(1, vec![a, b, c, d, e], units);
     // 地面部队全部钉住：这个测试测的是空军，不是规则 AI 的调度。
     // （不管住的话 AI 会把三支部队全调进 0 号省打成一锅粥，什么也测不出来。）
     for i in 1..4 {

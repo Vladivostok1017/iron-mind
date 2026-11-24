@@ -80,7 +80,7 @@ fn golden_hash_is_stable() {
 ///   断粮（<0.15）每天减员 0.5%。这两条直接改变兵力与补给值，属于行为变更。
 /// - 覆灭阈值从"不足 1 千"改为"不足 200 人"后重算：
 ///   老口径会把 800–1500 人的空军飞行团一夜之间判成全军覆没。
-const GOLDEN_LAST_HASH: u64 = 0x7268_bceb_fe9c_fc6d;
+const GOLDEN_LAST_HASH: u64 = 0x9974_8ea1_5e72_944c;
 
 #[test]
 fn different_seeds_diverge() {

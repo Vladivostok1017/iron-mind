@@ -898,6 +898,8 @@ pub struct Unit {
     pub ended_day: Option<u32>,
     /// 预定整编完成日。只有模块声明了 `reform` 的部队才会有。
     pub reform_day: Option<u32>,
+    /// 上一 tick 是否处于合围。只用于"被围"战报的去重，不参与模拟。
+    pub encircled: bool,
     /// 模块声明的整编天数（覆灭后隔多久能重建）。0 = 不可重建。
     pub reform_days: u32,
     /// 二次整编后的兵力比例（相对满编）。
@@ -938,6 +940,7 @@ impl Unit {
             manual: false,
             dissent_count: 0,
             ended_day: None,
+            encircled: false,
             reform_day: None,
             reform_days: 0,
             reform_ratio: Fixed::ZERO,

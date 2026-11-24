@@ -16,11 +16,16 @@ fn two_province() -> World {
     let mut b = Province::new("九江", Terrain::Plain, Side::Jp);
     b.is_supply_source = true;
     b.neighbors = vec![0];
+    // 后方：不让南昌变成"四面皆敌"的孤城（合围会把补给打成 0，整补就测不出来了）
+    let mut rear = Province::new("吉安", Terrain::Plain, Side::Cn);
+    rear.is_supply_source = true;
+    rear.neighbors = vec![0];
+    a.neighbors = vec![1, 2];
 
     let mut u = Unit::new("第74军", Side::Cn, 0, 10);
     u.manual = true;
     u.order = Order::Hold;
-    let mut w = World::new(1, vec![a, b], vec![u]);
+    let mut w = World::new(1, vec![a, b, rear], vec![u]);
     w.comms.transmission = 0;
     w.comms.staff = 0;
     w.campaign_days = 5;
@@ -86,6 +91,7 @@ fn early_ending_can_fire_before_the_end() {
     // 把国军那个省给日军，并在邻省留一支敌军。
     // 不留的话我方部队会在下个 tick 把它重新占回来（"邻接无敌军才占领"）。
     w.provinces[0].owner = Side::Jp;
+    w.provinces[2].owner = Side::Jp;
     let mut jp = Unit::new("敌一部", Side::Jp, 1, 3);
     jp.manual = true;
     jp.order = Order::Hold;

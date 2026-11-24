@@ -1509,6 +1509,7 @@ fn snapshot(w: &World) -> String {
                     "strength": round1(u.strength.to_display_f64()),
                     "morale": round2(u.morale.to_display_f64()),
                     "supply": round2(u.supply.to_display_f64()),
+                    "encircled": u.encircled,
                     "order": u.order.label(),
                     "order_code": u.order.code().1,
                     "node": u.node,
@@ -1530,6 +1531,8 @@ fn snapshot(w: &World) -> String {
                         }
                     }),
                     "march_to": u.order.target().map(|t| w.provinces[t as usize].name.clone()),
+                    // 省 id：地图上要画一条从当前省到目标的虚线
+                    "march_target": u.order.target(),
                     "disobeyed": u.disobeyed,
                     "dissent": u.dissent_reason,
                 }))
