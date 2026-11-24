@@ -30,6 +30,9 @@ const AUTOSAVE_EVERY: u32 = 5;
 const AUTOSAVE_SLOT: &str = "auto";
 
 fn main() {
+    // 先把 settings.env / .env 读进环境，再决定用哪个模块、开哪些目录。
+    // 顺序很重要：模块选择比 LLM 配置更早发生。
+    llm::load_env_files();
     let args: Vec<String> = std::env::args().collect();
     let module_path = args
         .iter()

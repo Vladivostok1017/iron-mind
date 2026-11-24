@@ -19,6 +19,16 @@ use std::sync::{Arc, Mutex};
 /// 读仓库根目录的 `.env`（已被 .gitignore 忽略），省得每次手设环境变量。
 ///
 /// 只认 `KEY=VALUE` 单行；已存在的环境变量优先，不会被文件覆盖。
+/// 读 `.env` / `settings.env` 到进程环境（已有的不覆盖）。
+///
+/// `pub` 是给 `main` 在最前面调一次用的：模块目录（`IRONMIND_MODULES` /
+/// `IRONMIND_MODULE`）比 LLM 配置更早被用到，如果只在 `Config::from_env()`
+/// 里读文件，命令行里直接跑 `sim-server.exe` 时模块就选错了——
+/// 明明 settings.env 里写着默认战役，却捡了按字母序第一个。
+pub fn load_env_files() {
+    load_dotenv()
+}
+
 fn load_dotenv() {
     // 两个文件，同样的格式，都是"有就用、已有环境变量不覆盖"：
     //   .env          开发时用的（仓库根目录）

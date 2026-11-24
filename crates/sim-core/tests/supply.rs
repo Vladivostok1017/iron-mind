@@ -50,15 +50,20 @@ fn enemy_on_the_road_cuts_supply() {
 
 #[test]
 fn starvation_kills_and_reports() {
-    // 没有补给源的世界：补给恒为 0 → 断粮
+    // 补给源在，但这支部队**接不上**：孤城和省会之间没有邻接。
+    // 这是"断粮"的正确定义——不是"离得远"（那只是缺粮，有征发地板兜着），
+    // 而是"在本国领土上却与补给网断开"。
     let mut p = Province::new("孤城", Terrain::Plain, Side::Cn);
     p.neighbors = vec![];
+    let mut home = Province::new("省会", Terrain::Plain, Side::Cn);
+    home.is_supply_source = true; // 有源，但走不到
     let mut u = Unit::new("孤军", Side::Cn, 0, 8);
     u.max_strength = Fixed::from_int(8);
     u.supply_reach = Fixed::ZERO;
     u.manual = true;
     u.order = Order::Hold;
-    let mut w = World::new(1, vec![p], vec![u]);
+    let mut w = World::new(1, vec![p, home], vec![u]);
+    w.campaign_days = u32::MAX;
     w.comms.transmission = 0;
     w.comms.staff = 0;
 

@@ -321,8 +321,33 @@ fn run_supply(world: &mut World) {
     let cn = compute_supply(world, Side::Cn);
     let jp = compute_supply(world, Side::Jp);
 
-    // 就地征发的地板：即使补给线断了，也不会立刻归零。
-    const FORAGE: Fixed = Fixed::ratio_const(50, 100);
+    // "本方到底有没有补给源"要先分清。
+    //
+    // 如果这个模块压根没给某一方设补给源，BFS 结果恒为 0；按
+    // "到不了补给源 = 断粮"来判就是全员饿死——测试里那些没有补给源的
+    // 小世界、以及忘了写 supply_source 的模块，都会瞬间崩掉。
+    // 所以：**有源但接不上**才算断；压根没有源，就只能就地征发。
+    let cn_has_source = world
+        .provinces
+        .iter()
+        .any(|p| p.is_supply_source && p.owner == Side::Cn);
+    let jp_has_source = world
+        .provinces
+        .iter()
+        .any(|p| p.is_supply_source && p.owner == Side::Jp);
+
+    // 就地征发的地板：即使补给线被切断，也不会立刻归零。
+    //
+    // 敌境抢得狠（0.5），本国靠地方征购（0.25）。两者都远高于断粮线 0.15，
+    // 所以**只有真的断了的部队才会饿死人**。
+    const FORAGE_ENEMY: Fixed = Fixed::ratio_const(50, 100);
+    /// 本国领土上的就地征发。
+    ///
+    /// 以前只有**敌境**留了 0.5 的地板，本国反而没有——于是国军在自己后方
+    /// 的部队会掉到 0.15 以下（断粮、每天减员），而一支打进我们省的日军
+    /// 反倒有 0.5。这不是"国军后勤差"，是逻辑反了：
+    /// 在自己村里征粮，永远比在敌国抢粮容易。
+    const FORAGE_OWN: Fixed = Fixed::ratio_const(25, 100);
 
     // 先把"是否在敌省"算出来，避免借用冲突。
     let mut in_enemy = Vec::with_capacity(world.units.len());
@@ -347,33 +372,54 @@ fn run_supply(world: &mut World) {
         // 日军有汽车与铁路，reach 高；国军靠人力挑运，reach 低。
         let extended = level + (Fixed::ONE - level) * reach;
 
-        let effective = if in_enemy[i] {
-            // 敌境：取就地征发与延伸补给的高者
-            extended.max(FORAGE)
-        } else {
-            extended
-        };
+        // 就地征发：和"这是谁的地"关系不大，和"有没有被切断"关系很大。
+        // 敌境抢得狠一点（0.5），本国靠地方征购（0.25）——两者都远高于
+        // 断粮线 0.15，所以**只有真的断了的部队才会饿死人**。
+        let forage = if in_enemy[i] { FORAGE_ENEMY } else { FORAGE_OWN };
+        let effective = extended.max(forage);
 
-        // ---- 合围 ----
+        // ---- 断粮 ----
         //
-        // 所有邻省都不在自己手里 = 被围。这时候补给归零（不是"变差"，是断），
-        // 断粮判定（<0.15）会接着每天减员——两条规则自然接上，不用特判。
+        // 两种"断了"，都归零（不是"变差"，是断），日损 0.5%：
         //
-        // 为什么这条重要：以前断供只能靠"补给线上有敌人"，而真正的围歼
-        // （万家岭）是"四面都是敌人"。玩家把三个师摆成一个圈，
-        // 效果会立刻出现在被围部队的补给上。
+        // 1. **四面皆敌**：所有邻省都不在自己手里。
+        // 2. **BFS 走不到任何补给源**（level == 0）：补给源丢了、通路全是敌省，
+        //    或者这支孤军根本不在己方补给网上（空降/登陆/深远穿插）。
+        //
+        // 第 2 条是新加的，也是把"缺粮"和"断粮"分开的关键：
+        // 以前只要 BFS 值掉到 0.15 以下就算断粮，于是**离补给源远的部队**
+        // 和**真的被切断的部队**是一回事——玩家在后方摆着不动的军也会天天掉兵，
+        // 而且没有任何办法救。现在"远"只是补给差（有征发地板兜着），
+        // "断"才会死人。
         let encircled = is_encircled(world, pos, side);
-        let effective = if encircled { Fixed::ZERO } else { effective };
-        if encircled && !world.units[i].encircled {
+        let has_source = match side {
+            Side::Cn => cn_has_source,
+            Side::Jp => jp_has_source,
+        };
+        // 只有"在**本国**领土上、却接不上任何补给源"才算断。
+        //
+        // 敌境不能这么判：BFS 只走本方省份，所以任何一支跨过战线打进去的
+        // 部队，`level` 天然就是 0——按"接不上"处理等于入侵者立刻就饿死。
+        // 敌境靠的是就地征发（0.5 的地板），这是原来就有的设计。
+        let disconnected = has_source && !in_enemy[i] && level <= Fixed::ZERO;
+        let cut_off = encircled || disconnected;
+        let effective = if cut_off { Fixed::ZERO } else { effective };
+
+        if cut_off && !world.units[i].encircled {
             let name = world.units[i].name.clone();
             let where_ = world.provinces[pos as usize].name.clone();
+            let what = if encircled {
+                "被合围"
+            } else {
+                "与后方失去联系，补给断绝"
+            };
             world.report_for(
                 crate::world::EventKind::Supply,
-                format!("{name} 在 {where_} 被合围"),
+                format!("{name} 在 {where_} {what}"),
                 side,
             );
         }
-        world.units[i].encircled = encircled;
+        world.units[i].encircled = cut_off;
 
         world.units[i].supply = effective.clamp(Fixed::ZERO, Fixed::ONE);
     }

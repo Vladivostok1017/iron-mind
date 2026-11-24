@@ -1678,7 +1678,10 @@ function renderOutliner() {
     // 没有这一项，远距离调动在地图上就是"部队忽然不见了几天"。
     const marching = u.march_hops > 0 && u.march_to;
     // 断粮比行军更要紧：补给见底不只打不动，还会每天死人（见 docs/20）。
-    const hungry = u.encircled ? "被围·" : (u.supply < 0.15 ? "断粮·" : (u.supply < 0.3 ? "缺粮·" : ""));
+    // `encircled` 现在表示"补给断绝"（被合围 或 与后方失去联系），一定在掉兵。
+    // `supply < 0.3` 只是缺粮：战力打折，但不减员——这两件事必须分开说，
+    // 否则玩家会以为"所有部队都在饿死"而没法判断该救哪一支。
+    const hungry = u.encircled ? "断粮·" : (u.supply < 0.3 ? "缺粮·" : "");
     right.textContent = hungry + u.strength.toFixed(1) + " 千 " +
       (marching ? "→" + u.march_to + " " + u.march_hops + "日" : u.order);
     if (hungry) right.style.color = "#d9534f";
