@@ -975,6 +975,24 @@ fn end_unit(world: &mut World, idx: usize, prov: u32, now: u32, seed: u64) {
     };
     world.report_delayed(delay, EventKind::Oob, fate_line, Some(side));
 
+    // 这支部队如果是它所属兵团的**兵团部**，兵团部覆灭就是一场编制地震：
+    // 下属各部暂时没人压得住，服从度会掉一截（见 `World::effective_obedience`）。
+    let hq_info = world
+        .formation_of(idx)
+        .filter(|f| f.hq == Some(idx) && f.units.len() > 1)
+        .map(|f| (f.name.clone(), f.units.len()));
+    if let Some((fname, n)) = hq_info {
+        world.report_delayed(
+            delay,
+            EventKind::Oob,
+            format!(
+                "{fname} 兵团部覆灭，下属 {} 部暂归战区直辖",
+                n.saturating_sub(1)
+            ),
+            Some(side),
+        );
+    }
+
     // 二次整编：模块声明过、且**还有将领活着**才排得上。
     // 没有人的部队不会被"自动重建"——那需要干部、番号与补充兵。
     if world.units[idx].reform_ratio.raw() > 0 && fate.can_lead() {

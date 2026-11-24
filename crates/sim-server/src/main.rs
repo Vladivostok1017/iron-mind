@@ -1109,7 +1109,8 @@ fn build_ask(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &str) ->
         general: u.commander.name.clone(),
         unit: u.name.clone(),
         side: side_cn(u.side).to_string(),
-        obedience: u.commander.obedience.to_display_f64(),
+        // 兵团部是否还在，会改实际服从度（兵团部被打掉，师长就更听自己的）
+        obedience: w.effective_obedience(idx).to_display_f64(),
         initiative: u.commander.initiative.to_display_f64(),
         aggression: u.commander.aggression.to_display_f64(),
         caution: u.commander.caution.to_display_f64(),

@@ -492,6 +492,24 @@ impl World {
     }
 }
 
+/// 一个兵团/军团（编制实体）。
+///
+/// 以前 `formation` 只是一个字符串：兵团部存不存在、在不在，都不影响任何事。
+/// 于是"打掉敌人的兵团部"这种战法在引擎里毫无意义。
+///
+/// 现在兵团是一个实体，`hq` 指向自己的**兵团部单位**（例如 `第29军团`
+/// 既是部队、也是 `第187师` 的上级）。数据里没有兵团部单位的
+/// （`第1兵团`）就是纸面番号：`hq = None`，不加成也不惩罚。
+#[derive(Clone, Debug)]
+pub struct Formation {
+    pub name: String,
+    pub side: Side,
+    /// 兵团部所在单位的索引。
+    pub hq: Option<usize>,
+    /// 下属单位索引（含兵团部自己）。
+    pub units: Vec<usize>,
+}
+
 /// 一个省份。
 #[derive(Clone, Debug)]
 pub struct Province {
@@ -1001,6 +1019,8 @@ pub struct World {
     pub rules: std::sync::Arc<crate::rules::RuleSet>,
     /// 战报。只进人类可读日志，不进状态哈希。
     pub log: Vec<Event>,
+    /// 模块声明的编制：兵团（实体，不只是字符串）。
+    pub formations: Vec<Formation>,
     /// 战役长度（天）。到日子就判结局。
     pub campaign_days: u32,
     /// 模块声明的结局规则，按 priority 判。
@@ -1033,6 +1053,7 @@ impl World {
             rules: std::sync::Arc::new(crate::rules::RuleSet::default()),
             log: Vec::new(),
             in_transit: Vec::new(),
+            formations: Vec::new(),
             campaign_days: u32::MAX,
             endings: Vec::new(),
             outcome: None,
@@ -1129,6 +1150,38 @@ impl World {
             }
         }
         total
+    }
+
+    /// 这支部队所属的兵团（若模块声明了编制）。
+    pub fn formation_of(&self, idx: usize) -> Option<&Formation> {
+        self.formations.iter().find(|f| f.units.contains(&idx))
+    }
+
+    /// 兵团部还在不在？
+    ///
+    /// `None` = 纸面番号（没有兵团部这个单位），既不加成也不惩罚。
+    pub fn hq_alive(&self, idx: usize) -> Option<bool> {
+        let f = self.formation_of(idx)?;
+        let hq = f.hq?;
+        Some(self.units.get(hq).map(|u| u.in_being()).unwrap_or(false))
+    }
+
+    /// 实际服从度：编制完整时略高，兵团部被打掉后明显更低。
+    ///
+    /// 为什么要动它：`obedience` 是抗命的唯一硬约束（规则 AI 与 LLM 提示词都用它）。
+    /// 兵团部在，参谋部就压得住下面的师长；兵团部没了，师长就只听自己的。
+    /// 这条不需要新增机制，只是让已有的 `obedience` 反映编制状态。
+    pub fn effective_obedience(&self, idx: usize) -> Fixed {
+        let base = self
+            .units
+            .get(idx)
+            .map(|u| u.commander.obedience)
+            .unwrap_or(Fixed::ONE);
+        match self.hq_alive(idx) {
+            Some(true) => (base + Fixed::ratio(5, 100)).clamp(Fixed::ZERO, Fixed::ONE),
+            Some(false) => (base - Fixed::ratio(15, 100)).clamp(Fixed::ZERO, Fixed::ONE),
+            None => base,
+        }
     }
 
     /// 世界状态哈希。**字段顺序即协议**，改动要慎重（会让旧回放失效）。

@@ -334,7 +334,10 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         };
 
         let mut rng = Rng::derive(seed, stream::AI, tick, i as u32);
-        let (actual, reason) = interpret(&u.commander, intended, &ctx, &mut rng);
+        // 兵团部在不在，会影响实际服从度（见 World::effective_obedience）
+        let mut cmd = u.commander.clone();
+        cmd.obedience = world.effective_obedience(i);
+        let (actual, reason) = interpret(&cmd, intended, &ctx, &mut rng);
         final_decisions.push((i, actual, reason));
     }
 

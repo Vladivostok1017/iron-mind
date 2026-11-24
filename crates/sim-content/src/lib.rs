@@ -214,6 +214,35 @@ pub fn build_world(module: &LoadedModule) -> World {
     let mut world = World::new(seed, provinces, units);
     world.comms = comms_from(module.scenario.comms.as_ref());
     world.campaign_days = module.scenario.days;
+    // 编制实体：按 parent 归组。
+    //
+    // 兵团部 = 名字与番号相同的那支部队（第29军团 既是军团长、也是 187 师的上级）；
+    // 找不到同名部队的番号（第1兵团）就是纸面编制，hq = None。
+    {
+        use sim_core::world::Formation;
+        let mut forms: Vec<Formation> = Vec::new();
+        for (i, u) in world.units.iter().enumerate() {
+            if u.formation.is_empty() {
+                continue;
+            }
+            match forms.iter_mut().find(|f| f.name == u.formation) {
+                Some(f) => f.units.push(i),
+                None => forms.push(Formation {
+                    name: u.formation.clone(),
+                    side: u.side,
+                    hq: None,
+                    units: vec![i],
+                }),
+            }
+        }
+        for f in forms.iter_mut() {
+            f.hq = world
+                .units
+                .iter()
+                .position(|u| u.name == f.name && u.side == f.side);
+        }
+        world.formations = forms;
+    }
     world.endings = endings_from(&module.scenario.endings);
 
     // 编译模块声明的规则
