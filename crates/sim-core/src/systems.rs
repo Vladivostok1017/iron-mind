@@ -237,6 +237,15 @@ pub fn tick(world: &mut World) {
     world.flush_in_transit();
 
     world.tick += 1;
+
+    // 结局判定放在最后：`tick` 已经走到"今天结束"。
+    // 一旦判出结局，这一局就结束了，服务端不再往下推进。
+    if world.outcome.is_none() {
+        if let Some(o) = crate::endings::evaluate(world) {
+            world.report(crate::world::EventKind::Rule, format!("战役结束：{}", o.name));
+            world.outcome = Some(o);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- 补给
@@ -583,6 +592,22 @@ fn apply_stationary_orders(world: &mut World) {
                 world.units[i].supply = if s > Fixed::ONE { Fixed::ONE } else { s };
                 let m = world.units[i].morale + Fixed::ratio(1, 20);
                 world.units[i].morale = if m > Fixed::ONE { Fixed::ONE } else { m };
+                // 补充兵员：整补不只是歇口气，是把新兵补进来。
+                //
+                // 以前 `Rest` 只回士气和补给，兵力只减不增。77 天的仗打到后期，
+                // 所有部队都是残废，而且**永远恢复不了**——于是"守住了"的
+                // 部队下一天依旧是一千人的空架子。这不合理。
+                //
+                // 条件：补给 > 0.5（后方才有人有粮）。每天补满编的 0.4%，
+                // 一支 12 千的军从 6 千补到 9 千要 60 天左右——够慢，
+                // 不会让"打残"这件事变得无所谓。
+                let u = &world.units[i];
+                if u.supply > Fixed::ratio(5, 10) && u.strength < u.max_strength {
+                    let add = u.max_strength * Fixed::ratio(4, 1000);
+                    let room = u.max_strength - u.strength;
+                    let add = if add > room { room } else { add };
+                    world.units[i].strength += add;
+                }
             }
             _ => {}
         }

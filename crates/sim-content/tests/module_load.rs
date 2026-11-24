@@ -43,6 +43,7 @@ fn scenario() -> ScenarioDef {
         seed: 123,
         comms: None,
         rules: Vec::new(),
+        endings: Vec::new(),
     }
 }
 

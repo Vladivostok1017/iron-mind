@@ -184,6 +184,19 @@
   #hypso-leg.on { display: block; }
   #hypso-leg .hl-bar { height: 8px; border-radius: 2px; }
   #hypso-leg .hl-ticks { display: flex; justify-content: space-between; margin-top: 3px; }
+  #outcome { position: fixed; inset: 0; background: rgba(8,12,16,.82); z-index: 40;
+    display: none; align-items: center; justify-content: center; }
+  #outcome.on { display: flex; }
+  #outcome .box { width: 560px; max-height: 78vh; overflow: auto; background: #12181f;
+    border: 1px solid #33414f; border-radius: 6px; padding: 22px 26px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.7); }
+  #outcome .oid { font-size: 11px; color: #7c8794; letter-spacing: 2px; }
+  #outcome h2 { font-size: 22px; color: #e6edf5; margin: 6px 0 12px; font-weight: 600; }
+  #outcome p { font-size: 13px; color: #b9c4d0; line-height: 1.9; margin: 0 0 16px; }
+  #outcome .mrow { display: flex; justify-content: space-between; font-size: 12px;
+    color: #8b95a1; padding: 3px 0; border-bottom: 1px dashed #232d38; }
+  #outcome .mrow b { color: #cdd6e0; font-weight: 500; }
+  #outcome .foot { margin-top: 18px; font-size: 11.5px; color: #6f7a86; }
 </style>
 </head>
 <body>
@@ -280,7 +293,19 @@
     <button class="btn" id="btn-load">读档</button>
     <button class="btn" id="btn-reset">重开</button>
     <button class="btn" id="btn-3">推进 3 日</button>
+    <!-- 玩家真正想要的是"跳过没事的日子"，不是"再推一天" -->
+    <button class="btn" id="btn-next">推进到有事 ⏎</button>
     <button class="btn primary" id="btn-1">推进 1 日 ␣</button>
+  </div>
+  <!-- 结局面板：战役结束后盖住全局。没有"你赢了"三个字，只有一条结局与它的依据。 -->
+  <div id="outcome">
+    <div class="box">
+      <div class="oid" id="oc-id"></div>
+      <h2 id="oc-name"></h2>
+      <p id="oc-text"></p>
+      <div id="oc-metrics"></div>
+      <div class="foot">这一局结束了。刷新页面可以重开。</div>
+    </div>
   </div>
 </div>
 
@@ -928,6 +953,31 @@ function bind(id, evName, fn) {
   if (!el) { console.warn("缺少元素 #" + id + "，跳过绑定"); return; }
   el.addEventListener(evName, fn);
 }
+// 结局面板。只要有 outcome 就盖上来——战役结束了，不许再推进。
+// 刻意不写"胜利/失败"：一场战役的结束是一个**局面**，不是一个字。
+function showOutcome() {
+  const box = $("outcome");
+  if (!box || !S || !S.outcome) return;
+  const o = S.outcome;
+  $("oc-id").textContent = "结局 " + o.id + " · 第 " + o.day + " 日";
+  $("oc-name").textContent = o.name;
+  $("oc-text").textContent = o.text || "";
+  const m = $("oc-metrics");
+  m.innerHTML = "";
+  for (const row of o.metrics || []) {
+    const d = document.createElement("div");
+    d.className = "mrow";
+    const k = document.createElement("span");
+    k.textContent = row.label;
+    const v = document.createElement("b");
+    v.textContent = row.value;
+    d.appendChild(k);
+    d.appendChild(v);
+    m.appendChild(d);
+  }
+  box.classList.add("on");
+}
+
 async function api(path, body) {
   const opt = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
   try {
@@ -937,6 +987,7 @@ async function api(path, body) {
     S = j.state || j;
     if (selUnit !== null && !allUnits().find((u) => u.index === selUnit)) { selUnit = null; curProv = null; }
     render();
+    showOutcome();
     refreshLlm();
     refreshReports();
     refreshTelegrams();
@@ -1474,6 +1525,7 @@ bind("open-mail", "click", () => openMail());
 bind("mail-close", "click", () => closeMail());
 bind("btn-1", "click", () => api("/api/tick", { days: 1 }));
 bind("btn-3", "click", () => api("/api/tick", { days: 3 }));
+bind("btn-next", "click", () => api("/api/advance", {}));
 
 // 存档 / 读档。
 // 存的是命令流而不是世界快照：读档时服务端用 (模块, 种子, 命令流) 重跑一遍，
@@ -1502,6 +1554,7 @@ bind("btn-reset", "click", () => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); api("/api/tick", { days: 1 }); }
+  if (e.code === "Enter") { e.preventDefault(); api("/api/advance", {}); }
   if (e.code === "Escape") {
     selUnit = null; curProv = null;
     $("hint").textContent = "地图只作查看：点单位看详情；下命令请用右侧电报台";

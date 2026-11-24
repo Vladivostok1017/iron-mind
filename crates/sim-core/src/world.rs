@@ -998,6 +998,12 @@ pub struct World {
     pub rules: std::sync::Arc<crate::rules::RuleSet>,
     /// 战报。只进人类可读日志，不进状态哈希。
     pub log: Vec<Event>,
+    /// 战役长度（天）。到日子就判结局。
+    pub campaign_days: u32,
+    /// 模块声明的结局规则，按 priority 判。
+    pub endings: Vec<crate::endings::Ending>,
+    /// 已经判出的结局。一旦有值，这一局就结束了。
+    pub outcome: Option<crate::endings::Outcome>,
     /// 还在路上的战报：(送达 tick, 事件)。
     ///
     /// 为什么要有它：指挥链是有距离的。一支部队在几百公里外全军覆没，
@@ -1024,6 +1030,9 @@ impl World {
             rules: std::sync::Arc::new(crate::rules::RuleSet::default()),
             log: Vec::new(),
             in_transit: Vec::new(),
+            campaign_days: u32::MAX,
+            endings: Vec::new(),
+            outcome: None,
         }
     }
 

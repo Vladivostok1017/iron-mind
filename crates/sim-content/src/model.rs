@@ -139,6 +139,10 @@ pub struct ScenarioDef {
     /// 通信条件。留空则用有线电报时代默认值。
     #[serde(default)]
     pub comms: Option<CommsDef>,
+    /// 模块声明的结局。引擎只提供句式，内容决定"什么算苦撑"。
+    /// 不写就只有一个默认结局（战役期满）。
+    #[serde(default)]
+    pub endings: Vec<EndingDef>,
     /// 模块自定义规则。这是模块"扩展玩法"的入口。
     #[serde(default)]
     pub rules: Vec<RuleDef>,
@@ -318,6 +322,46 @@ pub struct ProvinceDef {
     /// 备注，供作者记录出处。
     #[serde(default)]
     pub note: String,
+}
+
+/// 模块声明的一条结局。
+///
+/// 引擎不认识"天炉""苦撑"这些词，它只认三件事：指标、比较、优先级。
+/// 所以结局是**内容**：同一套引擎可以描述 1938 年的南浔线，也可以描述别的战役。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EndingDef {
+    pub id: String,
+    pub name: String,
+    /// 一段话，给玩家看的。
+    #[serde(default)]
+    pub text: String,
+    /// 越小越先判。
+    #[serde(default)]
+    pub priority: u32,
+    /// true（默认）= 只在战役期满时判；false = 每天都可以提前触发（崩盘、速溃）。
+    #[serde(default = "default_true")]
+    pub at_end_only: bool,
+    /// 全部满足才算命中。
+    #[serde(default)]
+    pub require: Vec<ClauseDef>,
+}
+
+/// 一条判定子句：`指标 [某方] 比较 阈值`。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClauseDef {
+    /// day / provinces / strength / losses / units_alive / commanders_lost / holds_province
+    pub metric: String,
+    /// cn / jp。`holds_province` 必须写。
+    #[serde(default)]
+    pub side: Option<SideDef>,
+    /// ge / gt / le / lt。默认 ge。
+    #[serde(default)]
+    pub cmp: Option<String>,
+    #[serde(default)]
+    pub value: f64,
+    /// `holds_province` 用的省名。
+    #[serde(default)]
+    pub province: Option<String>,
 }
 
 /// `oob.json`（order of battle，战斗序列）

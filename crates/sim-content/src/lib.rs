@@ -213,6 +213,8 @@ pub fn build_world(module: &LoadedModule) -> World {
 
     let mut world = World::new(seed, provinces, units);
     world.comms = comms_from(module.scenario.comms.as_ref());
+    world.campaign_days = module.scenario.days;
+    world.endings = endings_from(&module.scenario.endings);
 
     // 编译模块声明的规则
     let (rule_set, _problems) = rules_from(&module.scenario.rules);
@@ -225,6 +227,69 @@ pub fn build_world(module: &LoadedModule) -> World {
 ///
 /// 引擎不认识"年代"，只认识延迟天数与通信手段的名字。
 /// 这样 1805 年和 1944 年用的是同一套代码，只是参数不同。
+/// 把模块里"人话写的"结局编译成引擎认识的子句。
+///
+/// 指标名写错不 panic：整条子句被丢掉，并在 `problems` 里留一句。
+/// 内容层永远可能写错，引擎不该因此崩掉整局。
+pub fn endings_from(defs: &[EndingDef]) -> Vec<sim_core::endings::Ending> {
+    use sim_core::endings::{Clause, Cmp, Ending, Metric};
+
+    let mut out = Vec::new();
+    for d in defs {
+        let mut clauses = Vec::new();
+        // 有一条子句读不懂，就把**整条结局**丢掉。
+        // 只丢子句是危险的：剩下的子句变少，条件变松，
+        // 一条空子句的结局会永远成立（已经踩过：E7 在第 1 日就触发了）。
+        let mut bad = false;
+        for c in &d.require {
+            let metric = match c.metric.as_str() {
+                "day" => Metric::Day,
+                "provinces" => Metric::Provinces,
+                "strength" => Metric::Strength,
+                "losses" => Metric::Losses,
+                "units_alive" => Metric::UnitsAlive,
+                "commanders_lost" => Metric::CommandersLost,
+                "holds_province" => Metric::HoldsProvince,
+                other => {
+                    eprintln!("警告：结局 {} 的指标 {other} 不认识，整条结局被丢掉", d.id);
+                    bad = true;
+                    continue;
+                }
+            };
+            let cmp = match c.cmp.as_deref() {
+                None | Some("ge") => Cmp::Ge,
+                Some("gt") => Cmp::Gt,
+                Some("le") => Cmp::Le,
+                Some("lt") => Cmp::Lt,
+                Some(other) => {
+                    eprintln!("警告：结局 {} 的比较符 {other} 不认识，整条结局被丢掉", d.id);
+                    bad = true;
+                    continue;
+                }
+            };
+            clauses.push(Clause {
+                metric,
+                side: c.side.map(side_of),
+                cmp,
+                value: c.value,
+                province: c.province.clone(),
+            });
+        }
+        if bad || clauses.is_empty() {
+            eprintln!("警告：结局 {} 没有可用子句，已跳过", d.id);
+            continue;
+        }
+        out.push(Ending {
+            id: d.id.clone(),
+            name: d.name.clone(),
+            text: d.text.clone(),
+            priority: d.priority,
+            at_end_only: d.at_end_only,
+            clauses,
+        });
+    }
+    out
+}
 pub fn comms_from(def: Option<&CommsDef>) -> sim_core::world::CommsConfig {
     use sim_core::world::{CommsConfig, CommsKind};
 

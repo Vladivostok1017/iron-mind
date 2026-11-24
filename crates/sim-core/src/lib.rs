@@ -19,6 +19,7 @@
 //! - `scenario` 场景构造（测试用，正式内容由 sim-content 从文件加载）
 
 pub mod ai;
+pub mod endings;
 pub mod fixed;
 pub mod hash;
 pub mod intel;

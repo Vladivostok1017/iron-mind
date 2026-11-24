@@ -221,7 +221,10 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             };
             respond(&mut stream, 200, "application/json", &json)
         }
-        ("POST", "/api/tick") => {
+        ("POST", "/api/tick") | ("POST", "/api/advance") => {
+            // `advance` = 一直推到"有事发生"为止（新战报 / 新公文 / 战役结束）。
+            // 玩家真正想要的是"跳过没事的日子"，不是"再推一天"。
+            let advance = method == "POST" && path == "/api/advance";
             let days: u32 = serde_json::from_str::<serde_json::Value>(&body_str)
                 .ok()
                 .and_then(|v| v.get("days").and_then(|d| d.as_u64()))
@@ -229,8 +232,25 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let json = {
                 let mut guard = state.world.lock().unwrap();
                 let w = guard.as_mut().unwrap();
-                for _ in 0..days.min(30) {
+                let cap = if advance { 30 } else { days.min(30) };
+                let mut done = 0u32;
+                for _ in 0..cap {
+                    if w.outcome.is_some() {
+                        break;
+                    }
                     let day = w.tick;
+                    // 只数"要紧的"战报：规则类（山地行军减员）每 tick 每个单位一条，
+                    // 把它也算成"有事发生"，advance 就等于逐日推进了。
+                    let key_before = w
+                        .log
+                        .iter()
+                        .filter(|e| e.kind != sim_core::world::EventKind::Rule)
+                        .count();
+                    let dossiers_before = w
+                        .units
+                        .iter()
+                        .filter(|u| u.ended_day.is_none())
+                        .count();
                     for n in expire_requests(&state, w, day) {
                         w.report(sim_core::world::EventKind::Dissent, n);
                     }
@@ -250,8 +270,37 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         // 将领的话是内部文件：按方标记，服务端只把本方那些发给前端
                         w.report_for(kind, text, side);
                     }
+                    done += 1;
+                    // 有事发生就停：新战报到、番号有增减、战役判出结局。
+                    // "没事"的日子（只有山地行军减员那种）继续跳过去。
+                    if advance {
+                        let new_reports = w
+                            .log
+                            .iter()
+                            .filter(|e| e.kind != sim_core::world::EventKind::Rule)
+                            .count()
+                            > key_before;
+                        let oob_changed = w
+                            .units
+                            .iter()
+                            .filter(|u| u.ended_day.is_none())
+                            .count()
+                            != dossiers_before;
+                        if new_reports || oob_changed || w.outcome.is_some() {
+                            break;
+                        }
+                    }
                 }
-                trace(format!("   tick → {} (第 {} 日)", w.tick, w.tick));
+                trace(format!(
+                    "   tick → {} (第 {} 日){}",
+                    w.tick,
+                    w.tick,
+                    if advance {
+                        format!("，推进了 {done} 日")
+                    } else {
+                        String::new()
+                    }
+                ));
                 snapshot(w)
             };
             respond(&mut stream, 200, "application/json", &json)
@@ -1562,8 +1611,20 @@ fn snapshot(w: &World) -> String {
         .map(|x| x.enemy_strength.to_display_f64())
         .sum();
 
+    // 结局：一旦有值，这一局就结束了。前端据此弹面板并锁住推进按钮。
+    let outcome = w.outcome.as_ref().map(|o| {
+        json!({
+            "id": o.id,
+            "name": o.name,
+            "text": o.text,
+            "day": o.day,
+            "metrics": o.metrics.iter().map(|(k, v)| json!({ "label": k, "value": round1(*v) })).collect::<Vec<_>>(),
+        })
+    });
     json!({
         "tick": w.tick,
+        "campaign_days": w.campaign_days,
+        "outcome": outcome,
         "player": "cn",
         // 已覆灭的番号（含殉国、整编倒计时）
         "gone": gone,
