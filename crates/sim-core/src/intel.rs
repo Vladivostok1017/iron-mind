@@ -74,7 +74,13 @@ fn refresh_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         let has_enemy = units.iter().any(|&i| world.units[i as usize].side == enemy);
         if has_mine && has_enemy {
             let est = world.strength_at(p as u32, enemy);
-            fresh.push((p as u32, est, Accuracy::Exact, true, comms.report_delay()));
+            // 番号要**接触两次**才认得出：第一次只确定"对面有多少人"，
+            // 番号得等俘虏、缴获文件、下一次接触去核对。
+            // 以前第一次接触就直接给"精确 + 番号已知"，情报系统没有过程。
+            // "之前就知道点什么"才算第一次之后：seen_tick 在 tick 0 时是 0，
+            // 用它判断"接触过没有"会永远为假。用精度更可靠。
+            let seen_before = world.intel(side)[p].accuracy != Accuracy::Unknown;
+            fresh.push((p as u32, est, Accuracy::Exact, seen_before, comms.report_delay()));
         }
     }
 
@@ -89,6 +95,7 @@ fn refresh_side(world: &mut World, side: Side, seed: u64, tick: u32) {
             }
             let est = world.strength_at(p, enemy);
             if est.raw() > 0 {
+                // 空中侦察一次就认得出番号：飞机看得见番号旗与队形
                 fresh.push((p, est, Accuracy::Exact, true, comms.report_delay()));
             }
         }
@@ -287,6 +294,23 @@ mod tests {
         assert_eq!(intel[2].accuracy, Accuracy::Unknown, "远处敌军不应被看到");
     }
 
+    #[test]
+    fn identity_needs_two_contacts() {
+        let mut w = two_side_map();
+        w.comms = crate::world::CommsConfig::instant();
+        w.units[0].position = 1;
+        w.units[1].position = 1;
+
+        run_intel(&mut w);
+        let first = w.intel(Side::Cn)[1];
+        assert_eq!(first.accuracy, Accuracy::Exact, "第一次接触就该知道兵力");
+        assert!(!first.identity_known, "第一次接触不该认得番号");
+
+        w.tick += 1;
+        run_intel(&mut w);
+        let second = w.intel(Side::Cn)[1];
+        assert!(second.identity_known, "第二次接触才认出番号");
+    }
     #[test]
     fn combat_gives_exact_intel() {
         let mut w = two_side_map();
