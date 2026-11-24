@@ -135,24 +135,48 @@ impl RuleSet {
         // 先把要执行的动作收集起来，再统一执行。
         // 不能在遍历过程中改状态，否则后规则的求值会看到前规则的结果，
         // 顺序敏感性会变得难以推理。
-        let mut planned: Vec<(usize, Primitive)> = Vec::new();
+        let mut planned: Vec<(usize, usize)> = Vec::new();
 
         for p in 0..world.provinces.len() {
             let units = world.units_in(p as u32);
             for &u in &units {
                 let uidx = u as usize;
-                for rule in &matching {
+                for (ri, rule) in matching.iter().enumerate() {
                     if eval(&rule.when, world, p, uidx) {
-                        for prim in &rule.then {
-                            planned.push((uidx, prim.clone()));
-                        }
+                        planned.push((uidx, ri));
                     }
                 }
             }
         }
 
-        for (uidx, prim) in planned {
-            apply(world, uidx, &prim);
+        // 逐 (单位, 规则) 执行，这样能在同一组动作前后取状态差，
+        // 把"到底减员多少"写进战报——否则战报只有一句"出现非战斗减员"，等于没说。
+        for (uidx, ri) in planned {
+            let rule = matching[ri];
+            let before_s = world.units[uidx].strength;
+            let before_m = world.units[uidx].morale;
+            let mut logged = false;
+            for prim in &rule.then {
+                logged |= matches!(prim, Primitive::Log(_));
+                apply(world, uidx, prim);
+            }
+            if logged {
+                let ds = world.units[uidx].strength - before_s;
+                let dm = world.units[uidx].morale - before_m;
+                // 只报真的变了的项，别写"士气 +0.00"占地方
+                let mut parts: Vec<String> = Vec::new();
+                if !ds.is_zero() {
+                    parts.push(format!("兵力 {:+.2} 千", ds.to_display_f64()));
+                }
+                if !dm.is_zero() {
+                    parts.push(format!("士气 {:+.2}", dm.to_display_f64()));
+                }
+                if !parts.is_empty() {
+                    if let Some(ev) = world.log.last_mut() {
+                        ev.text.push_str(&format!("（{}）", parts.join("，")));
+                    }
+                }
+            }
         }
     }
 }
@@ -193,7 +217,15 @@ fn apply(w: &mut World, u: usize, prim: &Primitive) {
             // 战报限长，避免无限增长
             if w.log.len() < 400 {
                 let tick = w.tick;
-                w.log.push(crate::world::Event::new(tick, crate::world::EventKind::Rule, s.clone()));
+                // 规则是按单位触发的，所以必须写清**是哪个单位**。
+                // 以前只写"山地行军，部队出现非战斗减员"，一排全一样，等于没说。
+                let name = w.units[u].name.clone();
+                let text = format!("{name}：{s}");
+                w.log.push(crate::world::Event::new(
+                    tick,
+                    crate::world::EventKind::Rule,
+                    text,
+                ));
             }
         }
     }

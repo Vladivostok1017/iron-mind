@@ -24,6 +24,27 @@
   #main { display: grid; grid-template-columns: 1fr 316px; overflow: hidden; }
   #stage { position: relative; background: var(--sea); overflow: hidden; }
   aside { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; overflow-y: auto; }
+  /* 战报信箱 */
+  #mail { position: fixed; inset: 44px 64px; background: #0d131a; border: 1px solid #2a3542;
+    border-radius: 6px; display: none; flex-direction: column; z-index: 60;
+    box-shadow: 0 24px 70px rgba(0,0,0,.7); }
+  #mail.show { display: flex; }
+  #mail .m-head { display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+    border-bottom: 1px solid #1e2833; }
+  #mail .m-body { flex: 1; display: flex; min-height: 0; }
+  #mail .m-list { width: 340px; overflow-y: auto; border-right: 1px solid #1e2833; }
+  #mail .m-item { padding: 9px 13px; font-size: 12px; border-bottom: 1px solid #151b22;
+    cursor: pointer; color: #a8b3c0; line-height: 1.55; }
+  #mail .m-item:hover { background: #141b23; }
+  #mail .m-item.on { background: #1b232d; color: #e6eef7; }
+  #mail .m-item .m-meta { color: #6f7a86; font-size: 10.5px; margin-bottom: 2px; }
+  #mail .m-detail { flex: 1; overflow-y: auto; padding: 20px 26px; font-size: 14px;
+    line-height: 2; color: #d8e2ec; }
+  #mail .m-detail .m-title { color: #7c8794; font-size: 11.5px; margin-bottom: 10px; }
+  .m-chip { padding: 3px 10px; border-radius: 12px; font-size: 11px; border: 1px solid #2a3542;
+    color: #8b95a1; cursor: pointer; background: transparent; font-family: inherit; }
+  .m-chip.on { background: #1e2733; color: #cfe0f0; border-color: #2f3d4d; }
+  #log-latest .lg-kind { color: #7c8794; }
   /* 电报台 */
   #dispatch-sec textarea { width: 100%; box-sizing: border-box; background: #0f151b; color: #cfd8e3;
     border: 1px solid #2a3542; border-radius: 3px; padding: 6px 8px; font-size: 11.5px;
@@ -211,9 +232,26 @@
         <div class="kv"><span>已知敌情</span><b id="k-known">—</b></div>
         <div class="kv"><span>在途战报</span><b id="k-pend">—</b></div>
       </div>
-      <div class="sec" style="border-bottom:none;padding-bottom:2px"><h3>战报</h3></div>
-      <div id="log"></div>
+      <div class="sec" style="border-bottom:none;padding-bottom:6px">
+        <h3>战报</h3>
+        <div id="log-latest" style="font-size:12px;color:#a8b3c0;line-height:1.6;margin-bottom:8px"></div>
+        <button class="btn" id="open-mail" style="width:100%">打开战报信箱</button>
+      </div>
     </aside>
+  </div>
+
+  <!-- 战报信箱：一封一封看，而不是挤在一个小窗口里 -->
+  <div id="mail">
+    <div class="m-head">
+      <b style="font-size:13px">战报信箱</b>
+      <span id="mail-count" style="color:#7c8794;font-size:11.5px"></span>
+      <div id="mail-chips" style="display:flex;gap:6px;margin-left:auto"></div>
+      <button class="btn" id="mail-close">关闭</button>
+    </div>
+    <div class="m-body">
+      <div class="m-list" id="mail-list"></div>
+      <div class="m-detail" id="mail-detail">左侧选一条战报</div>
+    </div>
   </div>
 
   <div id="bottom">
@@ -459,7 +497,7 @@ function render() {
   // 每个面板单独 try：一块面板的 bug 不该让整张地图变白。
   // （之前是整块 try，一个未定义变量就把地图和右栏一起搞没了。
   //   分块之后，出错的那一块自己在控制台报，其余照常显示。）
-  const parts = [["top", renderTop], ["map", renderMap], ["nodes", renderNodes], ["outliner", renderOutliner], ["dispatch", renderDispatch], ["panel", renderPanel]];
+  const parts = [["top", renderTop], ["map", renderMap], ["nodes", renderNodes], ["outliner", renderOutliner], ["dispatch", renderDispatch], ["latest", renderLatestLog]];
   try { if (!geom) buildGeom(); } catch (e) { console.error("buildGeom", e); }
   for (const [name, fn] of parts) {
     try {
@@ -824,6 +862,95 @@ async function sendTelegram() {
     refreshTelegrams();
   } catch (e) { toast("发送失败：连不上服务"); }
 }
+// ---- 战报信箱 ----
+// 之前所有战报挤在右下角一个 200px 高的小窗口里，长句被截断、也分不清是哪一仗。
+// 现在：侧栏只显示最新一条，点「打开战报信箱」进入全屏列表，一封一封看。
+const KIND_CN = { combat: "战斗", occupy: "易手", dissent: "抗命", cmd: "将领", rule: "规则", intel: "情报", supply: "后勤", retreat: "撤退" };
+let mailFilter = "all";
+let mailSel = 0;
+
+function mailItems() {
+  const all = (S && S.log) || [];
+  return mailFilter === "all" ? all : all.filter((e) => e.kind === mailFilter);
+}
+
+function openMail() {
+  const m = $("mail");
+  if (!m) return;
+  m.classList.add("show");
+  renderMail();
+}
+
+function closeMail() {
+  const m = $("mail");
+  if (m) m.classList.remove("show");
+}
+
+function renderMail() {
+  const list = $("mail-list"), detail = $("mail-detail"), chips = $("mail-chips");
+  if (!list) return;
+  const items = mailItems();
+  $("mail-count").textContent = "共 " + items.length + " 条";
+
+  // 分类筛选
+  const kinds = ["all", "combat", "occupy", "dissent", "cmd", "rule"];
+  chips.innerHTML = "";
+  for (const k of kinds) {
+    const b = document.createElement("button");
+    b.className = "m-chip" + (mailFilter === k ? " on" : "");
+    b.textContent = k === "all" ? "全部" : (KIND_CN[k] || k);
+    b.onclick = () => { mailFilter = k; mailSel = 0; renderMail(); };
+    chips.appendChild(b);
+  }
+
+  list.innerHTML = "";
+  if (!items.length) {
+    list.innerHTML = "<div class='m-item'>没有这一类战报</div>";
+    detail.textContent = "";
+    return;
+  }
+  if (mailSel >= items.length) mailSel = 0;
+
+  items.forEach((e, i) => {
+    const d = document.createElement("div");
+    d.className = "m-item" + (i === mailSel ? " on" : "");
+    const meta = document.createElement("div");
+    meta.className = "m-meta";
+    meta.textContent = "第 " + e.tick + " 日 · " + (KIND_CN[e.kind] || e.kind);
+    const t = document.createElement("div");
+    t.textContent = e.text.length > 34 ? e.text.slice(0, 34) + "…" : e.text;
+    d.appendChild(meta);
+    d.appendChild(t);
+    d.onclick = () => { mailSel = i; renderMail(); };
+    list.appendChild(d);
+  });
+
+  // 右侧全文，大字行距宽，能一眼读完
+  const cur = items[mailSel];
+  detail.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "m-title";
+  title.textContent = "第 " + cur.tick + " 日 · " + (KIND_CN[cur.kind] || cur.kind);
+  const body = document.createElement("div");
+  body.textContent = cur.text;
+  detail.appendChild(title);
+  detail.appendChild(body);
+}
+
+// 侧栏只放最新一条，点一下就能开信箱
+function renderLatestLog() {
+  const box = $("log-latest");
+  if (!box || !S) return;
+  const items = S.log || [];
+  if (!items.length) {
+    box.innerHTML = "<span class='lg-kind'>暂无战报</span>";
+    return;
+  }
+  const e = items[0];
+  box.innerHTML = "<span class='lg-kind'>第 " + e.tick + " 日 · " +
+    (KIND_CN[e.kind] || e.kind) + "</span><br>" +
+    (e.text.length > 46 ? e.text.slice(0, 46) + "…" : e.text);
+}
 // 公文堆：请示要人做决定，抗命要追认，通报只读。
 // 数据来自 /api/reports，跟 /api/state 分开取，免得每点一下都把公文重传一遍。
 async function refreshReports() {
@@ -1030,31 +1157,7 @@ function onProvinceDisabled(p) {
   toast("已下令：" + verb + " " + p.name);
 }
 
-function renderPanel() {
-  const box = $("log");
-  box.innerHTML = "";
-  const lines = S.log || [];
-  if (!lines.length) {
-    box.innerHTML = "<div class='item'>暂无战报。推进时间后，前线情报会陆续送到。</div>";
-    return;
-  }
-  // 连续重复的战报折叠成一条并计数。
-  // 模块规则（比如"山地行军非战斗减员"）每 tick 都会为每个单位推一条同样的文字，
-  // 不折叠的话整栏都是同一句话，真正的战况反而看不见。
-  const runs = [];
-  for (const ev of lines) {
-    const last = runs[runs.length - 1];
-    if (last && last.text === ev.text) last.n++;
-    else runs.push({ text: ev.text, kind: ev.kind, tick: ev.tick, n: 1 });
-  }
-  for (const r of runs) {
-    const d = document.createElement("div");
-    // 样式按引擎给的事件类别走，不再用正则匹配中文措辞
-    d.className = "item k-" + r.kind;
-    d.textContent = "[" + r.tick + "] " + r.text + (r.n > 1 ? "　×" + r.n : "");
-    box.appendChild(d);
-  }
-}
+
 
 bind("modes", "click", (e) => {
   const b = e.target.closest(".mode");
@@ -1138,6 +1241,8 @@ let suppressClick = false;
 
 
 bind("dp-send", "click", (ev) => { ev.stopPropagation(); sendTelegram(); });
+bind("open-mail", "click", () => openMail());
+bind("mail-close", "click", () => closeMail());
 bind("btn-1", "click", () => api("/api/tick", { days: 1 }));
 bind("btn-3", "click", () => api("/api/tick", { days: 3 }));
 
