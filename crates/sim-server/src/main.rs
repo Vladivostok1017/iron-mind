@@ -70,17 +70,23 @@ fn main() {
         println!("  省界：使用模块自带的真实边界（provinces_geo.json）");
     }
 
-    let llm_cfg = llm::Config::from_env();
-    println!("  将领大脑：{}", llm_cfg.describe());
+    // 配置是**共享可改**的：玩家可以在首次设置里现填 base/model/key，
+    // 不用重启游戏（工作线程每一单都重新取一次）。
+    let llm_cfg = Arc::new(std::sync::Mutex::new(llm::Config::from_env()));
+    {
+        let c = llm_cfg.lock().unwrap();
+        println!("  将领大脑：{}", c.describe());
+        drop(c);
+    }
 
     let state = Arc::new(ServerState {
         module: std::sync::Mutex::new(module),
         module_path: std::sync::Mutex::new(module_path.clone()),
         world: std::sync::Mutex::new(None),
         commands: std::sync::Mutex::new(Vec::new()),
-        llm: llm_cfg.clone(),
-        brain: llm::Broker::new(llm_cfg.clone()),
-        hq: llm::HqDriver::new(llm_cfg),
+        llm: Arc::clone(&llm_cfg),
+        brain: llm::Broker::new(Arc::clone(&llm_cfg)),
+        hq: llm::HqDriver::new(Arc::clone(&llm_cfg)),
         hq_plan: std::sync::Mutex::new(String::new()),
         hq_last_day: std::sync::Mutex::new(0),
         reports: std::sync::Mutex::new(Vec::new()),
@@ -145,7 +151,8 @@ struct ServerState {
     /// 玩家命令流。`(模块, 种子, 命令流)` 就是一份完整存档。
     commands: std::sync::Mutex<Vec<CmdRecord>>,
     /// 将领的 LLM 配置与后台问询。
-    llm: llm::Config,
+    /// 配置放在锁后面：首次设置里可以现填，不用重启。
+    llm: Arc<std::sync::Mutex<llm::Config>>,
     brain: llm::Broker,
     /// 敌方统帅部（AI 玩家）：独立线程 + 上一次的方针。
     hq: llm::HqDriver,
@@ -507,20 +514,113 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             respond(&mut stream, 200, "application/json", &body)
         }        ("GET", "/api/llm") => {
             use serde_json::json;
+            let c = cfg(&state);
             let body = json!({
-                "enabled": state.llm.enabled,
+                "enabled": c.enabled,
                 // 这一次判断到底会不会真的调模型。前端据此区分"接了模型"和
                 // "本地规则顶上"——两者都能玩，但不是一回事。
-                "uses_model": state.llm.uses_model(),
-                "mode": state.llm.describe(),
-                "model": state.llm.model,
-                "interval_days": state.llm.interval_days,
+                "uses_model": c.uses_model(),
+                "mode": c.describe(),
+                "model": c.model,
+                "base": c.base,
+                // 密钥绝不回传，只告诉前端"填没填"
+                "has_key": !c.key.trim().is_empty(),
+                "local_only": c.local_only,
+                // 首次设置做过没有：做过就不再自动弹出来
+                "setup_done": std::env::var("IRONMIND_SETUP").map(|v| v == "done").unwrap_or(false),
+                "interval_days": c.interval_days,
                 "calls": *state.brain.calls.lock().unwrap(),
                 "ready": state.brain.ready.lock().unwrap().len(),
                 "errors": state.brain.errors.lock().unwrap().clone(),
             })
             .to_string();
             respond(&mut stream, 200, "application/json", &body)
+        }
+        // 首次设置 / 设置面板：写 settings.env + 立刻生效（不重启）。
+        //
+        // 为什么要有这个接口：装完软件的人不应该被要求"去改一个文本文件再重启"。
+        // 键值照旧写进 settings.env——文件仍然是唯一事实，接口只是它的编辑器。
+        ("POST", "/api/settings") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|x| x.trim().to_string());
+            let mode = s("mode").unwrap_or_default(); // "model" | "local"
+            let base = s("base");
+            let model = s("model");
+            let key = s("api_key");
+
+            let mut pairs: Vec<(&str, Option<String>)> = Vec::new();
+            match mode.as_str() {
+                "model" => {
+                    pairs.push(("IRONMIND_LLM", Some("auto".into())));
+                    if let Some(b) = base.filter(|b| !b.is_empty()) {
+                        if !b.starts_with("http") {
+                            let msg = json!({ "ok": false, "error": "API 地址要以 http(s):// 开头" });
+                            return respond(&mut stream, 400, "application/json", &msg.to_string());
+                        }
+                        pairs.push(("IRONMIND_API_BASE", Some(b)));
+                    }
+                    if let Some(m) = model.filter(|m| !m.is_empty()) {
+                        pairs.push(("IRONMIND_MODEL", Some(m)));
+                    }
+                    if let Some(k) = key.filter(|k| !k.is_empty()) {
+                        pairs.push(("IRONMIND_API_KEY", Some(k)));
+                    }
+                }
+                "local" => {
+                    // 明确的"先不接模型"：有 key 也不用
+                    pairs.push(("IRONMIND_LLM", Some("local".into())));
+                }
+                _ => {
+                    let msg = json!({ "ok": false, "error": "mode 必须是 model 或 local" });
+                    return respond(&mut stream, 400, "application/json", &msg.to_string());
+                }
+            }
+            pairs.push(("IRONMIND_SETUP", Some("done".into())));
+
+            if let Err(e) = merge_settings_env(&pairs) {
+                let msg = json!({ "ok": false, "error": e });
+                return respond(&mut stream, 500, "application/json", &msg.to_string());
+            }
+            // 写回进程环境，再按环境重算一份配置——文件和内存不会各说一套。
+            for (k, val) in &pairs {
+                match val {
+                    Some(x) => std::env::set_var(k, x),
+                    None => std::env::remove_var(k),
+                }
+            }
+            let fresh = llm::Config::from_env();
+            let mode_text = fresh.describe();
+            let uses = fresh.uses_model();
+            *state.llm.lock().unwrap() = fresh;
+            trace(format!("   配置已更新：{mode_text}"));
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({ "ok": true, "mode": mode_text, "uses_model": uses }).to_string(),
+            )
+        }
+        // 测试连接：拿还没保存的 base/model/key 真的打一次模型。
+        ("POST", "/api/settings/test") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|x| x.trim().to_string());
+            let mut c = cfg(&state);
+            if let Some(b) = s("base").filter(|b| !b.is_empty()) {
+                c.base = b;
+            }
+            if let Some(m) = s("model").filter(|m| !m.is_empty()) {
+                c.model = m;
+            }
+            if let Some(k) = s("api_key").filter(|k| !k.is_empty()) {
+                c.key = k;
+            }
+            let out = match llm::ping(&c) {
+                Ok(t) => json!({ "ok": true, "reply": t }),
+                Err(e) => json!({ "ok": false, "error": e }),
+            };
+            respond(&mut stream, 200, "application/json", &out.to_string())
         }
         ("GET", "/api/reports") => {
             use serde_json::json;
@@ -1068,6 +1168,46 @@ fn write_save(
     Ok((name, payload.day, payload.commands.len()))
 }
 
+/// 取一份当前配置的快照。配置会被首次设置改写，所以不能缓存。
+fn cfg(state: &ServerState) -> llm::Config {
+    state.llm.lock().unwrap().clone()
+}
+
+/// 把几项配置合并进 `settings.env`，**保留文件里其它内容**（注释、别的键）。
+///
+/// 为什么不是整个重写：玩家可能自己在里头写了 IRONMIND_MODULES、
+/// IRONMIND_HQ_INTERVAL 之类，界面上改个 key 不该把它们抹掉。
+/// `Some(x)` = 写入/覆盖，`None` = 删掉这一行。
+fn merge_settings_env(pairs: &[(&str, Option<String>)]) -> Result<(), String> {
+    let path = llm::settings_path();
+    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = old.lines().map(|s| s.to_string()).collect();
+
+    for (key, val) in pairs {
+        let pos = lines.iter().position(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#')
+                && t.split_once('=')
+                    .map(|(k, _)| k.trim() == *key)
+                    .unwrap_or(false)
+        });
+        match (val, pos) {
+            (Some(v), Some(i)) => lines[i] = format!("{key}={v}"),
+            (Some(v), None) => lines.push(format!("{key}={v}")),
+            (None, Some(i)) => {
+                lines.remove(i);
+            }
+            (None, None) => {}
+        }
+    }
+    let mut text = lines.join("\n");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    std::fs::write(&path, text).map_err(|e| format!("写 {} 失败：{e}", path.display()))?;
+    Ok(())
+}
+
 /// 一条公文。
 ///
 /// 参照 HOI4 的布局思路：右侧栏是"部队与军情"，不是流水账。
@@ -1210,7 +1350,7 @@ fn resolve_recipients(w: &World, side: Side, to: &str) -> Vec<usize> {
 /// 注意这不是"把命令写进 order"。写进去的是**电报原文**，
 /// 将领看它、理解它、可能打折扣——和真正的指挥链一样。
 fn deliver_telegrams(state: &Arc<ServerState>, w: &World, day: u32) -> Vec<String> {
-    if !state.llm.enabled {
+    if !cfg(state).enabled {
         return Vec::new();
     }
     let due: Vec<(u32, String, String)> = {
@@ -1638,11 +1778,11 @@ fn answer_report(state: &Arc<ServerState>, w: &mut World, id: u32, approve: bool
 
 /// 提交到期的问询。同一个单位 `interval_days` 内只问一次，每 tick 最多几单。
 fn request_due(state: &Arc<ServerState>, w: &World) {
-    if !state.llm.enabled {
+    if !cfg(state).enabled {
         return;
     }
     let day = w.tick;
-    let interval = state.llm.interval_days.max(1);
+    let interval = cfg(state).interval_days.max(1);
 
     // 先挑出"到期该问"的单位，再按**最久没问过的优先**排队。
     //
@@ -2017,7 +2157,7 @@ mod tests {
 
 /// 距上次叫司令部几天了（用来控制频率：司令部不该每天开会）。
 fn hq_due(state: &Arc<ServerState>, w: &World) -> bool {
-    if !state.llm.enabled {
+    if !cfg(state).enabled {
         return false;
     }
     // 模块没写统帅部就不做——不是每个模块都想给敌国一个"人"。

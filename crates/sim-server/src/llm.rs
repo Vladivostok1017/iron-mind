@@ -20,30 +20,56 @@ use std::sync::{Arc, Mutex};
 ///
 /// 只认 `KEY=VALUE` 单行；已存在的环境变量优先，不会被文件覆盖。
 fn load_dotenv() {
-    let Ok(text) = std::fs::read_to_string(".env") else {
-        return;
-    };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+    // 两个文件，同样的格式，都是"有就用、已有环境变量不覆盖"：
+    //   .env          开发时用的（仓库根目录）
+    //   settings.env  装好之后用的（安装目录，玩家在游戏里填的东西写这里）
+    for name in [".env", "settings.env"] {
+        let Ok(text) = std::fs::read_to_string(name) else {
             continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            let k = k.trim();
-            let v = v.trim().trim_matches('"').trim_matches('\'');
-            if !k.is_empty() && std::env::var(k).is_err() {
-                std::env::set_var(k, v);
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                let k = k.trim();
+                let v = v.trim().trim_matches('"').trim_matches('\'');
+                if !k.is_empty() && std::env::var(k).is_err() {
+                    std::env::set_var(k, v);
+                }
             }
         }
     }
 }
 
-/// LLM 配置。全部来自环境变量。
+/// 配置文件在哪：先看工作目录，再看 exe 旁边（桌面版从安装目录启动，两者相同）。
+pub fn settings_path() -> std::path::PathBuf {
+    let cwd = std::path::PathBuf::from("settings.env");
+    if cwd.exists() {
+        return cwd;
+    }
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        let p = dir.join("settings.env");
+        if p.exists() {
+            return p;
+        }
+        return p;
+    }
+    cwd
+}
+
+/// LLM 配置。全部来自环境变量（或 settings.env）。
 #[derive(Clone, Debug)]
 pub struct Config {
     pub enabled: bool,
     /// 用内置假模型（不联网，用来验证整条链路）
     pub mock: bool,
+    /// 玩家明确选了"就用地方法则判断"：有 key 也不用
+    pub local_only: bool,
     pub base: String,
     pub model: String,
     pub key: String,
@@ -59,6 +85,8 @@ impl Config {
         let mode = std::env::var("IRONMIND_LLM").unwrap_or_else(|_| "auto".into());
         let mock = mode == "mock";
         let off = mode == "off";
+        // 玩家在首次设置里选了"先不接模型"：就算 key 还在，也不调模型
+        let local_only = mode == "local";
         Self {
             // 没有 key ≠ 关掉指挥链。
             //
@@ -70,6 +98,7 @@ impl Config {
             // 现在只有显式 IRONMIND_LLM=off 才关；没 key 时由本地规则判断顶上。
             enabled: !off,
             mock,
+            local_only,
             base: std::env::var("IRONMIND_API_BASE")
                 .unwrap_or_else(|_| "https://api.deepseek.com/v1".into()),
             model: std::env::var("IRONMIND_MODEL").unwrap_or_else(|_| "deepseek-chat".into()),
@@ -89,12 +118,14 @@ impl Config {
     /// false 时用本地规则判断（`mock_judgement` / `mock_hq`）——同样的
     /// 判断结构，只是不联网。
     pub fn uses_model(&self) -> bool {
-        self.enabled && !self.mock && !self.key.trim().is_empty()
+        self.enabled && !self.mock && !self.local_only && !self.key.trim().is_empty()
     }
 
     pub fn describe(&self) -> String {
         if !self.enabled {
             "已关闭（IRONMIND_LLM=off）".into()
+        } else if self.local_only {
+            "规则 AI（你选了本地判断）".into()
         } else if !self.uses_model() {
             "规则 AI（本地判断，未接模型）".into()
         } else {
@@ -600,7 +631,9 @@ pub struct Ready {
 }
 
 impl Broker {
-    pub fn new(cfg: Config) -> Self {
+    /// `cfg` 是**共享**的：玩家可以在游戏里现填 key，不用重启。
+    /// 工作线程每一单都重新取一次配置，所以改了立刻就生效。
+    pub fn new(cfg: Arc<Mutex<Config>>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<Job>();
         let ready: Arc<Mutex<HashMap<usize, Ready>>> = Arc::new(Mutex::new(HashMap::new()));
         let asked = Arc::new(Mutex::new(HashMap::new()));
@@ -612,6 +645,8 @@ impl Broker {
         let e2 = Arc::clone(&errors);
         std::thread::spawn(move || {
             while let Ok(job) = rx.recv() {
+                // 先把配置拷出来，别握着锁去等网络
+                let cfg = cfg.lock().unwrap().clone();
                 match ask(&cfg, &job.ask) {
                     Ok(j) => {
                         *c2.lock().unwrap() += 1;
@@ -790,6 +825,31 @@ pub fn ask_hq(cfg: &Config, a: &HqAsk) -> Result<HqJudgement, String> {
 ///
 /// 刻意**没有**去重构 `ask()` 里的那段 curl：那条路是跑通过了的东西，
 /// 为了少写四十行去动它不划算。两段代码都只做""拼 JSON → curl -K → 取 content""。
+/// 连通性测试：用给定配置真的打一次模型。
+///
+/// 首次设置里那个"测试连接"就是它。**强制走网络**（即使当前是 mock/本地模式），
+/// 否则失败会被本地判断悄悄顶掉，玩家以为连通了。
+pub fn ping(cfg: &Config) -> Result<String, String> {
+    if cfg.key.trim().is_empty() {
+        return Err("还没有填密钥".into());
+    }
+    let mut c = cfg.clone();
+    c.mock = false;
+    c.local_only = false;
+    c.enabled = true;
+    let out = hq_chat(
+        &c,
+        "你是连通性测试。只回四个字：连接正常。不要解释，不要标点。",
+        "回一句：连接正常",
+        32,
+    )?;
+    let t = out.trim();
+    if t.is_empty() {
+        return Err("模型回复为空".into());
+    }
+    Ok(t.chars().take(40).collect())
+}
+
 fn hq_chat(cfg: &Config, system: &str, user: &str, max_tokens: u32) -> Result<String, String> {
     let body = serde_json::json!({
         "model": cfg.model,
@@ -865,7 +925,7 @@ pub struct HqDriver {
 }
 
 impl HqDriver {
-    pub fn new(cfg: Config) -> Self {
+    pub fn new(cfg: Arc<Mutex<Config>>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<(u32, HqAsk)>();
         let ready: Arc<Mutex<Option<(u32, HqJudgement)>>> = Arc::new(Mutex::new(None));
         let calls = Arc::new(Mutex::new(0u32));
@@ -875,6 +935,7 @@ impl HqDriver {
         let e2 = Arc::clone(&errors);
         std::thread::spawn(move || {
             while let Ok((day, ask)) = rx.recv() {
+                let cfg = cfg.lock().unwrap().clone();
                 match ask_hq(&cfg, &ask) {
                     Ok(j) => {
                         *c2.lock().unwrap() += 1;
@@ -951,6 +1012,7 @@ mod hq_tests {
         let cfg = Config {
             enabled: true,
             mock: true,
+            local_only: false,
             base: "http://127.0.0.1:1".into(),
             model: "x".into(),
             key: String::new(),
