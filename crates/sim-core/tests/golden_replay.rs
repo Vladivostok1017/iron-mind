@@ -76,7 +76,11 @@ fn golden_hash_is_stable() {
 /// - 状态哈希补进**编制变动**（`ended_day` / `reform_day` / `reform_ratio` /
 ///   `commander.fate`）后重算。动机同上：覆灭日决定"还能不能被问策、能不能整编"，
 ///   将领结局决定"这支部队还重建得起来吗"——不同结局必须算出不同哈希。
-const GOLDEN_LAST_HASH: u64 = 0xa3dc_9356_6254_9123;
+/// - **补给会真的断**（docs/20）后重算：敌军纵队踩在补给线上把通行能力乘 0.3，
+///   断粮（<0.15）每天减员 0.5%。这两条直接改变兵力与补给值，属于行为变更。
+/// - 覆灭阈值从"不足 1 千"改为"不足 200 人"后重算：
+///   老口径会把 800–1500 人的空军飞行团一夜之间判成全军覆没。
+const GOLDEN_LAST_HASH: u64 = 0x7268_bceb_fe9c_fc6d;
 
 #[test]
 fn different_seeds_diverge() {

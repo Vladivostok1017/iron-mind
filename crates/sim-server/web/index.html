@@ -1247,9 +1247,12 @@ function renderOutliner() {
     // 行军中的部队要能一眼看出来：第几天到、去哪。
     // 没有这一项，远距离调动在地图上就是"部队忽然不见了几天"。
     const marching = u.march_hops > 0 && u.march_to;
-    right.textContent = u.strength.toFixed(1) + " 千 " +
+    // 断粮比行军更要紧：补给见底不只打不动，还会每天死人（见 docs/20）。
+    const hungry = u.supply < 0.15 ? "断粮·" : (u.supply < 0.3 ? "缺粮·" : "");
+    right.textContent = hungry + u.strength.toFixed(1) + " 千 " +
       (marching ? "→" + u.march_to + " " + u.march_hops + "日" : u.order);
-    if (marching) right.style.color = "#c9a227";
+    if (hungry) right.style.color = "#d9534f";
+    else if (marching) right.style.color = "#c9a227";
     d.appendChild(left);
     d.appendChild(right);
     d.title = u.commander + (u.disobeyed ? "（抗命中）" : "");

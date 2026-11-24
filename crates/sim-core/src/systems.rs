@@ -225,7 +225,16 @@ pub fn tick(world: &mut World) {
     run_combat(world, seed, now);
     rules.run(world, Phase::PostCombat);
     run_morale(world);
+    // 断粮：补给见底就真的会死人。放在士气之后——
+    // 它读本 tick 的补给值，减员从下一 tick 起影响战斗力。
+    run_starvation(world, now);
+    // 打光或饿光的部队统一判定覆灭。
+    // 以前只在战斗结算里做，于是"饿到 0.4 千"的部队会一直挂在编成里，
+    // 既不能打，也不消失。
+    sweep_ended(world, now, seed);
     rules.run(world, Phase::PostTick);
+    // 今天的电报到了才进日志：长官部不是全知视角。
+    world.flush_in_transit();
 
     world.tick += 1;
 }
@@ -260,7 +269,22 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             if np.terrain == Terrain::Water {
                 continue;
             }
-            let cand = cur_level * decay * np.supply_throughput;
+            // 敌军的行军纵队踩在这条补给线上：过得去，但运不上多少东西。
+            //
+            // 这条是"切断补给线"的落点。以前只认**归属**：只要省还是我的，
+            // 补给照常流，哪怕敌人一个联队正蹲在公路上。于是穿插、袭击后方、
+            // 绕过据点断粮这些事在引擎里根本不存在。
+            // 现在按 30% 通行能力折算——截两段就基本断了（0.3×0.3≈0.09）。
+            let interdicted = world.units_in(nb).iter().any(|&i| {
+                let u = &world.units[i as usize];
+                u.is_alive() && u.kind.is_ground() && u.side != side
+            });
+            let pass = if interdicted {
+                Fixed::ratio(3, 10)
+            } else {
+                Fixed::ONE
+            };
+            let cand = cur_level * decay * np.supply_throughput * pass;
             if cand > level[nb as usize] {
                 level[nb as usize] = cand;
                 queue.push_back(nb);
@@ -765,18 +789,78 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
             );
         }
 
-        // 兵力低于 1 千的单位：判定覆灭，并处理将领与编制。
-        for &i in cn.iter().chain(jp.iter()) {
-            let i = i as usize;
-            if world.units[i].strength < Fixed::ONE && world.units[i].ended_day.is_none() {
-                world.units[i].strength = Fixed::ZERO;
-                end_unit(world, i, p as u32, now, seed);
-            }
-        }
+        // 覆灭判定统一放在 `sweep_ended`（含饿死的），这里不再重复一次：
+        // 两处各判一次的话，阈值一改就会有一处漏改。
 
         // 阵地归属由 tick 开头的占领结算按"阵地数过半"统一处理，
         // 这里不再直接改省的颜色：一个阵地打赢了不代表整省易手。
         }
+    }
+}
+
+// ---------------------------------------------------------------- 断粮
+
+/// 断粮断水：补给见底就不只是"打不动"，是真的会死人。
+///
+/// 之前补给只影响 `combat_power`（兵力 × 士气 × 补给 × 系数），于是补给 0 的
+/// 部队"打不了"但**永远不减员**——它可以蹲在包围圈里待到战役结束，兵一个不少。
+///
+/// 规则很直白：
+/// - 补给 < 0.15：日损 0.5% 兵力、士气 −2%
+/// - 每 3 日报一次，否则满屏都是"又饿了一天"
+///
+/// 0.5%/日 的量级：一支 8 千人的军断粮一个月掉到约 6.9 千。
+/// 够痛（逼得你去打通补给线），但不至于三天蒸发（留出救援窗口）。
+const STARVE_LEVEL: (i32, i32) = (15, 100);
+const STARVE_LOSS: (i32, i32) = (5, 1000);
+
+fn run_starvation(world: &mut World, now: u32) {
+    use crate::world::EventKind;
+
+    for i in 0..world.units.len() {
+        let u = &world.units[i];
+        if !u.in_being() || !u.kind.is_ground() {
+            continue;
+        }
+        if u.supply >= Fixed::ratio(STARVE_LEVEL.0, STARVE_LEVEL.1) {
+            continue;
+        }
+        let side = u.side;
+        let name = u.name.clone();
+        let loss = u.strength * Fixed::ratio(STARVE_LOSS.0, STARVE_LOSS.1);
+        let u = &mut world.units[i];
+        u.strength -= loss;
+        u.losses += loss;
+        u.morale -= Fixed::ratio(2, 100);
+        u.morale = u.morale.clamp(Fixed::ratio(5, 100), Fixed::ONE);
+
+        if now % 3 == 0 {
+            // 断粮是内部消息：敌人不知道你还有几天粮。
+            world.report_for(
+                EventKind::Supply,
+                format!("{name} 断粮，日损 {:.2} 千", loss.to_display_f64()),
+                side,
+            );
+        }
+    }
+}
+
+/// 兵不足千人的部队：判定覆灭（打光或饿光）。
+///
+/// 阈值 **200 人**。老口径是"不足 1 千"，那是错的：一个被打残到 900 人的师
+/// 仍然是师，番号还在；而空军一个飞行团本来就只有 800–1500 人，
+/// 按 1 千判"全歼"会把整个空军一夜之间判死。
+pub const WIPED_OUT: Fixed = Fixed::ratio_const(2, 10);
+
+fn sweep_ended(world: &mut World, now: u32, seed: u64) {
+    for i in 0..world.units.len() {
+        let u = &world.units[i];
+        if u.ended_day.is_some() || u.strength >= WIPED_OUT {
+            continue;
+        }
+        world.units[i].strength = Fixed::ZERO;
+        let prov = world.units[i].position;
+        end_unit(world, i, prov, now, seed);
     }
 }
 
@@ -818,7 +902,9 @@ fn end_unit(world: &mut World, idx: usize, prov: u32, now: u32, seed: u64) {
     world.units[idx].disobeyed = false;
 
     // 全军覆没是战场上看得见的事：双方都能报。
-    world.report(EventKind::Combat, format!("{name} 在 {where_} 被全歼"));
+    // 但要走电报/参谋那一段路——长官部不是当场就知道的。
+    let delay = world.comms.report_delay();
+    world.report_delayed(delay, EventKind::Combat, format!("{name} 在 {where_} 被全歼"), None);
     // 将领的生死是内部消息：只报给本方（敌人不知道对面的军长死没死）。
     let fate_line = match fate {
         Fate::Killed => format!("{name}（{general}）全军覆没，{general} 殉国"),
@@ -826,17 +912,19 @@ fn end_unit(world: &mut World, idx: usize, prov: u32, now: u32, seed: u64) {
         Fate::Relieved => format!("{name}（{general}）全军覆没，{general} 已去职"),
         Fate::Active => format!("{name}（{general}）全军覆没，{general} 突围生还"),
     };
-    world.report_for(EventKind::Oob, fate_line, side);
+    world.report_delayed(delay, EventKind::Oob, fate_line, Some(side));
 
     // 二次整编：模块声明过、且**还有将领活着**才排得上。
     // 没有人的部队不会被"自动重建"——那需要干部、番号与补充兵。
     if world.units[idx].reform_ratio.raw() > 0 && fate.can_lead() {
         let days = world.units[idx].reform_days;
         world.units[idx].reform_day = Some(now + days);
-        world.report_for(
+        let delay = world.comms.report_delay();
+        world.report_delayed(
+            delay,
             EventKind::Oob,
             format!("{name} 将于 {days} 日后在后方整编"),
-            side,
+            Some(side),
         );
     }
 }
@@ -882,13 +970,15 @@ fn run_reform(world: &mut World) {
         u.manual = false;
         u.disobeyed = false;
         u.dissent_reason = None;
-        world.report_for(
+        let delay = world.comms.report_delay();
+        world.report_delayed(
+            delay,
             EventKind::Oob,
             format!(
                 "{name} 在 {home_name} 整编完毕，补入新兵 {:.1} 千",
                 world.units[idx].strength.to_display_f64()
             ),
-            side,
+            Some(side),
         );
     }
 }
@@ -1174,6 +1264,7 @@ fn run_air(world: &mut World, now: u32) {
     }
     let _ = now;
 }
+
 
 
 

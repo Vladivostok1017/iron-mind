@@ -441,6 +441,55 @@ impl World {
         let tick = self.tick;
         self.log.push(Event::sided(tick, kind, text, side));
     }
+
+    /// 一封要在路上走 `delay` 天的战报（编制变动、断粮、被围都用它）。
+    ///
+    /// 事件的 `tick` 记的是**发生日**，不是送达日——玩家看到的日期应当是事发那天，
+    /// 只是他今天才收到。
+    pub fn report_delayed(
+        &mut self,
+        delay: u32,
+        kind: EventKind,
+        text: impl Into<String>,
+        side: Option<Side>,
+    ) {
+        if self.log.len() >= 400 {
+            return;
+        }
+        let tick = self.tick;
+        let ev = match side {
+            Some(s) => Event::sided(tick, kind, text, s),
+            None => Event::new(tick, kind, text),
+        };
+        if delay == 0 {
+            self.log.push(ev);
+        } else {
+            self.in_transit.push((tick + delay, ev));
+        }
+    }
+
+    /// 把今天该到的战报放进日志。顺序固定（按送达 tick、再按入队顺序）。
+    pub fn flush_in_transit(&mut self) {
+        // +1：这一天还没走完（`tick` 要到 tick 末尾才自增）。
+        // 不 +1 的话 delay=2 的电报要等到第三天早上才到，等于永远慢一天。
+        let now = self.tick + 1;
+        let mut due: Vec<Event> = Vec::new();
+        let mut keep: Vec<(u32, Event)> = Vec::with_capacity(self.in_transit.len());
+        for (arrive, ev) in self.in_transit.drain(..) {
+            if arrive <= now {
+                due.push(ev);
+            } else {
+                keep.push((arrive, ev));
+            }
+        }
+        self.in_transit = keep;
+        for ev in due {
+            if self.log.len() >= 400 {
+                break;
+            }
+            self.log.push(ev);
+        }
+    }
 }
 
 /// 一个省份。
@@ -949,6 +998,14 @@ pub struct World {
     pub rules: std::sync::Arc<crate::rules::RuleSet>,
     /// 战报。只进人类可读日志，不进状态哈希。
     pub log: Vec<Event>,
+    /// 还在路上的战报：(送达 tick, 事件)。
+    ///
+    /// 为什么要有它：指挥链是有距离的。一支部队在几百公里外全军覆没，
+    /// 长官部**不可能当天就知道**——电报要走、参谋要核对、再往上呈。
+    /// 之前所有战报都是即时进日志，等于把电台架在了每个连部。
+    /// 进状态哈希没有意义（它只影响"什么时候看到"，不影响世界），
+    /// 但它决定了玩家的时间感，所以必须存在。
+    pub in_transit: Vec<(u32, Event)>,
 }
 
 impl World {
@@ -966,6 +1023,7 @@ impl World {
             comms: CommsConfig::default(),
             rules: std::sync::Arc::new(crate::rules::RuleSet::default()),
             log: Vec::new(),
+            in_transit: Vec::new(),
         }
     }
 

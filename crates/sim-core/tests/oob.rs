@@ -20,7 +20,8 @@ fn doomed(reform_days: u32, reform_ratio: f64) -> World {
     home.neighbors = vec![0];
 
     let mut weak = Unit::new("第187师", Side::Cn, 0, 1);
-    weak.strength = Fixed::from_f64_input(0.4);
+    // 200 人以下才算覆灭（阈值见 systems::WIPED_OUT）
+    weak.strength = Fixed::from_f64_input(0.15);
     weak.max_strength = Fixed::from_int(6);
     weak.reform_days = reform_days;
     weak.reform_ratio = Fixed::from_f64_input(reform_ratio);
@@ -28,6 +29,9 @@ fn doomed(reform_days: u32, reform_ratio: f64) -> World {
 
     let strong = Unit::new("第106师团", Side::Jp, 0, 20);
     let mut w = World::new(7, vec![p, home], vec![weak, strong]);
+    // 战报走通信延迟；这个文件测的是编制，不是邮路，所以先把延迟清零。
+    w.comms.transmission = 0;
+    w.comms.staff = 0;
     w.units[1].manual = true;
     w.units[1].order = Order::Hold;
     w
