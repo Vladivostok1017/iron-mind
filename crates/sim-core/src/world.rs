@@ -907,7 +907,7 @@ impl Order {
 ///
 /// 这不是"难度选项"：它是**内容格式的扩展**。同一个引擎既跑定稿的旧战役，
 /// 也跑用新机制写的新战役，两者的确定性互不干扰。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Features {
     /// 弹药与油料：打光了真的打不动。
     pub ammo_fuel: bool,
@@ -931,7 +931,51 @@ pub struct Features {
     pub front_line: bool,
 }
 
+/// **全开 = 正式基线**（1.0 起）。
+///
+/// 这四个机制原来是"模块声明才生效"的预览版。1.0 把它们并回主线：
+/// 密集正面、弹药油料不是花活，而是"能不能表达真实战役"的前提。
+/// 想退回旧行为的模块在 `scenario.json` 里显式写 `"preview": {"x": false}`。
+impl Default for Features {
+    fn default() -> Self {
+        Self {
+            ammo_fuel: true,
+            rail_damage: true,
+            politics: true,
+            front_line: true,
+        }
+    }
+}
+
 impl Features {
+    /// 全关。只给"验证旧行为"的测试用，模块层不该出现这个组合。
+    pub fn none() -> Self {
+        Self {
+            ammo_fuel: false,
+            rail_damage: false,
+            politics: false,
+            front_line: false,
+        }
+    }
+
+    /// 被显式关掉的机制（界面用来说"这是经典模式"）。
+    pub fn disabled(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if !self.ammo_fuel {
+            v.push("ammo_fuel");
+        }
+        if !self.rail_damage {
+            v.push("rail_damage");
+        }
+        if !self.politics {
+            v.push("politics");
+        }
+        if !self.front_line {
+            v.push("front_line");
+        }
+        v
+    }
+
     pub fn any(&self) -> bool {
         self.ammo_fuel || self.rail_damage || self.politics || self.front_line
     }

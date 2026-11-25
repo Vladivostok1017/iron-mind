@@ -9,7 +9,7 @@ use sim_core::{systems, Features, Fixed, Side, World};
 fn fx() -> Features {
     Features {
         front_line: true,
-        ..Default::default()
+        ..Features::none()
     }
 }
 
@@ -28,7 +28,7 @@ fn front(flag: bool) -> World {
     let mut foe = Unit::new("foe", Side::Jp, 2, 1); // 只剩 1 千的残部
     foe.manual = true;
     foe.order = Order::Hold;
-    let fx = if flag { fx() } else { Features::default() };
+    let fx = if flag { fx() } else { Features::none() };
     World::new(3, vec![a, b, c], vec![mine, foe]).with_features(fx)
 }
 
@@ -50,7 +50,7 @@ fn adjacent_friendly_units_break_the_encirclement() {
         let mut helper = Unit::new("helper", Side::Cn, 0, 5);
         helper.manual = true;
         w.units.push(helper);
-        w.fx = if flag { fx() } else { Features::default() };
+        w.fx = if flag { fx() } else { Features::none() };
         w
     };
     let mut off = build(false);
@@ -102,7 +102,7 @@ fn narrow_front_does_not_equalize_the_sides() {
         let mut small = Unit::new("small", Side::Jp, 2, 4);
         small.manual = true;
         small.order = Order::Hold;
-        let fx = if flag { fx() } else { Features::default() };
+        let fx = if flag { fx() } else { Features::none() };
         World::new(17, vec![a2, a1, b, c], vec![big, small]).with_features(fx)
     };
     let mut off = build(false);

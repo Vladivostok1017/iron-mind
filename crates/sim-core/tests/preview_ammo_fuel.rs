@@ -9,7 +9,7 @@ use sim_core::{systems, Features, Fixed, Side, World};
 fn fx_ammo() -> Features {
     Features {
         ammo_fuel: true,
-        ..Default::default()
+        ..Features::none()
     }
 }
 
@@ -34,7 +34,7 @@ fn line(fx: Features) -> World {
 
 #[test]
 fn off_by_default_nothing_changes() {
-    let mut w = line(Features::default());
+    let mut w = line(Features::none());
     for _ in 0..10 {
         systems::tick(&mut w);
     }
@@ -89,7 +89,7 @@ fn ammo_floor_still_fights_but_weaker() {
     // 打光弹药不等于没有火力：地板 35%。
     assert!(empty.ammo_factor(&empty.units[0]) >= Fixed::ratio(35, 100));
     // 关着的时候恒为 1，老战役因此一丝一毫都不受影响。
-    let off = line(Features::default());
+    let off = line(Features::none());
     for u in &off.units {
         assert_eq!(off.ammo_factor(u), Fixed::ONE);
     }

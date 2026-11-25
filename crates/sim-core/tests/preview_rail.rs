@@ -12,7 +12,7 @@ use sim_core::{rail, systems, Features, Side, World};
 fn fx_rail() -> Features {
     Features {
         rail_damage: true,
-        ..Default::default()
+        ..Features::none()
     }
 }
 
@@ -38,7 +38,7 @@ fn line(fx: Features) -> World {
 
 #[test]
 fn bombing_does_nothing_when_off() {
-    let mut w = line(Features::default());
+    let mut w = line(Features::none());
     w.units[0].order = Order::BombRail(1);
     for _ in 0..5 {
         systems::tick(&mut w);

@@ -446,8 +446,8 @@
     <div class="stat"><b id="s-prov">—</b><span>控制省份</span></div>
     <div class="stat"><b id="s-enemy">—</b><span>敌军估计</span></div>
     <div class="spacer"></div>
-    <!-- 预览版角标：模块声明了 preview.* 才出现。
-         第一版发行版的界面不该多出奇怪的东西，所以默认 display:none。 -->
+    <!-- 经典模式角标：1.0 起四个机制默认全开，只有模块**显式关掉**某些机制
+         时才出现（例如战役级地图关掉连续正面模型）。全开时完全不显示。 -->
     <div class="pend" id="t-preview" style="display:none" title="">预览版</div>
     <!-- 回放浏览（预览版）：点开进入"看过去"的模式，不推进、不下令。 -->
     <div class="pend" id="rp-open" style="display:none" title="按天回看这一局">回放</div>
@@ -1168,22 +1168,27 @@ function renderTop() {
   const pe = $("pending");
   pe.textContent = pend > 0 ? "战报 " + pend + " 份在途" : "战报已清";
   pe.className = "pend" + (pend > 0 ? " hot" : "");
-  // 预览版角标：模块开了 preview.* 才亮。点它说明现在多了哪些机制——
-  // 不说清楚的话，玩家会以为"弹药打光了打不动"是 bug。
-  const fx = S.features || [];
+  // 经典模式角标：模块**关掉**了某些机制才亮。1.0 起这些是默认行为，
+  // 只有显式关掉才需要提醒（否则玩家会以为"打不动/走不动"是 bug）。
+  const off = S.features_off || [];
   // 回放入口：只要有正在跑的一局就能回看（它只读，不影响任何东西）。
   const rp = $("rp-open");
   if (rp) rp.style.display = LIVE ? "none" : "";
   renderFactions();
   const pv = $("t-preview");
   if (pv) {
-    pv.style.display = fx.length ? "" : "none";
-    if (fx.length) {
-      const NAME = { ammo_fuel: "弹药与油料", rail_damage: "铁路被炸", politics: "派系与人事", front_line: "连续正面" };
-      pv.textContent = "预览版 " + fx.filter((f) => NAME[f]).map((f) => NAME[f]).join("·");
-      pv.title = "这个战役用到了第一版发行版之后的实验机制：\n" +
-        fx.map((f) => "· " + (NAME[f] || f)).join("\n") +
-        "\n它们不在定稿平衡里，数值会变。";
+    // 1.0 起四个机制是默认行为；只有模块**显式关掉**才需要挂个牌子提醒，
+    // 否则玩家会以为"弹药打光了打不动""阵地拿不下来"是 bug。
+    pv.style.display = off.length ? "" : "none";
+    if (off.length) {
+      const NAME = {
+        ammo_fuel: "弹药与油料", rail_damage: "铁路被炸",
+        politics: "派系与人事", front_line: "连续正面",
+      };
+      pv.textContent = "经典模式 " + off.filter((f) => NAME[f]).map((f) => NAME[f]).join("·");
+      pv.title = "这个战役显式关掉了这些机制：\n" +
+        off.map((f) => "· " + (NAME[f] || f)).join("\n") +
+        "\n（1.0 起它们默认开启；模块在 scenario.json 的 preview 段里关的。）";
     }
   }
   $("k-comms").textContent = S.comms.kind;

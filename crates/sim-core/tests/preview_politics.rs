@@ -10,7 +10,7 @@ use sim_core::{systems, Features, Fixed, Side, World};
 fn fx_pol() -> Features {
     Features {
         politics: true,
-        ..Default::default()
+        ..Features::none()
     }
 }
 
@@ -41,7 +41,7 @@ fn stage(fx: Features) -> World {
 
 #[test]
 fn off_by_default_nothing_happens() {
-    let mut w = stage(Features::default());
+    let mut w = stage(Features::none());
     let before = w.state_hash();
     for _ in 0..5 {
         systems::tick(&mut w);

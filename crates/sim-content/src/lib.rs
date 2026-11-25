@@ -428,18 +428,20 @@ pub fn build_world(module: &LoadedModule) -> World {
     world
 }
 
-/// 预览版开关：把模块声明翻成引擎的 `Features`。
+/// 把模块声明翻成引擎的 `Features`。
 ///
-/// 刻意写成"只有显式 true 才开"：字段漏写、拼错、旧引擎忽略——三种情况都落到全关，
-/// 也就是第一版发行版的行为。这是"定稿不能被悄悄改掉"的那道闸。
+/// **1.0 起默认全开**：这几个机制已经并回主线，成为正式基线。
+/// 字段写成 `Option<bool>` 是为了让"想退回旧行为"的模块能显式关掉：
+/// `"preview": { "front_line": false }`。漏写 / 拼错 / 旧引擎忽略 → 都是开，
+/// 也就是"所有人都用新基线"，这比"悄悄退回旧语义"更容易被作者发现。
 pub fn features_from(def: Option<&PreviewDef>) -> sim_core::Features {
     match def {
         None => sim_core::Features::default(),
         Some(d) => sim_core::Features {
-            ammo_fuel: d.ammo_fuel,
-            rail_damage: d.rail_damage,
-            politics: d.politics,
-            front_line: d.front_line,
+            ammo_fuel: d.ammo_fuel.unwrap_or(true),
+            rail_damage: d.rail_damage.unwrap_or(true),
+            politics: d.politics.unwrap_or(true),
+            front_line: d.front_line.unwrap_or(true),
         },
     }
 }

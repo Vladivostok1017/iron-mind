@@ -198,19 +198,18 @@ pub struct ArrivalDef {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
 pub struct PreviewDef {
-    /// 弹药与油料：打光了真的打不动，缺油的装甲走不动。
+    /// 弹药与油料（默认**开**；写 `false` 退回旧行为）。
     #[serde(default)]
-    pub ammo_fuel: bool,
-    /// 铁路可被炸断（3 级损坏），也会被就地抢修。
+    pub ammo_fuel: Option<bool>,
+    /// 铁路被炸与抢修（默认**开**）。
     #[serde(default)]
-    pub rail_damage: bool,
-    /// 派系与人事：将领有靠山，靠山影响服从，可以撤换。
+    pub rail_damage: Option<bool>,
+    /// 派系与人事（默认**开**；模块没声明 `factions` 时自然不产生效果）。
     #[serde(default)]
-    pub politics: bool,
-    /// 连续正面模型：围歼/占领/展开宽度三处按"密集正面"的口径算。
-    /// 默认关——关着时就是第一版发行版的行为。
+    pub politics: Option<bool>,
+    /// 连续正面模型（默认**开**）：围歼/占领/展开宽度三处按密集正面的口径算。
     #[serde(default)]
-    pub front_line: bool,
+    pub front_line: Option<bool>,
 }
 
 /// 规则的阶段。

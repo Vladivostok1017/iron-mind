@@ -26,6 +26,9 @@ fn two_province() -> World {
     u.manual = true;
     u.order = Order::Hold;
     let mut w = World::new(1, vec![a, b, rear], vec![u]);
+    // 这组测试只测结局判定本身，不测占领/围歼的语义——固定用旧口径，
+    // 免得"1.0 把连续正面模型并回主线"这类平衡改动把它们一起带偏。
+    w.fx = sim_core::Features::none();
     w.comms.transmission = 0;
     w.comms.staff = 0;
     w.campaign_days = 5;

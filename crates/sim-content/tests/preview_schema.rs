@@ -1,8 +1,8 @@
-//! 预览版字段的解析测试。
+//! `preview` 段的语义（1.0 起）：**默认全开，写 false 才关**。
 //!
-//! 守两件事：
-//! 1. 老模块（没有 `preview`）照旧能解析，且默认全关；
-//! 2. 新字段拼错了要在严格模式下报错（否则作者以为开了，其实没开）。
+//! 历史：0.12 时这里是"只有显式 true 才开"的预览开关，为的是不动已定稿的
+//! 第一版发行版。1.0 把这几个机制并回主线，于是语义翻了过来：
+//! 不写 = 用正式基线；想退回旧行为必须显式关掉（而且关掉会在界面上挂牌子）。
 
 use sim_content::model::{OobDef, ScenarioDef};
 
@@ -11,31 +11,39 @@ fn scen(json: &str) -> ScenarioDef {
 }
 
 #[test]
-fn old_module_has_no_preview() {
+fn no_preview_block_means_everything_on() {
     let s = scen(r#"{"id":"a","name":"b","days":30}"#);
-    assert!(s.preview.is_none(), "不写 preview 必须是'全关'，不能是默认开");
+    assert!(s.preview.is_none(), "不写 preview 段");
+    let fx = sim_content::features_from(s.preview.as_ref());
+    assert!(fx.ammo_fuel && fx.rail_damage && fx.politics && fx.front_line);
+    assert!(fx.disabled().is_empty(), "没有关掉的机制");
 }
 
 #[test]
-fn preview_flags_parse() {
+fn explicit_false_turns_one_mechanism_off() {
+    let s = scen(r#"{"id":"a","name":"b","days":30,"preview":{"front_line":false}}"#);
+    let fx = sim_content::features_from(s.preview.as_ref());
+    assert!(!fx.front_line, "显式关掉");
+    assert!(fx.ammo_fuel, "没提到的保持默认开");
+    assert_eq!(fx.disabled(), vec!["front_line"]);
+}
+
+#[test]
+fn explicit_true_is_same_as_default() {
+    let s = scen(r#"{"id":"a","name":"b","days":30,"preview":{"ammo_fuel":true}}"#);
+    let fx = sim_content::features_from(s.preview.as_ref());
+    assert_eq!(fx, sim_core::Features::default());
+}
+
+#[test]
+fn all_off_is_expressible_for_legacy_reproduction() {
     let s = scen(
         r#"{"id":"a","name":"b","days":30,
-            "preview":{"ammo_fuel":true,"rail_damage":false,"politics":true}}"#,
+            "preview":{"ammo_fuel":false,"rail_damage":false,"politics":false,"front_line":false}}"#,
     );
-    let p = s.preview.expect("应该有 preview");
-    assert!(p.ammo_fuel);
-    assert!(!p.rail_damage);
-    assert!(p.politics);
-}
-
-#[test]
-fn partial_preview_defaults_to_off() {
-    // 只写一个功能，其余必须是关——"写了 ammo 就顺手把 politics 也打开"是灾难。
-    let s = scen(r#"{"id":"a","name":"b","days":30,"preview":{"rail_damage":true}}"#);
-    let p = s.preview.unwrap();
-    assert!(p.rail_damage);
-    assert!(!p.ammo_fuel);
-    assert!(!p.politics);
+    let fx = sim_content::features_from(s.preview.as_ref());
+    assert_eq!(fx, sim_core::Features::none(), "四个都关 = 0.12 的旧语义");
+    assert_eq!(fx.disabled().len(), 4);
 }
 
 #[test]

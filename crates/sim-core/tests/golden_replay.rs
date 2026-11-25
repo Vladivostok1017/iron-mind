@@ -89,7 +89,12 @@ fn golden_hash_is_stable() {
 ///   现在本国 0.25 / 敌境 0.5 兜着；断粮改成
 ///   `四面皆敌 || (本方有补给源 && BFS 到不了)`。
 ///   区别是：**离补给源远 = 缺粮（战力差）**，**被切断 = 断粮（日损）**。
-const GOLDEN_LAST_HASH: u64 = 0x09fd_d15c_7ee8_37d8;
+/// - **1.0 毕业：四个实验机制并回主线**（弹药油料、铁路被炸、派系人事、
+///   连续正面模型）后重算。这是唯一一次**刻意**改动黄金哈希：
+///   这些机制不再是"模块声明才生效"，而是默认行为。
+///   想复现旧语义的模块显式写 `"preview": {"x": false}`，
+///   测试里用 `Features::none()`。
+const GOLDEN_LAST_HASH: u64 = 0x6f5e_56bc_7ee1_cf74;
 
 #[test]
 fn different_seeds_diverge() {
