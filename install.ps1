@@ -134,7 +134,15 @@ foreach ($src in $modSources) {
   foreach ($c in $cands) {
     $name = Split-Path $c -Leaf
     if (-not (Test-Path (Join-Path $c "module.json"))) { continue }
-    Copy-Item $c (Join-Path $modDests $name) -Recurse -Force
+    # 同名模块先删再拷。
+    #
+    # 只 `Copy-Item -Recurse -Force` 到已存在的目录时，PowerShell 会把源目录
+    # **放进**目标里（`modules\x.imod\x.imod`），而原地那份旧文件并不会被覆盖。
+    # 表现：更新引擎或改了模块之后再 install，玩家玩的还是旧数据——
+    # 排查了很久（安装日志说"拷贝了"，文件时间却停在几天前）。
+    $dest = Join-Path $modDests $name
+    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }
+    Copy-Item $c $dest -Recurse -Force
     $count++
     Info "  $name"
   }
