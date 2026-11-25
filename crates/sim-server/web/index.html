@@ -913,7 +913,36 @@ function clipHalf(poly, a, b) {
   return out;
 }
 
+/* 坐标兜底：模块没写 `lon` / `lat` 时，所有省会落在 (0,0)，
+   Voronoi 切割退化成"一个省吃掉整张地图"——预览版演示模块就踩过这个坑
+   （4 个省全没写经纬度，于是东营那一块铺满了整个屏幕）。
+
+   这里给"没有坐标"的省按**书写顺序**排成一个网格，放在已有省的中心附近。
+   确定性：同一份 map.json 每次排出来的位置一样，所以截图/回放不会跳。 */
+function ensureCoords() {
+  if (!S || !S.provinces) return;
+  const isZero = (v) => Math.abs(v) < 1e-6;
+  const missing = S.provinces.filter((p) => isZero(p.lon) && isZero(p.lat));
+  if (!missing.length) return;
+  const known = S.provinces.filter((p) => !(isZero(p.lon) && isZero(p.lat)));
+  const cx = known.length ? known.reduce((s, p) => s + p.lon, 0) / known.length : 116.0;
+  const cy = known.length ? known.reduce((s, p) => s + p.lat, 0) / known.length : 29.0;
+  const cols = Math.ceil(Math.sqrt(missing.length));
+  // 间距 1.2 度：比一个县的宽度大得多，保证每个省都能切出像样的一块
+  const step = 1.2;
+  missing.forEach((p, i) => {
+    const r = Math.floor(i / cols), c = i % cols;
+    p.lon = cx + (c - (cols - 1) / 2) * step;
+    p.lat = cy + ((cols - 1) / 2 - r) * step;
+  });
+  console.warn(
+    "这个模块有 " + missing.length + " 个省没写 lon/lat，地图用了占位布局；" +
+    "想让地图真实，请在 map.json 里给每个省补上经纬度。"
+  );
+}
+
 function buildGeom() {
+  ensureCoords();
   const proj = project();
   const box = proj.box;
   const pts = {};
