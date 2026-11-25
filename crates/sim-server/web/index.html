@@ -561,6 +561,8 @@
     }
     /* 「晨报/菜单…」这些是文字按钮，桌面那套 padding 在手机上会把字挤掉 */
     #bottom .btn { letter-spacing: 0; }
+    /* 触屏上「⏎ / ␣」这两个键盘提示没有意义，只占宽度 */
+    #bottom .kbd { display: none; }
 
     /* 触屏上 44px 是最小可用点击面积，桌面那套 6px padding 点不准 */
     .btn, .m-chip, .mode, .rp-btn { min-height: 34px; }
@@ -695,30 +697,44 @@
     #bottom {
       display: flex; flex-wrap: nowrap;
       gap: 5px; padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+      /* 一律不换行：底栏高一行就是一行。空间不够时缩字号，不许撑成两行
+         （iOS 横屏左右有 59pt 安全区，可用宽度比全宽少 118px） */
+      white-space: nowrap;
     }
+    /* 键盘符号在触屏上没有意义，只占宽度 */
+    #bottom .kbd { display: none; }
     #bottom #hint, #bottom #plan, #bottom #mod-sel, #bottom .sep { display: none; }
     #bottom #modes {
-      flex: 0 0 208px; display: flex; gap: 0; min-width: 0;
+      /* **按内容宽度**，不参与压缩：四个两字标签（归属/情报/补给/地形）
+         挤到 30px 以下就会被截成「归…」—— 试过一次，比变高还难看。
+         空间不够时让右边三个长按钮去吸收。 */
+      flex: 0 0 auto; display: flex; gap: 0; min-width: 0;
     }
     #bottom #modes .mode {
-      flex: 1 1 0; padding: 5px 2px; font-size: 11px; min-height: 34px;
+      flex: 0 0 auto; padding: 5px 7px; font-size: 11px; min-height: 34px;
       border-radius: 0; border-right-width: 0;
     }
     #bottom #modes .mode:first-child { border-radius: 5px 0 0 5px; }
     #bottom #modes .mode:last-child { border-radius: 0 5px 5px 0; border-right-width: 1px; }
-    /* 管理动作：定宽，字少 */
+    /* 管理动作：按内容宽度，但给一个下限 —— 安卓那边是 54px，这里 50。
+       5 × 50 = 250，加上视图 144 和间隙 40，剩给三个推进按钮约 306，
+       和安卓的 335 很接近（差的 30px 就是安全区吃掉的宽度）。 */
     #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
     #bottom #btn-load, #bottom #btn-reset {
-      flex: 0 0 54px; min-height: 34px; padding: 4px 2px; font-size: 10.5px;
+      flex: 0 0 auto; min-width: 50px; min-height: 34px; padding: 4px 4px; font-size: 10.5px;
     }
-    /* 三个推进：吃掉剩余宽度，谁字长谁多分一点 */
-    #bottom #btn-3 { flex: 1 1 0; min-height: 34px; padding: 4px 2px; font-size: 11px; }
-    #bottom #btn-next { flex: 1.25 1 0; min-height: 34px; padding: 4px 2px; font-size: 11px; }
+    /* 三个推进：字最长，分得最多；不许换行，挤就缩字号 */
+    #bottom #btn-3 { flex: 1 1 0; min-width: 0; min-height: 34px; padding: 4px 2px; font-size: 11px; }
+    #bottom #btn-next { flex: 1.3 1 0; min-width: 0; min-height: 34px; padding: 4px 2px; font-size: 11px; }
     #bottom #btn-1 {
-      flex: 1 1 0; min-width: 76px;
+      flex: 1.1 1 0; min-width: 74px;
       background: #2c6cb0; border-color: #3b82c9; color: #fff;
       font-weight: 600; font-size: 11.5px; min-height: 34px;
     }
+    /* ⚠️ 原来这里还有一档 `max-height: 430px` 的"更窄横屏"规则，把管理按钮的
+       padding 压到 0。**iPhone 16 Pro 横屏就是 402 高**，于是正常机器也命中了，
+       五个管理按钮被压成 20px 一条（"挤得特别小"，见 docs/25 4.10）。
+       横屏高度本来就在 390–430 之间，用高度当"窄"的判据是错的，删掉。 */
 
     /* 侧栏在横屏下高度只有两百多像素：把每段的标题压薄，内容才看得见 */
     aside .sec { padding: 6px 10px; }
@@ -888,8 +904,8 @@
     <button class="btn" id="btn-reset">重开</button>
     <button class="btn" id="btn-3">推进 3 日</button>
     <!-- 玩家真正想要的是"跳过没事的日子"，不是"再推一天" -->
-    <button class="btn" id="btn-next">推进到有事 ⏎</button>
-    <button class="btn primary" id="btn-1">推进 1 日 ␣</button>
+    <button class="btn" id="btn-next">推进到有事<span class="kbd"> ⏎</span></button>
+    <button class="btn primary" id="btn-1">推进 1 日<span class="kbd"> ␣</span></button>
   </div>
   <!-- 结局面板：战役结束后盖住全局。没有"你赢了"三个字，只有一条结局与它的依据。 -->
   <div id="outcome">
@@ -3954,7 +3970,20 @@ const Guide = (() => {
 bind("gd-next", "click", () => Guide.next());
 bind("gd-prev", "click", () => Guide.prev());
 bind("gd-skip", "click", () => Guide.finish());
-window.addEventListener("resize", () => Guide.reposition());
+// 转屏后要**重新给一次 viewport**。
+//
+// WKWebView / Android WebView 都不会在窗口尺寸变化时重新解析 meta viewport：
+// 竖→横→竖 转一圈回来，页面会停在放大过的缩放级别上（字变大、右边被裁掉）。
+// 往同一个 meta 里重写一遍 content 就会触发重新求值 —— 比 reload 温和得多
+// （reload 会把地图的平移/缩放状态一起丢掉）。
+window.addEventListener("resize", () => {
+  Guide.reposition();
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (vp) {
+    vp.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, "
+      + "user-scalable=no, viewport-fit=cover");
+  }
+});
 
 // ── 首页菜单 ──
 bind("btn-morning", "click", () => Morning.open(true));
