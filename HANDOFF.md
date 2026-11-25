@@ -88,6 +88,14 @@ pwsh -File tools/make-icon.ps1
 
 # 无头截图验收界面（每次新 profile + no-cache，避开"看到旧页面"）
 node tools/shot.js --url http://127.0.0.1:8899/ --out tools/_shots/x.png --wait 1400
+
+# iOS：出未签名 .ipa（要 Mac + 完整 Xcode；见 §15 与 docs/25）
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+tools/build-ios.sh                        # → dist/IronMind-ios-1.3.0.ipa
+tools/build-ios.sh --simulator            # 模拟器里直接跑，不需要 Apple ID
+
+# iOS 那一半的内核测试（在主机的 macOS 上跑，不需要 Xcode）
+cargo test -p sim-ios
 ```
 
 **桌面版的分工**（`docs/24`）：`crates/sim-desktop` 只是一个外壳——
@@ -125,7 +133,15 @@ crates/sim-content/src/       模块加载
 
 crates/sim-server/            HTTP 服务 + 前端
 ├─ src/main.rs    手写 HTTP（无框架），路由见 docs/24 与文件内的 match 表
+├─ src/http.rs    出站 HTTP（只有 LLM 用）：桌面/安卓 curl，iOS 由外壳装 URLSession
 └─ web/index.html 单文件前端（地图 + 首页 + 引导 + 各面板）
+
+crates/sim-ios/               iOS 壳的 Rust 半边（staticlib → libsim_ios.a，见 docs/25）
+├─ src/lib.rs     4 个 C 函数：start / set_http_post / version / 错误缓冲区
+├─ build.rs       内嵌战役模块（和安卓共用 sim-bundle）
+└─ tests/kernel.rs 在 macOS 上**真起内核、真打 HTTP** 的 5 条测试
+
+crates/sim-bundle/            外壳 build.rs 的公共部分：模块目录 → .imod（安卓与 iOS 共用）
 
 crates/sim-desktop/           桌面外壳（原生窗口，见 docs/24）
 └─ src/main.rs    挑空闲端口 → 拉起 sim-server 子进程 → WebView2 窗口 → 关窗杀进程
@@ -138,6 +154,12 @@ tools/mapgen/gen.js           地图生成器（Delaunay 算邻接，作者工�
 tools/shot.js                 无头截图 + 页内跑 JS（--eval-file 绕开 PowerShell 转义）
 content/README.md              **模块开发手册**（字段契约、校验码、发布清单）
 
+ios/                          Xcode 工程（只有壳，没有游戏逻辑，见 docs/25）
+├─ project.yml               工程设置的源文件（XcodeGen 生成下面那个 .xcodeproj）
+├─ IronMind.xcodeproj/       生成好并提交：装了 Xcode 就能直接打开
+└─ IronMind/                 AppDelegate / SceneDelegate / GameViewController /
+                             Kernel / HttpBridge + Info.plist + 图标
+
 （脚手架 tools/module-init.js 和开发循环 imdev.mjs 在 SDK 仓库，不在本仓库——
  引擎出货的二进制不带开发行为，作者工具也不该混进玩家安装包。）
 
@@ -149,7 +171,7 @@ content/scenarios/
  用 IRONMIND_MODULES 或 install.ps1 -Modules 指过去。）
 ```
 
-**测试分布**（共 64 个）：`sim-core` 内联 43 + `tests/golden_replay.rs` 4；`sim-content` 内联 2 + `tests/module_load.rs` 15。`sim-server` / `sim-testbed` 没有测试（都是 I/O 外壳，逻辑都在 sim-core）。
+**测试分布**（`cargo test --workspace`，2026-11 是 201 个）：`sim-core` 内联 + 黄金回放；`sim-content` 模块加载与校验；`sim-server` 的 15 条（导入、版本比较、存档名之类）；`sim-ios` 的 5 条（真起内核、端口回退、坏模块、C 传输钩子）+ 3 条内联；`sim-bundle` 1 条（模块目录真的能压成 zip）。改完引擎先跑一遍全套，别只看自己那个 crate。
 
 ---
 
@@ -182,6 +204,8 @@ content/scenarios/
 | `docs/13-界面与公文.md` | **HOI4 布局对照、公文三类、请示过期、限流饿死坑** |
 | `docs/12-将领大脑.md` | **LLM 将领：确定性边界、反谄媚提示词、异步与成本、配置** |
 | `docs/11-架构对标与重构.md` | **对标 OpenRA/Freeciv/NationFall/Command Ops，v2 传输/命令/事件/渲染规格** |
+| `docs/24-桌面版.md` | **怎么装成桌面程序**：外壳/内核分工、首页、引导、配置、已知限制 |
+| `docs/25-iOS.md` | **怎么上 iPhone**：为什么不用 wry 的 iOS 后端、Swift 壳做哪四件事、iOS 特有的五个坑、出包与签名、三端对照 |
 | `docs/10-指挥与尺度.md` | 命令分两层、将领上报、省内阵地与尺度上限 |
 
 ---
@@ -495,7 +519,87 @@ tools/build-android.ps1   NDK → .so → jniLibs → APK（一条命令）
 - **模块导入**走的是 `<input type=file webkitdirectory>`。手机上要选文件得给 WebView
   实现 `onShowFileChooser`；目前换模块只能重新出包（`-Module` 指定，模块打在 .so 里）。
 - 只出 `arm64-v8a`。32 位 arm 跑这种规模不现实。
-- iOS 没碰：`wry` 有 iOS 后端，但要 Mac + Xcode，且 Apple 对"运行时装战役模块"可能挑刺。
+- ~~iOS 没碰~~ → 1.3 做了，见 §15。结论是**不用** wry 的 iOS 后端：Swift 壳更省事。
+
+## 15 iOS（1.3，2026-11）
+
+**同一个内核，第三种壳，但这次换了一门语言写壳。** 安卓那边是 tao + wry 一套 Rust
+到底；iOS 这边是 **Rust 管内核、Swift 管那台机器**（理由见 `docs/25` 第 1 节，
+一句话：键盘顶页面、`confirm()` 弹窗、安全区、禁页面级缩放这四件事，用跨平台
+窗口库做比用 UIKit 做更绕，而它们恰好是"能装但玩不了"的全部原因）。
+
+```
+crates/sim-ios/           iOS 壳的 Rust 半边（staticlib → libsim_ios.a，26 MB）
+  src/lib.rs              4 个 C 函数：ironmind_start / set_http_post / version
+  tests/kernel.rs         宿主上真起内核、真打 HTTP（不需要 Xcode）
+crates/sim-bundle/        安卓与 iOS 共用的"模块目录 → .imod"打包逻辑
+crates/sim-server/src/http.rs  出站 HTTP 换了传输层（默认仍是 curl）
+ios/                      Xcode 工程：5 个 Swift 文件 + Info.plist + 图标
+tools/build-ios.sh        一条命令出未签名 .ipa / 模拟器里跑
+tools/build-ios-rust.sh   Xcode 的 preBuildScript 调它，cargo → target/ios/
+tools/make-icon-ios.py    18 个尺寸的图标 + Contents.json
+```
+
+### 发动机（引擎）那侧只改了一处
+
+`llm.rs` 里原来有两段一模一样的 `curl`（`ask` 和 `hq_chat`，作者当时刻意没合并）。
+iOS 上必须合并了——不是洁癖，是因为**没有 curl**：iOS 既没有 `/usr/bin/curl`，
+也禁止 App fork/exec。现在统一走 `http::post(url, key, body, timeout, tag)`：
+
+| 平台 | 传输 |
+|---|---|
+| 桌面 / 安卓 | `curl -K`（行为、错误文案一字未变） |
+| iOS | 外壳用 URLSession 实现的 C 函数（`sim-ios` 的 `ironmind_set_http_post`） |
+
+同时把 `base` 末尾斜杠的容错收进一个 `chat_url()`（以前两处各拼一次，
+填 `.../v1/` 就会得到 `//chat/completions`）。
+
+### 踩过的坑（iOS 版，每条都不报错）
+
+| 现象 | 根因 |
+|---|---|
+| 白屏 | ATS 默认只放行 https。`Info.plist` 要 `NSAllowsLocalNetworking = true` |
+| 将领突然"变木"，日志一行"调用 curl 失败" | iOS 上没有 curl，也不许 fork/exec。得装 URLSession 传输 |
+| 点「换战役 → 继续」没反应 | WKWebView 不实现 `WKUIDelegate`，`confirm()` **静默返回 false** |
+| 键盘盖住电报台 / 发报按钮 | iPhone 键盘弹出时窗口不变，只是盖上去。要监听 `keyboardWillChangeFrame` 抬 WebView 底边（`100dvh` 会跟着重排） |
+| 双指捏一下就"越捏越歪"、松手页面留在放大状态 | iOS 从 10 起忽略 `user-scalable=no`，页面级缩放和地图的 pinch 打架。用 `WKUserScript` 拦 `gesturestart/change/end` |
+| 每次启动都被上手引导拦一遍 | 端口是随机的话 origin 就变，`localStorage` 换了一份。所以端口要**先试固定值 18731**，被占才顺延 |
+| 内嵌模块打进 `.a` 后想改 | `IRONMIND_BUNDLE_MODULE` 指模块目录，重出包；或者网页里「导入 .imod」（WKWebView 的文件选择器能用） |
+| 「导入文件夹」在 iOS 上没反应 | 它靠 `<input webkitdirectory>`，iOS 不支持（安卓支持）。发布形态本来就该是单个 `.imod` |
+| pbxproj 里塞了几百行 shell | XcodeGen 的 `path:` 会把脚本**整段内联**进工程。改成 `script: bash "$SRCROOT/../tools/build-ios-rust.sh"` |
+| 装完 Xcode 还是编不了：`iOS 18.5 is not installed` | Xcode 16 起 iOS 平台包是**单独下载**（`xcodebuild -downloadPlatform iOS`，约 8 GB）。SDK 在 Xcode.app 里，平台包不在 |
+| `actool` 报 `No available simulator runtimes`（和图标毫无关系） | 同一个根因：平台包没装 |
+| 所有工具都回 "You have not agreed to the Xcode license" | 许可协议没同意：`sudo xcodebuild -license accept && sudo xcodebuild -runFirstLaunch` |
+| `ld: library 'ironmind_ios' not found` | crate 叫 `sim-ios`，产出的是 **`libsim_ios.a`**。工程里写成了 `-lironmind_ios`（名字对不上，报错也不会告诉你找过哪） |
+| 模拟器里几百行 `found architecture 'arm64', required architecture 'x86_64'` | Intel Mac 的模拟器是 x86_64；`generic/platform=iOS Simulator` 还要**两种切片**。脚本现在按 `ARCHS` 逐个编 + `lipo` |
+| 改完代码重新装，截图还是旧界面 | `simctl install` 只换 bundle，**不重启**已在跑的进程。先 `simctl terminate` |
+| 「钢」字徽记被灵动岛压住 | 页面按 `env(safe-area-inset-*)` 写的，但 WKWebView 里它返回 **0**。改成 WebView 贴 `safeAreaLayoutGuide` |
+| 横屏底栏比安卓高一截（长标签换两行） | 贴安全区之后横屏可用宽度只剩 ~756px，而底栏是**定宽**的（208 + 5×54），三个推进按钮挤到 60–75px 就换行。改成比例分配 + `nowrap` + 隐藏键盘符号（`docs/25` 4.10） |
+
+### 验到了什么程度
+
+做这一版时手上只有 **Command Line Tools，没有 Xcode / iOS SDK**，所以：
+
+**2026-11 装了 Xcode 16.4 之后全部验通了**（细节见 `docs/25` 第 8 节那张表）：
+Swift 类型检查零错误、5 个文件 + 26 MB 静态库链成 arm64 可执行体、
+`tools/build-ios.sh` 出 `dist/IronMind-ios-1.3.0.ipa`（895 KB）、`actool` 把图标编进
+`Assets.car`、**在 iPhone 16 Pro 模拟器里真跑起来并截了图**（首页、首次设置、沙盒写盘、
+内核 `127.0.0.1:18731` 从宿主机直通）。
+
+这一轮改出来的四个 bug 都不是"编译不过"，而是"能装能开但不对"：
+安全区（4.7）、模拟器 fat 库（4.8）、`simctl install` 不重启（4.9）、库名 `-lsim_ios`。
+
+**还没验**：点进地图之后的界面、键盘顶起、双指缩放、转屏、`confirm()` 弹窗、真机。
+
+### 还没做的
+
+- **签名与分发**：出的是未签名 `.ipa`（签名要用你自己的 Apple ID，不该进仓库）。
+  上 App Store 还有一道审核，这个项目本来也不打算走商店。
+- 局域网 `http://` 的模型地址连不上（只开了 `NSAllowsLocalNetworking`）。
+- 崩栈要连 Mac 看（沙盒里的 `logs/server.log` 能在「文件」App 里看到）。
+- iPad 上的外接键盘快捷键（`空格`/`回车`）没验过，理论上直接能用。
+
+---
 
 ---
 ## 13 1.0 与 1.1（2026-12）

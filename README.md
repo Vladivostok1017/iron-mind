@@ -34,6 +34,12 @@ cargo run -p sim-server                    # 默认捡到的就是南浔线
 
 ## 当前状态
 
+v1.3 · **上 iPhone**：同一个内核，第三种壳。iOS 这层是 **Swift + WKWebView**，
+不是 wry 的 iOS 后端——键盘顶页面、`confirm()` 弹窗、安全区、禁掉页面级双指缩放
+这四件事都得 UIKit 管（理由见 [`docs/25-iOS.md`](docs/25-iOS.md)）。Rust 那边只多了一个
+出站 HTTP 的口子：iOS 上没有 `curl`，模型请求改走 URLSession。
+战役模块和安卓一样**打进二进制**，装上就能玩，不需要电脑也不需要联网。
+
 v1.2 · **上手机**：同一个内核编成安卓 APK（arm64），战役模块**打在 .so 里**，
 装上就能玩——不需要电脑、不需要联网。手机上地图占满屏幕，电报台/公文堆/部队/战报
 收进底部抽屉；单指平移、双指缩放；存档与日志落在 app 私有目录。
@@ -68,6 +74,19 @@ pwsh -File tools\build-android.ps1 -Module F:\我的战役\my_mod.imod -Install
 需要 NDK（脚本里默认 `C:\Android\android-ndk-r27c`，可用 `-Ndk` 改）、
 JDK 17+、以及本机缓存过一份 Gradle 8.9+。产物在 `dist\IronMind-android-release.apk`。
 
+**iOS**（要 Mac + 完整 Xcode，不是 Command Line Tools）：
+
+```bash
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+tools/build-ios.sh                              # 未签名 .ipa → dist/
+tools/build-ios.sh --module ../nanxun-1938/nanxun_1938.imod
+tools/build-ios.sh --simulator                  # 模拟器里直接跑，不需要 Apple ID
+```
+
+产物是**未签名** `.ipa`（签名要你自己的 Apple ID，那种东西不该进仓库）。
+装到手机上走 Xcode 直接 Run，或者用 AltStore / Sideloadly 重签。细节与已知限制见
+[`docs/25-iOS.md`](docs/25-iOS.md)。
+
 ---
 
 ## 已拍板的关键决定
@@ -96,6 +115,7 @@ JDK 17+、以及本机缓存过一份 Gradle 8.9+。产物在 `dist\IronMind-and
 | `docs/08-情报与单位类型.md` | 三层信息模型、侦察精度、将领独立思考、跨时代兼容、空军/海军 |
 | `docs/09-规则引擎与扩展边界.md` | 模块自定义规则的机制、「万物皆模块」的四层边界 |
 | `docs/24-桌面版.md` | **怎么装成桌面程序**：外壳/内核分工、首页、引导、配置、已知限制 |
+| `docs/25-iOS.md` | **怎么上 iPhone**：为什么不用 wry、Swift 壳做哪四件事、iOS 特有的五个坑、出包与签名 |
 | **[content/README.md](content/README.md)** | **模块开发手册**：四个 JSON 的完整字段表、结局/规则/通信的写法、33 条校验码、发布清单 |
 | `docs/06-战役数据底稿.md` | 三源合并的兵力/时间线，以及"兵力数据缺失"的处理方案 |
 | `docs/03-史料核对-战斗序列.md` | 中方编制树（师级+师长）、派系、时间线矛盾、伤亡数据 |
@@ -247,6 +267,14 @@ crates/sim-content/src/
 ├─ model.rs      模块数据模型（引擎与内容的契约）
 ├─ validate.rs   静态校验：结构、引用、邻接、连通性
 └─ lib.rs        加载 → 校验 → 构建 World
+
+crates/sim-server/src/
+├─ lib.rs        HTTP 端点：状态 / 推进 / 电报 / 模块 / 存档
+├─ llm.rs        将领的大脑：提示词、解析、后台问询线程
+└─ http.rs       出站 HTTP：桌面/安卓走 curl，iOS 由外壳装 URLSession
+
+crates/sim-ios/          iOS 壳的 Rust 半边（staticlib + 4 个 C 函数）
+crates/sim-bundle/       外壳 build.rs 的公共部分：模块目录 → .imod
 
 crates/sim-content/tests/   模块加载与校验（10 个）
 crates/sim-core/tests/      黄金回放（4 个）
