@@ -456,8 +456,8 @@
     display: inline-flex; align-items: center; justify-content: center;
   }
   .fab .dot:empty, .fab .dot[data-n="0"] { display: none; }
-  /* 抽屉里的"操作"段：只在手机布局下出现（桌面那些按钮都在底部工具栏上） */
-  #ops-sec { display: none; }
+  /* 手机上"战役与方针"（换模块）放在抽屉底部；桌面底栏本来就有下拉 */
+  #mod-sec { display: none; }
 
   /* ───────────────── 手机布局 ─────────────────
      桌面是"左地图 + 右 316px 侧栏"。手机上不做缩微版：地图占满屏幕，
@@ -470,8 +470,13 @@
      断点 820px：7 寸以下竖屏都走这套，横屏平板仍用桌面布局。 */
   @media (max-width: 820px) {
     /* 视口高度用动态单位：手机浏览器/WebView 的地址栏、手势条会伸缩，
-       100vh 会把底部工具栏挤到屏幕外。 */
-    #app { height: 100dvh; }
+       100vh 会把底部工具栏挤到屏幕外。
+       行高也要改：桌面底栏固定 52px，手机是三行按钮，必须让它自己撑开
+       ——不然按钮会被压进 52px 里溢出来（表现是只看得见最后一行）。 */
+    #app {
+      height: 100dvh;
+      grid-template-rows: calc(46px + env(safe-area-inset-top, 0px)) 1fr auto;
+    }
     /* 全面屏的手势条：不留这条缝，底部按钮会被系统条盖住一半 */
     #bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
     #top { padding-top: env(safe-area-inset-top, 0px); height: calc(46px + env(safe-area-inset-top, 0px)); }
@@ -503,59 +508,107 @@
     }
     #app.sheet-open #sheet-backdrop { display: block; }
 
-    /* ── 底部工具栏：手机上**不滚动**，只留高频动作 ──
-       滑动的工具栏在手机上很难用：这个游戏每分钟都要按"推进"，
-       而它被挤到最右边，得先滑一下才能按到。
-       所以手机上底栏只放三段：视图切换 + 推进一日（主）+ 推进到有事。
-       其余（存档/读档/重开/晨报/菜单/换模块）搬进抽屉顶部的"操作"段，
-       它们一天也用不上一次，不值得占底栏。 */
+    /* ── 底部工具栏：手机上不滚动、不弹层，三行按钮全部常驻 ──
+       试过两种都不行：
+         · 横滑一条 → 推进被挤到最右边，得先滑一下才按得到；
+         · 点 ≡ 弹出操作面板 → 挡掉半屏，还多一步。
+       手机竖屏本来就有两千米高，底栏占 130px 完全值得：
+       一行视图、一行推进、一行管理，每次都是**一次点击**到达。 */
     #bottom {
-      padding: 0 10px; gap: 8px;
-      overflow: visible; white-space: nowrap;
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 6px;
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+      white-space: normal;          /* 按钮短，允许按需换行显示两字 */
+      align-items: stretch;
     }
-    #bottom #hint, #bottom #plan, #bottom #mod-sel,
-    #bottom #btn-save, #bottom #btn-load, #bottom #btn-reset,
-    #bottom #btn-3, #bottom #btn-morning, #bottom #btn-home,
-    #bottom .sep { display: none; }
+    /* 桌面上那些不适用于手机的零件 */
+    #bottom #hint, #bottom #plan, #bottom #mod-sel, #bottom .sep { display: none; }
 
-    /* 视图切换：四个短词压成分段控件，别用桌面那套按钮间距 */
-    #bottom #modes { gap: 0; flex: 0 0 auto; }
+    /* 行序：DOM 里 modes 在最前，但"推进"要紧挨着地图、管理动作放最下。
+       grid 认 order，所以这里直接重排，不去动 HTML 结构（桌面顺序不变）。 */
+    #bottom #modes { order: 0; }
+    #bottom #btn-1, #bottom #btn-next, #bottom #btn-3 { order: 1; }
+    #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
+    #bottom #btn-load, #bottom #btn-reset { order: 2; }
+
+    /* 行 1：视图切换（四段等宽，占满 10 栏） */
+    #bottom #modes {
+      grid-column: 1 / -1;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+    }
     #bottom #modes .mode {
-      padding: 7px 9px; font-size: 11.5px; min-height: 32px;
+      padding: 6px 4px; font-size: 11.5px; min-height: 30px;
       border-radius: 0; border-right-width: 0;
     }
     #bottom #modes .mode:first-child { border-radius: 5px 0 0 5px; }
     #bottom #modes .mode:last-child { border-radius: 0 5px 5px 0; border-right-width: 1px; }
 
-    /* 推进一日：占满剩下的宽度，是这一屏的主动作 */
+    /* 行 2：三个推进。推进 1 日最大（主动作），推进到有事次之 */
     #bottom #btn-1 {
-      flex: 1 1 auto; min-width: 0;
+      grid-column: span 4;
       background: #2c6cb0; border-color: #3b82c9; color: #fff;
-      font-size: 13px; font-weight: 600; min-height: 36px;
+      font-size: 13px; font-weight: 600; min-height: 40px;
     }
-    #bottom #btn-next {
-      flex: 0 0 auto; padding: 7px 10px; font-size: 11.5px; min-height: 36px;
+    #bottom #btn-next { grid-column: span 3; min-height: 40px; font-size: 11.5px; padding: 6px 4px; }
+    #bottom #btn-3 { grid-column: span 3; min-height: 40px; font-size: 11.5px; padding: 6px 4px; }
+
+    /* 行 3：管理动作，五个各占两栏（≈79px，放两个字够） */
+    #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
+    #bottom #btn-load, #bottom #btn-reset {
+      grid-column: span 2;
+      min-height: 34px; padding: 6px 2px; font-size: 11.5px;
     }
+    /* 「晨报/菜单…」这些是文字按钮，桌面那套 padding 在手机上会把字挤掉 */
+    #bottom .btn { letter-spacing: 0; }
 
     /* 触屏上 44px 是最小可用点击面积，桌面那套 6px padding 点不准 */
     .btn, .m-chip, .mode, .rp-btn { min-height: 34px; }
     #dp-text { font-size: 16px; }  /* 16px 以下 iOS/Android 会自动放大页面 */
     #dp-to { font-size: 16px; }
 
-    /* 抽屉里的"操作"段：桌面没有这一段（那边的按钮都在底栏上） */
-    #ops-sec { display: block; }
-    #ops-sec .ops-grid {
-      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px;
+    /* 抽屉底部的"战役与方针"：换模块是低频操作（一局一次），放这里合适 */
+    #mod-sec { display: block; border-bottom: none; }
+    #mod-sec #ops-mod-sel {
+      width: 100%; margin-top: 8px; font-size: 14px; padding: 9px;
+      background: #141b23; color: #c3ccd6; border: 1px solid #2d3947; border-radius: 5px;
     }
-    #ops-sec .ops-grid .btn { width: 100%; padding: 10px 6px; font-size: 12px; }
-    #ops-sec #ops-plan {
-      font-size: 11.5px; color: #9aa6b3; line-height: 1.6; margin-top: 8px;
+    #mod-sec #ops-plan {
+      font-size: 11.5px; color: #9aa6b3; line-height: 1.6; margin-top: 10px;
       border-left: 2px solid #2c6b4f; padding-left: 8px;
     }
-    #ops-sec #ops-mod-sel { width: 100%; margin-top: 8px; font-size: 13px; padding: 8px; }
 
-    /* 战报信箱：手机上改成"列表在上、正文在下"，全屏 */
-    #mail { inset: 0; border-radius: 0; border: none; }
+    /* ── 战报信箱：全屏，关闭按钮固定右上 ──
+       原来的写法把"关闭"放在 flex 行末，窄屏时被筛选 chip 挤出视口，
+       表现就是"× 根本点不到"。现在它脱离文档流钉在右上角。 */
+    #mail {
+      inset: 0; border: none; border-radius: 0;
+      padding-top: env(safe-area-inset-top, 0px);
+      /* 盖住抽屉(72)与面板按钮(70)：信箱是看东西的地方，
+         下面不该露出别的可点元素。首页(110)仍在其上。 */
+      z-index: 95;
+    }
+    #mail .m-head {
+      position: relative; flex-wrap: wrap; gap: 8px;
+      padding: 10px 58px 10px 14px;   /* 右边留出 × 的位置 */
+    }
+    /* 筛选 chip 单独一行，可以横滑（筛选项可以滑，关闭不能） */
+    #mail #mail-chips {
+      order: 3; width: 100%; margin-left: 0;
+      overflow-x: auto; white-space: nowrap; padding-bottom: 2px;
+    }
+    #mail #mail-chips::-webkit-scrollbar { display: none; }
+    /* × 钉在右上角：40×40 触控区，永远在视口内 */
+    #mail #mail-close {
+      position: absolute; right: 8px; top: 6px;
+      width: 40px; height: 40px; padding: 0; min-height: 40px;
+      display: grid; place-items: center;
+      font-size: 0;                    /* 原来的"关闭"两个字换成图形 × */
+      background: #1d2631; border: 1px solid #33404f; border-radius: 50%;
+    }
+    #mail #mail-close::after {
+      content: "×"; font-size: 20px; line-height: 1; color: #c3ccd6;
+    }
     #mail .m-body { flex-direction: column; }
     #mail .m-list { width: auto; max-height: 38%; border-right: none; border-bottom: 1px solid #1e2833; }
 
@@ -570,7 +623,12 @@
     #replay-bar { bottom: 8px; }
     /* 手机上没有滚轮，缩放靠双指；鼠标那套光标提示没意义 */
     #stage { cursor: default; }
-    .fab { display: flex; }
+    /* 面板按钮（电报/公文/部队/战报）浮在底栏上方：
+       底栏三行约 129px，放在 78px 会压住最下面一行的按钮。 */
+    .fab {
+      display: flex;
+      bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+    }
 
     /* ---- 首页 ---- */
     /* 桌面是"左菜单 + 右战役卡"两栏，手机上必须单列。
@@ -596,7 +654,81 @@
     }
   }
 
+  /* ───────────────── 横屏（手机上横握） ─────────────────
+     横屏不是"竖屏拉宽"，它有自己的优势：宽度够把**地图和电报台并排放**，
+     不用来回开抽屉——这正好是这个游戏的核心循环（看地图 → 发电报）。
+     但高度只剩三百多像素，桌面那套 46px 顶栏 + 52px 底栏会把地图压成一片。
 
+     所以横屏这一档：顶栏压到 34px、底栏单行 44px、侧栏常驻 300px、
+     抽屉和浮动面板按钮全部停用（侧栏一直在，不需要它们）。
+
+     单独写一套而不是复用竖屏：两者要的东西正好相反（竖屏要高度、横屏要宽度）。 */
+  @media (orientation: landscape) and (max-height: 560px) {
+    #app {
+      height: 100dvh;
+      grid-template-rows: 34px 1fr auto;
+    }
+    /* 顶栏：只留战役名和日期。横屏下每个像素都要让给地图 */
+    #top { height: 34px; padding: 0 8px; gap: 8px; }
+    #top .crest { width: 22px; height: 22px; font-size: 12px; }
+    #top .nation { font-size: 12px; }
+    #top .sub { display: none; }
+    #top .stat { display: none; }
+    #top .pend { padding: 2px 6px; font-size: 10px; }
+    #top .clock { font-size: 11px; }
+
+    /* 地图 + 常驻侧栏 */
+    #main { grid-template-columns: 1fr 300px; }
+    aside {
+      position: static; transform: none;
+      top: auto; left: auto; right: auto; bottom: auto;
+      border-radius: 0; box-shadow: none;
+      border-left: 1px solid var(--line); border-top: none;
+      z-index: auto;
+    }
+    #sheet-backdrop, #app.sheet-open #sheet-backdrop { display: none; }
+    .fab { display: none !important; }
+
+    /* 底栏：单行，按内容分配宽度。
+       四个视图词短（2 字）、推进按钮字长（5 字），平均分会让长的那几个换行。
+       所以：视图固定 208px、管理按钮固定 56px、剩下的全给三个推进按钮。 */
+    #bottom {
+      display: flex; flex-wrap: nowrap;
+      gap: 5px; padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+    }
+    #bottom #hint, #bottom #plan, #bottom #mod-sel, #bottom .sep { display: none; }
+    #bottom #modes {
+      flex: 0 0 208px; display: flex; gap: 0; min-width: 0;
+    }
+    #bottom #modes .mode {
+      flex: 1 1 0; padding: 5px 2px; font-size: 11px; min-height: 34px;
+      border-radius: 0; border-right-width: 0;
+    }
+    #bottom #modes .mode:first-child { border-radius: 5px 0 0 5px; }
+    #bottom #modes .mode:last-child { border-radius: 0 5px 5px 0; border-right-width: 1px; }
+    /* 管理动作：定宽，字少 */
+    #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
+    #bottom #btn-load, #bottom #btn-reset {
+      flex: 0 0 54px; min-height: 34px; padding: 4px 2px; font-size: 10.5px;
+    }
+    /* 三个推进：吃掉剩余宽度，谁字长谁多分一点 */
+    #bottom #btn-3 { flex: 1 1 0; min-height: 34px; padding: 4px 2px; font-size: 11px; }
+    #bottom #btn-next { flex: 1.25 1 0; min-height: 34px; padding: 4px 2px; font-size: 11px; }
+    #bottom #btn-1 {
+      flex: 1 1 0; min-width: 76px;
+      background: #2c6cb0; border-color: #3b82c9; color: #fff;
+      font-weight: 600; font-size: 11.5px; min-height: 34px;
+    }
+
+    /* 侧栏在横屏下高度只有两百多像素：把每段的标题压薄，内容才看得见 */
+    aside .sec { padding: 6px 10px; }
+    aside .sec h3 { font-size: 11px; margin-bottom: 5px; }
+    #dp-text { height: 54px; font-size: 14px; }
+    #mail { inset: 0; border-radius: 0; border: none; z-index: 95; }
+    #mail .m-head { position: sticky; top: 0; }
+    #mail .m-body { flex-direction: row; }
+    #mail .m-list { width: 280px; max-height: none; }
+  }
 </style>
 </head>
 <body>
@@ -693,25 +825,12 @@
         <div id="log-latest" style="font-size:12px;color:#a8b3c0;line-height:1.6;margin-bottom:8px"></div>
         <button class="btn" id="open-mail" style="width:100%">打开战报信箱</button>
       </div>
-      <!-- 操作（手机专用）：桌面底栏上那排按钮在手机上放不下，也不值得占
-           底栏——存档/读档/重开/晨报一天用不上一次。这里用"镜像按钮"转发
-           到原来的按钮上（原按钮仍在 DOM 里，只是被 CSS 隐藏），
-           所以逻辑只有一份，不会出现两套行为。 -->
-      <div class="sec" id="ops-sec">
-        <h3>操作</h3>
-        <div class="ops-grid">
-          <button class="btn" data-op="btn-1">推进 1 日</button>
-          <button class="btn" data-op="btn-3">推进 3 日</button>
-          <button class="btn" data-op="btn-next">推进到有事</button>
-          <button class="btn" data-op="btn-save">存档</button>
-          <button class="btn" data-op="btn-load">读档</button>
-          <button class="btn" data-op="btn-reset">重开</button>
-          <button class="btn" data-op="btn-morning">晨报</button>
-          <button class="btn" data-op="btn-home">菜单</button>
-          <button class="btn" data-op="open-mail">战报信箱</button>
-        </div>
+      <!-- 战役与方针（手机专用）：底栏放不下模块下拉；换模块一局才用一次，
+           放抽屉底部正合适。桌面底栏本来就有它，这一段不显示。 -->
+      <div class="sec" id="mod-sec">
+        <h3>战役</h3>
         <select id="ops-mod-sel" title="切换模块（会重开一局）"></select>
-        <!-- 本方统帅部的方针：桌面显示在底栏，手机上搬到这里 -->
+        <!-- 本方统帅部的方针：桌面显示在底栏，手机上放这里 -->
         <div id="ops-plan"></div>
       </div>
     </aside>
@@ -732,6 +851,7 @@
   </div>
 
   <div id="bottom">
+
     <div class="modes" id="modes">
       <button class="mode on" data-view="owner">归属</button>
       <button class="mode" data-view="intel">情报</button>
@@ -1815,19 +1935,6 @@ bind("ops-mod-sel", "change", () => {
   sel.dispatchEvent(new Event("change", { bubbles: true }));
 });
 
-// 抽屉里的"操作"按钮：全是转发，点的是底栏上那些真按钮。
-document.querySelectorAll("#ops-sec [data-op]").forEach((b) => {
-  b.addEventListener("click", () => {
-    const target = document.getElementById(b.dataset.op);
-    // 推进/存档这类动作做完该看地图了：顺手把抽屉收起来
-    const keepOpen = b.dataset.op === "btn-save" || b.dataset.op === "btn-load"
-      || b.dataset.op === "btn-home" || b.dataset.op === "open-mail"
-      || b.dataset.op === "btn-morning";
-    if (window.__sheetSetOpen && !keepOpen) window.__sheetSetOpen(false);
-    if (target) target.click();
-  });
-});
-
 bind("mod-sel", "change", async () => {
   const path = $("mod-sel").value;
   if (!path) return;
@@ -2006,6 +2113,9 @@ function mailItems() {
 function openMail() {
   const m = $("mail");
   if (!m) return;
+  // 默认筛选是"重要"，可开局那几天常常一条都不沾——打开信箱看到一片空白，
+  // 会以为战报丢了。当前筛选一条都没有就退回"全部"，至少让人看见有什么。
+  if (mailItems().length === 0 && mailFilter !== "all") mailFilter = "all";
   m.classList.add("show");
   renderMail();
 }
