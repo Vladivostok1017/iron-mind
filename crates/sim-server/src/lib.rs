@@ -758,7 +758,13 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 };
                 // 先写到临时文件、用真正的加载器验一遍，再落到模块根。
                 // 不能直接落盘：一个坏包/伪装成 .imod 的随便什么文件不该进模块目录。
-                let tmp = std::env::temp_dir().join(format!(
+                //
+                // 临时文件放**数据目录**下，不能用 `std::env::temp_dir()`：
+                // Android 上那是 `/data/local/tmp`，app 没有写权限，
+                // 表现就是导入直接 500"写临时文件失败：Permission denied"。
+                let tmp_dir = data_path("tmp");
+                let _ = std::fs::create_dir_all(&tmp_dir);
+                let tmp = tmp_dir.join(format!(
                     "imod-{}-{}.imod",
                     std::process::id(),
                     std::time::SystemTime::now()

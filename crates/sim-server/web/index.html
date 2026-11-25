@@ -3604,23 +3604,72 @@ const Home = (() => {
   // 模块在另一个仓库里迭代，玩家装过 0.2 之后还会拿到 0.3——所以同名不是错误，
   // 是常态。服务端按版本判断：更新的自动装，其余情况（同版本重装 / 降级 /
   // 只是目录名撞了）返回 409 + 冲突类型，这里问一句再决定。
+  //
+  // 为什么失败用**自绘对话框**而不是 toast/alert：手机上 toast 一闪就没了、
+  // 还常被弹窗压住（"选了文件没反应"就是这么来的）。对话框会停在那儿，
+  // 把服务端那句原话和版本号一起摆出来。
   async function postImport(payload, force) {
-    const body = Object.assign({}, payload, force ? { force: true } : {});
-    const r = await fetch("/api/modules/import", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json();
+    let r, j;
+    try {
+      r = await fetch("/api/modules/import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({}, payload, force ? { force: true } : {})),
+      });
+      j = await r.json();
+    } catch (e) {
+      showImportError("导入失败：连不上内核（" + e + "）");
+      return null;
+    }
     if (j.ok) return j;
-    if (!j.conflict) { toast(j.error || "导入失败"); return null; }
+    if (!j.conflict) { showImportError(j.error || "导入失败"); return null; }
     // 冲突：把服务端那句话原样摆出来，让玩家自己决定。
-    const yes = confirm(
-      (j.error || "本地已有同名模块。") +
-      "\n\n仍然要装这个包吗？" +
-      (j.incoming_version ? "\n（包里的版本：" + j.incoming_version + "）" : "")
+    const ok = await askImport(
+      "本地已有同名模块",
+      j.error || "本地已有同名模块。",
+      j.incoming_version ? "包里的版本：" + j.incoming_version : ""
     );
-    if (!yes) { toast("已取消，本地模块没动"); return null; }
+    if (!ok) { toast("已取消，本地模块没动"); return null; }
     return postImport(payload, true);
+  }
+
+  function showImportError(msg) {
+    Dlg.open({
+      title: "导入失败",
+      body: "<p style='line-height:1.8'>" + escapeHtml(msg) + "</p>",
+      actions: [{ label: "知道了", primary: true }],
+    });
+  }
+
+  // 两选一对话框（自绘）。返回 Promise<boolean>。
+  // 点背景/×关掉算取消：Dlg 没有关闭回调，所以用一个短轮询兜底。
+  function askImport(title, text, extra) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      Dlg.open({
+        title,
+        body: "<p style='line-height:1.8'>" + escapeHtml(text) + "</p>" +
+              (extra ? "<p style='color:#8b95a1;font-size:12px'>" + escapeHtml(extra) + "</p>" : "") +
+              "<p style='margin-top:10px'>仍然要装这个包吗？</p>",
+        actions: [
+          { label: "取消", onClick: () => { finish(false); } },
+          { label: "仍然安装", primary: true, onClick: () => { finish(true); } },
+        ],
+      });
+      // 玩家点了右上角 × 或背景：算取消
+      const tick = () => {
+        if (done) return;
+        if (!$("dlg").classList.contains("on")) return finish(false);
+        setTimeout(tick, 200);
+      };
+      setTimeout(tick, 250);
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
   }
 
   function finishImport(j) {
