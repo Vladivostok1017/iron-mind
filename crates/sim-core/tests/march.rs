@@ -14,23 +14,23 @@ use sim_core::world::{Order, Province, Side, Terrain, Unit, World};
 
 /// A—B—C 一条直线，全在国军手里。
 fn corridor() -> World {
-    let mut a = Province::new("A村", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("A村", Terrain::Plain, Side::A);
     a.neighbors = vec![1];
-    let mut b = Province::new("B镇", Terrain::Plain, Side::Cn);
+    let mut b = Province::new("B镇", Terrain::Plain, Side::A);
     b.neighbors = vec![0, 2];
-    let mut c = Province::new("C城", Terrain::Plain, Side::Cn);
+    let mut c = Province::new("C城", Terrain::Plain, Side::A);
     c.neighbors = vec![1];
-    let units = vec![Unit::new("某师", Side::Cn, 0, 10)];
+    let units = vec![Unit::new("某师", Side::A, 0, 10)];
     World::new(1, vec![a, b, c], units)
 }
 
 #[test]
 fn route_is_measured_in_days_and_first_hop() {
     let w = corridor();
-    assert_eq!(hops_to(&w, 0, 2, Side::Cn, sim_core::UnitKind::Infantry), Some(2));
-    assert_eq!(next_hop(&w, 0, 2, Side::Cn, sim_core::UnitKind::Infantry), Some(1));
+    assert_eq!(hops_to(&w, 0, 2, Side::A, sim_core::UnitKind::Infantry), Some(2));
+    assert_eq!(next_hop(&w, 0, 2, Side::A, sim_core::UnitKind::Infantry), Some(1));
     // 可达集合里，C 城应当是第 2 日
-    let reach = reachable(&w, 0, Side::Cn, sim_core::UnitKind::Infantry);
+    let reach = reachable(&w, 0, Side::A, sim_core::UnitKind::Infantry);
     assert!(reach.contains(&(2, 2)), "可达集合应当包含 C城/2 日：{reach:?}");
 }
 
@@ -55,23 +55,23 @@ fn march_takes_one_province_per_day() {
 #[test]
 fn water_blocks_ground_route_and_is_refused_cleanly() {
     // A — 河（水）— C：陆军走不过去
-    let mut a = Province::new("A村", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("A村", Terrain::Plain, Side::A);
     a.neighbors = vec![1];
-    let mut river = Province::new("大河", Terrain::Water, Side::Cn);
+    let mut river = Province::new("大河", Terrain::Water, Side::A);
     river.neighbors = vec![0, 2];
-    let mut c = Province::new("C城", Terrain::Plain, Side::Cn);
+    let mut c = Province::new("C城", Terrain::Plain, Side::A);
     c.neighbors = vec![1];
-    let units = vec![Unit::new("某师", Side::Cn, 0, 10)];
+    let units = vec![Unit::new("某师", Side::A, 0, 10)];
     let w = World::new(1, vec![a, river, c], units);
 
     assert_eq!(
-        hops_to(&w, 0, 2, Side::Cn, sim_core::UnitKind::Infantry),
+        hops_to(&w, 0, 2, Side::A, sim_core::UnitKind::Infantry),
         None,
         "陆军不该有跨水的陆路"
     );
     // 海军走同一张图则通
     assert_eq!(
-        hops_to(&w, 0, 2, Side::Cn, sim_core::UnitKind::Naval),
+        hops_to(&w, 0, 2, Side::A, sim_core::UnitKind::Naval),
         None,
         "起点是陆地，海军自己也进不去"
     );
@@ -80,17 +80,17 @@ fn water_blocks_ground_route_and_is_refused_cleanly() {
 #[test]
 fn far_attack_walks_then_fights() {
     // A（国军）—B（空）—C（日军据守）
-    let mut a = Province::new("A村", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("A村", Terrain::Plain, Side::A);
     a.neighbors = vec![1];
     a.is_supply_source = true; // 没有补给源，战斗力会是 0，这个测试就测不成战斗
-    let mut b = Province::new("B镇", Terrain::Mountain, Side::Cn);
+    let mut b = Province::new("B镇", Terrain::Mountain, Side::A);
     b.neighbors = vec![0, 2];
-    let mut c = Province::new("C城", Terrain::Plain, Side::Jp);
+    let mut c = Province::new("C城", Terrain::Plain, Side::B);
     c.neighbors = vec![1];
     c.is_supply_source = true;
     let units = vec![
-        Unit::new("某师", Side::Cn, 0, 10),
-        Unit::new("敌一部", Side::Jp, 2, 2),
+        Unit::new("某师", Side::A, 0, 10),
+        Unit::new("敌一部", Side::B, 2, 2),
     ];
     let mut w = World::new(1, vec![a, b, c], units);
     w.units[0].manual = true;

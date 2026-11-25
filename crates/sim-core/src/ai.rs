@@ -314,7 +314,7 @@ pub fn theater_plan(world: &World, side: Side) -> TheaterPlan {
 pub fn run_ai(world: &mut World) {
     let seed = world.seed;
     let tick = world.tick;
-    for side in [Side::Cn, Side::Jp] {
+    for side in [Side::A, Side::B] {
         decide_side(world, side, seed, tick);
     }
 }
@@ -358,7 +358,7 @@ fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {
         // 只有"守得住"才值得停下来等占领：邻接省里还有敌军时，
         // 占领判定本来就不会生效（见 run_movement 里的 enemy_adjacent），
         // 停下来就是干等——那种情况应该去打旁边那支敌军。
-        let other = if side == Side::Cn { Side::Jp } else { Side::Cn };
+        let other = if side == Side::A { Side::B } else { Side::A };
         let capture_blocked = here.neighbors.iter().any(|&n| {
             world.units_in(n).iter().any(|&j| {
                 let x = &world.units[j as usize];
@@ -601,17 +601,17 @@ mod tests {
     fn line() -> World {
         // A(源) - B - C(源)
         let provinces = vec![
-            Province::new("A", Terrain::Plain, Side::Cn)
+            Province::new("A", Terrain::Plain, Side::A)
                 .with_neighbors(&[1])
                 .as_source(),
-            Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0, 2]),
-            Province::new("C", Terrain::Plain, Side::Jp)
+            Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0, 2]),
+            Province::new("C", Terrain::Plain, Side::B)
                 .with_neighbors(&[1])
                 .as_source(),
         ];
         let units = vec![
-            Unit::new("cn", Side::Cn, 0, 10),
-            Unit::new("jp", Side::Jp, 2, 10),
+            Unit::new("cn", Side::A, 0, 10),
+            Unit::new("jp", Side::B, 2, 10),
         ];
         World::new(1, provinces, units)
     }

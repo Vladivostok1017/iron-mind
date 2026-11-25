@@ -277,14 +277,14 @@ mod tests {
 
     fn world_with(kind: UnitKind, terrain: Terrain) -> World {
         let provinces = vec![
-            Province::new("A", terrain, Side::Cn)
+            Province::new("A", terrain, Side::A)
                 .with_neighbors(&[1])
                 .as_source(),
-            Province::new("B", Terrain::Plain, Side::Jp)
+            Province::new("B", Terrain::Plain, Side::B)
                 .with_neighbors(&[0])
                 .as_source(),
         ];
-        let mut u = Unit::new("cn", Side::Cn, 0, 10);
+        let mut u = Unit::new("cn", Side::A, 0, 10);
         u.kind = kind;
         World::new(1, provinces, vec![u])
     }

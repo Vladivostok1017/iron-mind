@@ -90,9 +90,23 @@ fn main() {
         drop(c);
     }
 
+    // 玩家扮演哪一方：settings/side 优先（IRONMIND_SIDE），否则用模块的 playable_side。
+    // 模块允许几方由 `playable_sides` 决定；`/api/side` 可在允许范围内切换。
+    //
+    // `IRONMIND_SIDE` 收的是**模块声明的 id**（这一仗自己起的名字），
+    // 引擎不预设任何具体 id。
+    let allowed = module.allowed_sides();
+    let ids = sim_content::side_ids(&module.meta);
+    let want_side = std::env::var("IRONMIND_SIDE")
+        .ok()
+        .and_then(|v| ids.iter().position(|x| x == v.trim()).map(Side::from_index));
+    let player_side = want_side
+        .filter(|s| allowed.contains(s))
+        .unwrap_or(allowed[0]);
     let state = Arc::new(ServerState {
         module: std::sync::Mutex::new(module),
         module_path: std::sync::Mutex::new(module_path.clone()),
+        player: std::sync::Mutex::new(player_side),
         world: std::sync::Mutex::new(None),
         commands: std::sync::Mutex::new(Vec::new()),
         llm: Arc::clone(&llm_cfg),
@@ -160,6 +174,11 @@ struct ServerState {
     module: std::sync::Mutex<LoadedModule>,
     /// 模块目录（切换时用）。
     module_path: std::sync::Mutex<String>,
+    /// **玩家扮演哪一方**。1.1 起可选阵营：模块允许哪几方，玩家开局挑一个。
+    ///
+    /// 它只影响"看得到什么、能指挥谁"（snapshot 的过滤、电报收件人、请示归属、
+    /// 敌方统帅部代谁打），**不影响模拟本身**——AI 每 tick 照样替双方下决心。
+    player: std::sync::Mutex<Side>,
     world: std::sync::Mutex<Option<World>>,
     /// 玩家命令流。`(模块, 种子, 命令流)` 就是一份完整存档。
     commands: std::sync::Mutex<Vec<CmdRecord>>,
@@ -262,9 +281,10 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             respond(&mut stream, 200, "application/json", BASEMAP)
         }
         ("GET", "/api/state") => {
+            let sides = Sides::of(&state);
             let json = {
                 let w = state.world.lock().unwrap();
-                snapshot(w.as_ref().unwrap())
+                snapshot(w.as_ref().unwrap(), player(&state), &sides)
             };
             respond(&mut stream, 200, "application/json", &json)
         }
@@ -276,6 +296,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 .ok()
                 .and_then(|v| v.get("days").and_then(|d| d.as_u64()))
                 .unwrap_or(1) as u32;
+            let sides = Sides::of(&state);
             let json = {
                 let mut guard = state.world.lock().unwrap();
                 let w = guard.as_mut().unwrap();
@@ -366,16 +387,17 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         String::new()
                     }
                 ));
-                snapshot(w)
+                snapshot(w, player(&state), &sides)
             };
             respond(&mut stream, 200, "application/json", &json)
         }
         ("POST", "/api/order") => {
             // 玩家不再能直接调兵。指挥只有一个入口：发电报（/api/dispatch）。
             // 直接改 order 等于绕过指挥链——那是棋子游戏，不是这个。
+            let sides = Sides::of(&state);
             let json = {
                 let guard = state.world.lock().unwrap();
-                let snap = snapshot(guard.as_ref().unwrap());
+                let snap = snapshot(guard.as_ref().unwrap(), player(&state), &sides);
                 format!(
                     "{{\"error\":\"不能直接调兵。请向将领发电报，由他决定怎么执行\",\"state\":{snap}}}"
                 )
@@ -383,6 +405,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             respond(&mut stream, 200, "application/json", &json)
         }
         ("POST", "/api/order_disabled") => {
+            let sides = Sides::of(&state);
             let json = {
                 let mut guard = state.world.lock().unwrap();
                 let w = guard.as_mut().unwrap();
@@ -417,7 +440,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     Some(err) => trace(format!("   指令被拒：{err}")),
                     None => trace("   指令已写入".to_string()),
                 }
-                let mut v = snapshot(w);
+                let mut v = snapshot(w, player(&state), &sides);
                 if let Some(err) = result {
                     v = format!("{{\"error\":\"{err}\",\"state\":{v}}}");
                 }
@@ -440,6 +463,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 let msg = json!({ "error": format!("不认识的人事动作：{action}") });
                 return respond(&mut stream, 400, "application/json", &msg.to_string());
             }
+            let sides = Sides::of(&state);
             let mut g = state.world.lock().unwrap();
             let Some(w) = g.as_mut() else {
                 let msg = json!({ "error": "还没有开始战役" });
@@ -462,7 +486,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         "ok": true,
                         "old": old,
                         "new": new_chief,
-                        "state": serde_json::from_str::<serde_json::Value>(&snapshot(w)).unwrap(),
+                        "state": serde_json::from_str::<serde_json::Value>(&snapshot(w, player(&state), &sides)).unwrap(),
                     })
                     .to_string();
                     respond(&mut stream, 200, "application/json", &body)
@@ -490,6 +514,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let day = day.min(live_day);
             let cmds = state.commands.lock().unwrap().clone();
             let module = state.module.lock().unwrap().clone();
+            let sides = Sides::from_meta(&module.meta);
             let w = rebuild(&module, &cmds, day);
             // 回放里的"今天发生了什么"：只给这一天的战报，否则右栏会被整局刷屏。
             let events: Vec<serde_json::Value> = w
@@ -501,13 +526,13 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 .map(|e| {
                     json!({
                         "kind": e.kind.code(),
-                        "text": e.text,
-                        "side": e.side.map(|s| if s == Side::Cn { "cn" } else { "jp" }),
+                        "text": sides.localize(&e.text),
+                        "side": e.side.map(|s| sides.id(s)),
                     })
                 })
                 .collect();
             let body = json!({
-                "state": serde_json::from_str::<serde_json::Value>(&snapshot(&w)).unwrap(),
+                "state": serde_json::from_str::<serde_json::Value>(&snapshot(&w, player(&state), &sides)).unwrap(),
                 "day": day,
                 "live_day": live_day,
                 "hash": format!("{:016x}", w.state_hash()),
@@ -530,35 +555,109 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
         // 模块列表：`content/scenarios/*.imod`，读每个的 module.json 取名字。
         //
         // 这个游戏只提供框架，模块由玩家自己开发——那就不该让他们改命令行重启。
+        // 玩家扮演哪一方（多阵营支持）。
+        //
+        // GET  ：当前是哪一方、这个模块允许哪几方（首页用它显示"选哪一边"）。
+        // POST ：切换阵营。**会重开这一局**——两边的命令流不能混着重放。
+        //
+        // 引擎不知道"国军/日军"这种名字。阵营 id 和名字全部来自模块 `sides`，
+        // 引擎这边只有 A/B 两个位置，按模块声明顺序对上。
+        ("GET", "/api/player") => {
+            use serde_json::json;
+            let allowed = state.module.lock().unwrap().allowed_sides();
+            let cur = player(&state);
+            let sides: Vec<serde_json::Value> = allowed
+                .iter()
+                .map(|s| {
+                    json!({
+                        "id": side_id_of(&state, *s),
+                        "name": side_name(&state, *s),
+                    })
+                })
+                .collect();
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({
+                    "player": side_id_of(&state, cur),
+                    "player_name": side_name(&state, cur),
+                    "sides": sides,
+                    "switchable": allowed.len() > 1,
+                })
+                .to_string(),
+            )
+        }
+        ("POST", "/api/side") => {
+            use serde_json::json;
+            let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
+            let want_id = v.get("side").and_then(|x| x.as_str()).unwrap_or("");
+            let Some(want) = side_by_id(&state, want_id) else {
+                let sides = Sides::of(&state);
+                let msg = json!({
+                    "error": format!("side 只能是 {} 或 {}", sides.ids[0], sides.ids[1])
+                });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            };
+            let allowed = state.module.lock().unwrap().allowed_sides();
+            if !allowed.contains(&want) {
+                let msg = json!({
+                    "error": format!(
+                        "这个战役只让你指挥{}",
+                        allowed
+                            .iter()
+                            .map(|s| side_name(&state, *s))
+                            .collect::<Vec<_>>()
+                            .join("或")
+                    )
+                });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            *state.player.lock().unwrap() = want;
+            // 换阵营 = 换一个指挥链：旧命令是"对面那个人"下的，不能带过来。
+            {
+                let module = state.module.lock().unwrap().clone();
+                let mut nw = build_world(&module);
+                sim_core::intel::run_intel(&mut nw);
+                *state.world.lock().unwrap() = Some(nw);
+                state.commands.lock().unwrap().clear();
+                state.reports.lock().unwrap().clear();
+                state.telegrams.lock().unwrap().clear();
+                state
+                    .generation
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            trace(format!("   玩家阵营 → {}", side_name(&state, player(&state))));
+            let sides = Sides::of(&state);
+            let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap(), want, &sides);
+            respond(&mut stream, 200, "application/json", &snap)
+        }
         ("GET", "/api/modules") => {
             use serde_json::json;
             // 路径比较要抹平分隔符：命令行给的是 `/`，read_dir 在 Windows 上给的是 `\`
-            let cur = state.module_path.lock().unwrap().replace('\\', "/");
+            let cur_path = state.module_path.lock().unwrap().clone();
+            let cur = cur_path.replace('\\', "/");
+            let cur_canon = std::fs::canonicalize(&cur_path).ok();
             let mut list = Vec::new();
+            let mut any_current = false;
             // 引擎自带的示例 + 外部模块仓库（IRONMIND_MODULES）
             for p in discover_modules() {
-                // 目录与 .imod 压缩包都要能读标题——统一走 peek_meta_json。
-                let meta = sim_content::peek_meta_json(&p);
                 let path = p.to_string_lossy().replace('\\', "/");
-                // 首页要拿这些字段把"战役卡"填起来：名字、规模、这仗在讲什么、
-                // 你替哪一边打。模块写什么就显示什么，引擎不替它编。
-                let g = |k: &str| {
-                    meta.as_ref()
-                        .and_then(|m| m.get(k))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                };
-                list.push(json!({
-                    "path": path,
-                    "name": meta.as_ref().and_then(|m| m.get("name")).and_then(|v| v.as_str()).unwrap_or("?"),
-                    "scale": meta.as_ref().and_then(|m| m.get("scale")).and_then(|v| v.as_str()).unwrap_or(""),
-                    "current": path == cur,
-                    "description": g("description"),
-                    "playable_side": g("playable_side"),
-                    "version": g("version"),
-                    "domains": meta.as_ref().and_then(|m| m.get("domains")).cloned().unwrap_or(json!([])),
-                }));
+                // 同一个模块可能从不同写法指过来（相对/绝对、`\`/`/`）：
+                // 能 canonicalize 就按真身比，否则退回字符串比。
+                let is_current = path == cur
+                    || (cur_canon.is_some() && std::fs::canonicalize(&p).ok() == cur_canon);
+                any_current |= is_current;
+                list.push(module_card(&p, path, is_current));
+            }
+            // 显式 `--module` 指的模块可能不在任何模块根下（SDK 的开发循环就是这样）。
+            // 列表里没有它，首页和顶栏就会显示**别的战役**——
+            // "我在打南浔线，顶上写着田家镇"。所以这里把它补进去。
+            if !any_current {
+                let p = std::path::PathBuf::from(&cur_path);
+                if p.exists() {
+                    list.insert(0, module_card(&p, cur, true));
+                }
             }
             let roots: Vec<String> = module_roots()
                 .iter()
@@ -666,7 +765,6 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 return respond(&mut stream, 400, "application/json", &msg.to_string());
             };
             // 目录名：优先用 module.json 里的 id 尾段，否则用请求里的 name
-            let mut dir_name: Option<String> = None;
             let mut module_json: Option<serde_json::Value> = None;
             for f in files {
                 let path = f.get("path").and_then(|p| p.as_str()).unwrap_or("");
@@ -676,28 +774,24 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     }
                 }
             }
-            match &module_json {
-                None => {
-                    let msg = json!({ "ok": false, "error": "这不是一个模块：顶层缺少可读的 module.json" });
-                    return respond(&mut stream, 400, "application/json", &msg.to_string());
-                }
-                Some(m) => {
-                    let id = m.get("id").and_then(|x| x.as_str()).unwrap_or("");
-                    let name = m.get("name").and_then(|x| x.as_str()).unwrap_or("imported");
-                    let raw = if id.contains('.') {
-                        id.rsplit('.').next().unwrap_or(id)
-                    } else if id.is_empty() {
-                        name
-                    } else {
-                        id
-                    };
-                    dir_name = Some(sanitize_slot(raw));
-                }
-            }
-            let Some(dir) = dir_name.filter(|d| !d.is_empty()) else {
-                let msg = json!({ "ok": false, "error": "module.json 里的 id/name 不可用作目录名" });
+            let Some(m) = &module_json else {
+                let msg = json!({ "ok": false, "error": "这不是一个模块：顶层缺少可读的 module.json" });
                 return respond(&mut stream, 400, "application/json", &msg.to_string());
             };
+            let id = m.get("id").and_then(|x| x.as_str()).unwrap_or("");
+            let name = m.get("name").and_then(|x| x.as_str()).unwrap_or("imported");
+            let raw = if id.contains('.') {
+                id.rsplit('.').next().unwrap_or(id)
+            } else if id.is_empty() {
+                name
+            } else {
+                id
+            };
+            let dir = sanitize_slot(raw);
+            if dir.is_empty() {
+                let msg = json!({ "ok": false, "error": "module.json 里的 id/name 不可用作目录名" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
             // 落到哪个根：第一个"可写且不是引擎自带"的模块根
             let root = import_root();
             let target = root.join(format!("{dir}.imod"));
@@ -769,12 +863,15 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 return Ok(());
             }
             if let Err(e) = activate_module(state, &path) {
+                // 切到一个只允许另一方的模块时，把人挪过去（否则玩家会看到"我军"=对面）
+                clamp_player(state);
                 let msg = json!({ "error": format!("加载失败：{e}") });
                 let _ = respond(&mut stream, 400, "application/json", &msg.to_string());
                 return Ok(());
             }
             trace(format!("   切换模块 → {path}"));
-            let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap());
+            let sides = Sides::of(&state);
+            let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap(), player(&state), &sides);
             respond(&mut stream, 200, "application/json", &snap)
         }
         // 首页要显示"引擎是什么版本"。玩家的 bug 报告里有没有这一行，差别很大。
@@ -820,6 +917,11 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 "calls": *state.brain.calls.lock().unwrap(),
                 "ready": state.brain.ready.lock().unwrap().len(),
                 "errors": state.brain.errors.lock().unwrap().clone(),
+                // AI 统帅部是**另一条线程**，计数也分开。不显示的话，
+                // "对面那个司令官到底有没有在思考"在界面上完全看不出来——
+                // 选日军视角时这恰恰是玩家唯一能感到"对面是人"的地方。
+                "hq_calls": *state.hq.calls.lock().unwrap(),
+                "hq_errors": state.hq.errors.lock().unwrap().clone(),
             })
             .to_string();
             respond(&mut stream, 200, "application/json", &body)
@@ -962,9 +1064,10 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 answer_report(&state, w, id, approve)
             };
             trace(format!("   批复公文 #{id}：{msg}"));
+            let sides = Sides::of(&state);
             let json = {
                 let guard = state.world.lock().unwrap();
-                let snap = snapshot(guard.as_ref().unwrap());
+                let snap = snapshot(guard.as_ref().unwrap(), player(&state), &sides);
                 json!({ "ok": true, "msg": msg, "state": serde_json::from_str::<serde_json::Value>(&snap).unwrap_or(json!({})) })
             };
             respond(&mut stream, 200, "application/json", &json.to_string())
@@ -981,6 +1084,10 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     json!({ "ok": false, "error": "电报内容不能为空" })
                 } else if text.chars().count() > 300 {
                     json!({ "ok": false, "error": "电报太长了，控制在 300 字以内" })
+                } else if resolve_recipients(&state, w, player(&state), &to).is_empty() {
+                    // 选阵营之后这条更要紧：玩家玩日军时，发电报给国军番号必须
+                    // 明确拒绝，否则电报会"发出去但没人接"，看着像卡了。
+                    json!({ "ok": false, "error": format!("没有这个番号：{to}（你指挥的是{}）", side_name(&state, player(&state))) })
                 } else {
                     // 通信延迟：电报按线路传到兵团部，再由参谋分下去
                     // （电报本身是秒级的，这里的延迟是参谋作业与下达，见 docs/10）
@@ -1035,7 +1142,14 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             // 先把上下文取出来再放锁：模型要几秒，不能把整个世界锁住
             let ask = {
                 let g = state.world.lock().unwrap();
-                g.as_ref().and_then(|w| build_ask_kind(&state, w, idx, "", false))
+                g.as_ref().and_then(|w| {
+                    // 只能给**自己这边**的将领打电话：选阵营之后必须在这里判，
+                    // 否则玩家能拿敌方师团长的口供——等于白送情报。
+                    if w.units.get(idx).map(|u| u.side) != Some(player(&state)) {
+                        return None;
+                    }
+                    build_ask_kind(&state, w, idx, "", false)
+                })
             };
             let Some(ask) = ask else {
                 let msg = json!({ "ok": false, "error": "这个番号联系不上" });
@@ -1231,6 +1345,18 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                             }
                         }
                     }
+                    // 存档里记了当时扮演哪一方：恢复它。
+                    // 老存档没有这一段（None）→ 保持当前方，行为与 1.0 相同。
+                    // 记的是**模块的 id**，所以要按本模块的声明翻回 A/B——
+                    // 换个模块读档时，那个 id 可能根本不存在（`by_id` 给 None，就不动）。
+                    if let Some(p) = sv.player.as_deref() {
+                        if let Some(side) = Sides::of(&state).by_id(p) {
+                            let allowed = state.module.lock().unwrap().allowed_sides();
+                            if allowed.contains(&side) {
+                                *state.player.lock().unwrap() = side;
+                            }
+                        }
+                    }
                     let world = rebuild(&state.module.lock().unwrap(), &sv.commands, sv.day);
                     let hash = world.state_hash();
                     let expect = u64::from_str_radix(sv.state_hash.trim(), 16).unwrap_or(0);
@@ -1247,8 +1373,9 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         sv.commands.len(),
                         if matched { "一致" } else { "不一致！" }
                     ));
+                    let sides = Sides::of(&state);
                     let g = state.world.lock().unwrap();
-                    let snap = snapshot(g.as_ref().unwrap());
+                    let snap = snapshot(g.as_ref().unwrap(), player(&state), &sides);
                     drop(g);
                     let msg = json!({
                         "ok": true,
@@ -1269,6 +1396,8 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             }
         }
         ("POST", "/api/reset") => {
+            clamp_player(state);
+            let sides = Sides::of(&state);
             let json = {
                 let mut guard = state.world.lock().unwrap();
                 let mut nw = build_world(&state.module.lock().unwrap());
@@ -1281,7 +1410,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 // 玩家会以为重开没生效（实际发生过）。
                 state.telegrams.lock().unwrap().clear();
                 state.reports.lock().unwrap().clear();
-                snapshot(guard.as_ref().unwrap())
+                snapshot(guard.as_ref().unwrap(), player(&state), &sides)
             };
             respond(&mut stream, 200, "application/json", &json)
         }
@@ -1527,12 +1656,87 @@ struct SaveFile {
     day: u32,
     state_hash: String,
     commands: Vec<CmdRecord>,
+    /// 玩家扮演哪一方（1.1）。老存档没有这一段 → 用模块默认方，行为不变。
+    #[serde(default)]
+    player: Option<String>,
 }
 
-/// 存档槽位名消毒。
+/// 首页的"战役卡"：一个模块在界面上的全部信息。
 ///
-/// 这个名字会被拼进文件路径，所以只留字母数字、`-`、`_`、下划线以外的
-/// 一概换成 `-`，并砍到 40 字符。空名 = 不指定槽位（走时间戳）。
+/// 名字、规模、描述、可以挑哪几方——**模块写什么就显示什么**，引擎不替它编。
+/// 模块没写 `sides` 就退回 `playable_sides`/`playable_side`（老模块），
+/// 名字此时等于 id：难看，但不会崩，也不会让引擎凭空造一个阵营名。
+fn module_card(p: &std::path::Path, path: String, current: bool) -> serde_json::Value {
+    use serde_json::json;
+    // 目录与 .imod 压缩包都要能读标题——统一走 peek_meta_json。
+    let meta = sim_content::peek_meta_json(p);
+    let g = |k: &str| {
+        meta.as_ref()
+            .and_then(|m| m.get(k))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    // 阵营 id → 名字。界面拿 id 去对 snapshot 里的 `player`/`owner`，
+    // 拿 name 去做按钮和顶栏。先算好再塞进 json!（宏不认块表达式）。
+    let sides_json: Vec<serde_json::Value> = {
+        let declared: Vec<serde_json::Value> = meta
+            .as_ref()
+            .and_then(|m| m.get("sides"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if !declared.is_empty() {
+            declared
+                .into_iter()
+                .filter_map(|s| {
+                    let id = s.get("id").and_then(|x| x.as_str())?.to_string();
+                    let name = s
+                        .get("name")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or(&id)
+                        .to_string();
+                    Some(json!({ "id": id, "name": name }))
+                })
+                .collect()
+        } else {
+            let list: Vec<serde_json::Value> = meta
+                .as_ref()
+                .and_then(|m| m.get("playable_sides"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let ids: Vec<String> = if list.is_empty() {
+                let one = g("playable_side");
+                if one.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![one]
+                }
+            } else {
+                list.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            };
+            ids.into_iter()
+                .map(|id| json!({ "id": id.clone(), "name": id }))
+                .collect()
+        }
+    };
+    json!({
+        "path": path,
+        "name": meta.as_ref().and_then(|m| m.get("name")).and_then(|v| v.as_str()).unwrap_or("?"),
+        "scale": meta.as_ref().and_then(|m| m.get("scale")).and_then(|v| v.as_str()).unwrap_or(""),
+        "current": current,
+        "description": g("description"),
+        "playable_side": g("playable_side"),
+        // 这个模块允许玩家挑哪几方。首页据此决定显示一个"开始"还是两个按钮。
+        "sides": sides_json,
+        "version": g("version"),
+        "domains": meta.as_ref().and_then(|m| m.get("domains")).cloned().unwrap_or(json!([])),
+    })
+}
+
 /// 模块 id → 显示名（存档列表里用）。找不到就返回 id 本身，不编造。
 fn mid_display_name(module_id: &str) -> String {
     if module_id.is_empty() {
@@ -1677,6 +1881,7 @@ fn write_save(
         seed: w.seed,
         day: w.tick,
         state_hash: format!("{:016x}", w.state_hash()),
+        player: Some(side_id_of(state, player(state))),
         commands: cmds,
     };
     let name = match slot.filter(|s| !s.is_empty()) {
@@ -1693,6 +1898,25 @@ fn write_save(
     let text = serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化失败：{e}"))?;
     std::fs::write(&name, text).map_err(|e| format!("写文件失败：{e}"))?;
     Ok((name, payload.day, payload.commands.len()))
+}
+
+/// 把玩家方收敛到"这个模块允许的阵营"里。
+///
+/// 切模块、重开、读档都会调用：如果当前方不在允许集合内（例如从一个只许玩国军的
+/// 模块切到只许玩日军的模块），就落到第一个允许的方。
+fn clamp_player(state: &Arc<ServerState>) {
+    let allowed = state.module.lock().unwrap().allowed_sides();
+    let mut p = state.player.lock().unwrap();
+    if !allowed.contains(&*p) {
+        if let Some(first) = allowed.first() {
+            *p = *first;
+        }
+    }
+}
+
+/// 玩家当前扮演的一方。`snapshot`、电报收件人、请示归属都看它。
+fn player(state: &Arc<ServerState>) -> Side {
+    *state.player.lock().unwrap()
 }
 
 /// 取一份当前配置的快照。配置会被首次设置改写，所以不能缓存。
@@ -1885,16 +2109,23 @@ struct Trace {
 
 /// 一封电报到底发给谁。
 ///
-/// 玩家是"第九战区长官部"，可以直接给兵团下令，也可以**越过兵团直接
-/// 给某个军、某个师**下令——史实里这很常见（薛岳越级调 74 军守万家岭）。
-/// 之前只认 `formation`，所以下拉框里只有三个兵团，18 个师里有 12 个
-/// 根本无从下令。现在三种写法都认：
+/// 玩家是这一方长官部，可以直接给兵团下令，也可以**越过兵团直接
+/// 给某个军、某个师**下令——史实里这很常见（战役指挥员越级调军）。
+/// 之前只认 `formation`，所以下拉框里只有几个兵团，多数师根本无从下令。
+/// 现在三种写法都认：
 ///
 /// - 兵团番号（`第1兵团`）→ 该番号下所有部队
 /// - 部队名（`第74军`）→ 就这一个单位（它本身就是那一级指挥部）
-/// - `全体` / `全军` / `第九战区` → 本战区所有部队
-fn resolve_recipients(w: &World, side: Side, to: &str) -> Vec<usize> {
-    let everyone = matches!(to, "全体" | "全军" | "第九战区" | "战区");
+/// - `全体` / `全军` / `战区` / **本方自己的名字** → 本方所有部队
+///
+/// 最后那一条以前写死成某一仗的战区名（`第九战区`）。引擎不该知道
+/// 这一仗叫什么都督府，所以现在拿模块给这一方起的名字来比——
+/// 换一场仗，"发给全军"依然可用。
+fn resolve_recipients(state: &Arc<ServerState>, w: &World, side: Side, to: &str) -> Vec<usize> {
+    let sides = Sides::of(state);
+    let me = sides.name(side);
+    let everyone =
+        matches!(to, "全体" | "全军" | "战区" | "本战区") || (!me.is_empty() && to == me);
     (0..w.units.len())
         .filter(|&i| {
             let u = &w.units[i];
@@ -1930,7 +2161,7 @@ fn deliver_telegrams(state: &Arc<ServerState>, w: &World, day: u32) -> Vec<Strin
         // 收到电报的将领各自独立判断。上限是**成本**上限，不是逻辑上限：
         // 每多一个将领就多一次模型调用。
         const MAX_RECIPIENTS: usize = 8;
-        let mut targets = resolve_recipients(w, Side::Cn, &to);
+        let mut targets = resolve_recipients(state, w, player(state), &to);
         targets.truncate(MAX_RECIPIENTS);
         for idx in &targets {
             // 空军平时不"执行命令"（第一版没有转场），所以它的问询一直被挡掉；
@@ -1966,11 +2197,93 @@ fn terrain_cn(t: Terrain) -> &'static str {
     }
 }
 
-fn side_cn(s: Side) -> &'static str {
-    match s {
-        Side::Cn => "国军",
-        Side::Jp => "日军",
+/// 这一局的两方：**模块声明**的 id 与名字（引擎自己只有 A/B 两个位置）。
+///
+/// 为什么要打成一个包：一次请求里要反复把 A/B 翻成 id、翻成名字、
+/// 还要把引擎战报里的位置记号换成这一仗的说法。每次都去锁 module 太啰嗦，
+/// 而且容易在同一句里拿到前后不一致的两份数据。
+#[derive(Clone, Debug, Default)]
+struct Sides {
+    ids: [String; 2],
+    names: [String; 2],
+}
+
+impl Sides {
+    fn of(state: &Arc<ServerState>) -> Self {
+        let m = state.module.lock().unwrap();
+        Sides::from_meta(&m.meta)
     }
+
+    /// 已经拿到模块（或模块快照）时用它，别再锁一次。
+    fn from_meta(meta: &sim_content::model::ModuleMeta) -> Self {
+        let ids = sim_content::side_ids(meta);
+        let mut out = Sides::default();
+        for (i, id) in ids.iter().take(2).enumerate() {
+            out.ids[i] = id.clone();
+            // 名字没写就退回 id —— 难看，但不会让引擎替它编一个。
+            out.names[i] = meta
+                .sides
+                .get(i)
+                .map(|s| {
+                    if s.name.is_empty() {
+                        s.id.clone()
+                    } else {
+                        s.name.clone()
+                    }
+                })
+                .unwrap_or_else(|| id.clone());
+        }
+        out
+    }
+
+    /// 内部 A/B → 模块 id（写进 JSON 用）。
+    fn id(&self, s: Side) -> String {
+        self.ids[s.index() as usize].clone()
+    }
+
+    /// 内部 A/B → 给人看的名字。
+    fn name(&self, s: Side) -> String {
+        self.names[s.index() as usize].clone()
+    }
+
+    /// 模块 id → 内部 A/B。
+    fn by_id(&self, id: &str) -> Option<Side> {
+        self.ids
+            .iter()
+            .position(|x| x == id)
+            .map(Side::from_index)
+    }
+
+    /// 把引擎文本里的位置记号（`A方`/`B方`）换成这一仗的说法。
+    ///
+    /// 引擎的战报与结局指标刻意不写国名（它不知道这一仗是谁在打），
+    /// 只写"第几方"；到界面这一层才变成"第九战区/第11军"。
+    fn localize(&self, text: &str) -> String {
+        if !text.contains(sim_core::endings::SIDE_A_LABEL)
+            && !text.contains(sim_core::endings::SIDE_B_LABEL)
+        {
+            return text.to_string();
+        }
+        text.replace(sim_core::endings::SIDE_A_LABEL, &self.names[0])
+            .replace(sim_core::endings::SIDE_B_LABEL, &self.names[1])
+    }
+}
+
+/// 内部 A/B → 模块声明的 id（写进 JSON 用）。
+fn side_id_of(state: &Arc<ServerState>, s: Side) -> String {
+    Sides::of(state).id(s)
+}
+
+/// 内部 A/B → 给人看的名字（模块 `sides[].name`；没写就退回 id）。
+///
+/// 引擎自己**不认识**"国军/日军/美军"——这些名字全是这一仗的内容。
+fn side_name(state: &Arc<ServerState>, s: Side) -> String {
+    Sides::of(state).name(s)
+}
+
+/// 模块声明的 id → 内部 A/B。
+fn side_by_id(state: &Arc<ServerState>, id: &str) -> Option<Side> {
+    Sides::of(state).by_id(id)
 }
 
 /// 一个将领的"近事"：他自己下过的判断 + 与他有关的战报。
@@ -2100,7 +2413,7 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
         day: w.tick,
         general: u.commander.name.clone(),
         unit: u.name.clone(),
-        side: side_cn(u.side).to_string(),
+        side: side_name(state, u.side),
         // 兵团部是否还在，会改实际服从度（兵团部被打掉，师长就更听自己的）
         obedience: w.effective_obedience(idx).to_display_f64(),
         initiative: u.commander.initiative.to_display_f64(),
@@ -2113,7 +2426,7 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
         province: p.name.clone(),
         node: node.map(|n| n.name.clone()).unwrap_or_else(|| "主阵地".into()),
         terrain: terrain_cn(p.terrain).to_string(),
-        owner: side_cn(p.owner).to_string(),
+        owner: side_name(state, p.owner),
         node_fort: node.map(|n| n.fort).unwrap_or(0),
         width: p.node_width(u.node).to_display_f64(),
         neighbors,
@@ -2315,7 +2628,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             || (matches!(cur, Order::Fortify | Order::Hold)
                 && matches!(kind, "move" | "attack"));
         let needs_blessing = ready.telegram.is_some() || high_cost;
-        if w.units[idx].side == Side::Cn && needs_blessing {
+        if w.units[idx].side == player(state) && needs_blessing {
             // 公文标题用中文命令名。以前这里直接拼 `kind`（引擎内部代号），
             // 公文堆里于是出现"请示：attack 万家岭 准不准？"——半句英文。
             let title = format!(
@@ -2479,12 +2792,23 @@ fn request_due(state: &Arc<ServerState>, w: &World) {
 
 /// 生成给前端的快照。
 ///
-/// **关键：只输出中方的情报视图，不输出真值。**
+/// **关键：只输出玩家那一方的情报视图，不输出真值。**
 /// 这也是"玩家不是上帝"在接口层的落地。
-fn snapshot(w: &World) -> String {
+/// 生成前端看到的世界。
+///
+/// `viewer` 是**玩家扮演的一方**——可以选阵营，所以它不再写死成某一方。
+/// 引擎的模拟与视角无关（AI 每 tick 替双方下决心，"你是哪一方"只影响你看得到
+/// 什么、能指挥谁），所以换视角只是换一个过滤器，不碰世界状态。
+///
+/// `sides` 是这一局模块声明的两方（id + 名字）。输出 JSON 里的 `side`/`owner`
+/// 必须是模块的 id，前端才认得出该显示什么名字；战报里的位置记号也在这里
+/// 换成人话。
+fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
     use serde_json::json;
 
-    let viewer = Side::Cn;
+    // 内部 A/B → 模块 id。空串代表"内容没声明"，前端会当成未知。
+    let id_of = |s: Side| sides.id(s);
+
     let intel = w.intel(viewer);
 
     // 编制簿：已经覆灭的番号（我方）。
@@ -2541,7 +2865,9 @@ fn snapshot(w: &World) -> String {
                     "commander_persona": u.commander.persona,
                     "kind": u.kind.label(),
                     "kind_code": u.kind.code(),
-                    "side": if mine { "cn" } else { "jp" },
+                    // 真实阵营（不是"敌我"）：选阵营之后，"side=cn" 既可能是玩家也可能是 AI。
+                    // 敌我判断统一看 `mine`。
+                    "side": id_of(u.side),
                     "mine": mine,
                     "strength": round1(u.strength.to_display_f64()),
                     "morale": round2(u.morale.to_display_f64()),
@@ -2588,11 +2914,11 @@ fn snapshot(w: &World) -> String {
             // 这是"非上帝视角"的最后一道口子——如果归属全暴露，
             // 玩家就知道整条战线在哪，侦察就没意义了。
             "owner": if p.owner == viewer {
-                "cn"
+                id_of(viewer)
             } else if i_intel.is_known() {
-                match p.owner { Side::Cn => "cn", Side::Jp => "jp" }
+                id_of(p.owner)
             } else {
-                "unknown"
+                "unknown".to_string()
             },
             "owner_known": p.owner == viewer || i_intel.is_known(),
             "mine": p.owner == viewer,
@@ -2653,10 +2979,11 @@ fn snapshot(w: &World) -> String {
         out
     };
 
-    let cn_strength = w.total_strength(Side::Cn).to_display_f64();
-    let jp_provinces = w.provinces.iter().filter(|p| p.owner == Side::Jp).count();
-    let cn_provinces = w.provinces.iter().filter(|p| p.owner == Side::Cn).count();
-    let jp_estimate: f64 = intel
+    let enemy = viewer.opponent();
+    let own_strength = w.total_strength(viewer).to_display_f64();
+    let enemy_provinces = w.provinces.iter().filter(|p| p.owner == enemy).count();
+    let own_provinces = w.provinces.iter().filter(|p| p.owner == viewer).count();
+    let enemy_estimate: f64 = intel
         .iter()
         .filter(|x| x.enemy_strength.raw() > 0)
         .map(|x| x.enemy_strength.to_display_f64())
@@ -2669,7 +2996,11 @@ fn snapshot(w: &World) -> String {
             "name": o.name,
             "text": o.text,
             "day": o.day,
-            "metrics": o.metrics.iter().map(|(k, v)| json!({ "label": k, "value": round1(*v) })).collect::<Vec<_>>(),
+            // 指标标签里同样是位置记号（`A方伤亡（千）`），换成本局的说法。
+            "metrics": o.metrics.iter().map(|(k, v)| json!({
+                "label": sides.localize(k),
+                "value": round1(*v),
+            })).collect::<Vec<_>>(),
         })
     });
     // 本方司令部的作战方针：这是给玩家的（自己的统帅部怎么想，他应该知道），
@@ -2698,7 +3029,7 @@ fn snapshot(w: &World) -> String {
                 json!({
                     "id": f.id,
                     "name": f.name,
-                    "cn": f.side == Side::Cn,
+                    "mine": f.side == viewer,
                     "influence": round2(f.influence.to_display_f64()),
                     "generals": f
                         .units
@@ -2718,17 +3049,19 @@ fn snapshot(w: &World) -> String {
             .collect::<Vec<_>>(),
         "plan": plan,
         "outcome": outcome,
-        "player": "cn",
+        // 玩家扮演哪一方（可选）。前端用它决定"我军/敌军"的文案与颜色，
+        // 以及顶栏该显示模块给这一方起的名字。
+        "player": id_of(viewer),
         // 已覆灭的番号（含殉国、整编倒计时）
         "gone": gone,
         "side": {
-            "strength": round1(cn_strength),
-            "provinces": cn_provinces,
-            "pending_reports": w.pending_count(Side::Cn),
+            "strength": round1(own_strength),
+            "provinces": own_provinces,
+            "pending_reports": w.pending_count(viewer),
         },
         "enemy": {
-            "provinces": jp_provinces,
-            "estimated_strength": round1(jp_estimate),
+            "provinces": enemy_provinces,
+            "estimated_strength": round1(enemy_estimate),
             // 玩家已经侦察到的敌方省份数——用来衡量情报覆盖
             "known_provinces": intel.iter().filter(|x| x.is_known()).count(),
         },
@@ -2750,7 +3083,14 @@ fn snapshot(w: &World) -> String {
             .rev()
             .filter(|e| e.side.is_none() || e.side == Some(viewer))
             .take(40)
-            .map(|e| json!({ "tick": e.tick, "kind": e.kind.code(), "text": e.text }))
+            .map(|e| {
+                json!({
+                    "tick": e.tick,
+                    "kind": e.kind.code(),
+                    // 引擎的战报里只有"第几方"，这里换成本局的说法。
+                    "text": sides.localize(&e.text),
+                })
+            })
             .collect::<Vec<_>>(),
     })
     .to_string()
@@ -2830,7 +3170,62 @@ const BASEMAP: &str = include_str!("../web/basemap.json");
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_slot;
+    use super::{sanitize_slot, Sides, Side};
+    use sim_content::model::*;
+
+    fn meta_with_sides() -> ModuleMeta {
+        ModuleMeta {
+            id: "org.test.sides".into(),
+            name: "阵营测试".into(),
+            version: "0.1.0".into(),
+            description: String::new(),
+            author: String::new(),
+            engine: EngineReq { min: "0.1.0".into(), max: None },
+            content_schema: 1,
+            // 故意不叫 cn/jp：引擎不该假设这两方是谁。
+            sides: vec![
+                SideMeta { id: "red".into(), name: "红方".into(), hq: None },
+                SideMeta { id: "blue".into(), name: "蓝方".into(), hq: None },
+            ],
+            playable_side: SideDef::new("red"),
+            playable_sides: vec![SideDef::new("red"), SideDef::new("blue")],
+            hq: None,
+            scale: ScaleDef::Front,
+            domains: vec![DomainDef::Land],
+        }
+    }
+
+    #[test]
+    fn sides_come_from_the_module_not_the_engine() {
+        let s = Sides::from_meta(&meta_with_sides());
+        assert_eq!(s.ids[0], "red");
+        assert_eq!(s.names[0], "红方");
+        assert_eq!(s.id(Side::A), "red");
+        assert_eq!(s.name(Side::B), "蓝方");
+        // 声明顺序就是 A/B：换个模块，同一个位置换个人
+        assert_eq!(s.by_id("blue"), Some(Side::B));
+        assert_eq!(s.by_id("cn"), None, "引擎不许替模块认一个没声明的 id");
+    }
+
+    #[test]
+    fn engine_text_gets_localized_without_touching_other_words() {
+        let s = Sides::from_meta(&meta_with_sides());
+        assert_eq!(s.localize("A方攻占 德安"), "红方攻占 德安");
+        assert_eq!(s.localize("B方控制省份"), "蓝方控制省份");
+        // 没有位置记号的文本原样返回（别去改番号里的字）
+        assert_eq!(s.localize("第74军 损失 0.3 千"), "第74军 损失 0.3 千");
+    }
+
+    #[test]
+    fn module_without_sides_falls_back_to_ids_as_names() {
+        // 老模块（没有 `sides`）必须还能加载：名字等于 id，难看但不崩。
+        let mut m = meta_with_sides();
+        m.sides.clear();
+        m.playable_sides.clear();
+        let s = Sides::from_meta(&m);
+        assert!(!s.ids[0].is_empty());
+        assert_eq!(s.names[0], s.ids[0]);
+    }
 
     #[test]
     fn slot_names_cannot_escape_the_saves_directory() {
@@ -2869,7 +3264,16 @@ fn hq_due(state: &Arc<ServerState>, w: &World) -> bool {
 
 /// 组装给敌国司令部的问询。
 fn build_hq_ask(state: &Arc<ServerState>, w: &World, side: Side) -> Option<llm::HqAsk> {
-    let hq = state.module.lock().unwrap().meta.hq.clone()?;
+    // **按方取帅**：AI 要替 `side` 那一方下决心，就得用那一方自己的司令官。
+    // 模块可以在 `sides[].hq` 里按方写；只写顶层 `hq` 的老模块退回那一个。
+    let hq = {
+        let m = state.module.lock().unwrap();
+        m.meta
+            .sides
+            .get(side.index() as usize)
+            .and_then(|s| s.hq.clone())
+            .or_else(|| m.meta.hq.clone())?
+    };
     let enemy = side.opponent();
 
     let mut units = Vec::new();
@@ -2910,7 +3314,7 @@ fn build_hq_ask(state: &Arc<ServerState>, w: &World, side: Side) -> Option<llm::
 
     Some(llm::HqAsk {
         day: w.tick,
-        side: side_cn(side).to_string(),
+        side: side_name(state, side),
         title: hq.title.clone(),
         general: hq.name.clone(),
         persona: hq.persona.clone(),
@@ -2947,10 +3351,14 @@ fn run_hq(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, Strin
                 .map(|h| format!("{}{}", h.title, h.name))
                 .unwrap_or_else(|| "司令部".into());
             for (to, text) in j.orders {
+                // 敌方统帅部（AI 玩家）指挥的是**玩家的对手**：玩家玩国军时它管日军，
+                // 玩家玩日军时它管国军。以前这里写死 Side::B——选日军视角就变成
+                // "司令部的电报发给自己人"，机制当场失效。
+                let hq_side = player(state).opponent();
                 let idx = w
                     .units
                     .iter()
-                    .position(|u| u.name == to && u.side == Side::Jp && u.is_alive());
+                    .position(|u| u.name == to && u.side == hq_side && u.is_alive());
                 let Some(idx) = idx else {
                     trace(format!("   司令部电报找不到收件人：{to}"));
                     continue;
@@ -2959,7 +3367,7 @@ fn run_hq(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, Strin
                 if let Some(ask) = build_ask(state, w, idx, &incoming) {
                     state.brain.submit(llm::Job { unit: idx, day, ask, telegram: None });
                     trace(format!("   司令部 → {to}：{text}"));
-                    notes.push((false, format!("敌司令部电令 {}", to), Side::Jp));
+                    notes.push((false, format!("敌司令部电令 {}", to), hq_side));
                 }
             }
             if !j.reason.is_empty() {
@@ -2969,8 +3377,10 @@ fn run_hq(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, Strin
     }
 
     // ---- 发：到日子了就叫一次 ----
+    // 问的是**对手那一方**的司令部：玩家自己就是这一方的主官，
+    // 不该由 AI 替他下决心（选日军视角时以前写死 Side::B，等于问自己）。
     if hq_due(state, w) {
-        if let Some(ask) = build_hq_ask(state, w, Side::Jp) {
+        if let Some(ask) = build_hq_ask(state, w, player(state).opponent()) {
             *state.hq_last_day.lock().unwrap() = w.tick;
             state.hq.submit(w.tick, ask);
             trace(format!("   问询敌司令部（第{}日）", w.tick));

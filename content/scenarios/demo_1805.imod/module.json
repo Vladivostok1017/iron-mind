@@ -8,6 +8,10 @@
     "min": "0.1.0"
   },
   "content_schema": 1,
+  "sides": [
+    { "id": "cn", "name": "北军" },
+    { "id": "jp", "name": "南军" }
+  ],
   "playable_side": "cn",
   "scale": "battle",
   "domains": [

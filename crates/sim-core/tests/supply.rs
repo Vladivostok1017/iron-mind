@@ -10,15 +10,15 @@ use sim_core::Fixed;
 
 fn line() -> World {
     // 0（补给源）— 1 — 2，都是国军的
-    let mut a = Province::new("后方", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("后方", Terrain::Plain, Side::A);
     a.neighbors = vec![1];
     a.is_supply_source = true;
-    let mut b = Province::new("中转", Terrain::Plain, Side::Cn);
+    let mut b = Province::new("中转", Terrain::Plain, Side::A);
     b.neighbors = vec![0, 2];
-    let mut c = Province::new("前线", Terrain::Plain, Side::Cn);
+    let mut c = Province::new("前线", Terrain::Plain, Side::A);
     c.neighbors = vec![1];
 
-    let mut u = Unit::new("前线师", Side::Cn, 2, 8);
+    let mut u = Unit::new("前线师", Side::A, 2, 8);
     u.supply_reach = Fixed::ZERO;
     u.manual = true;
     u.order = Order::Hold;
@@ -36,7 +36,7 @@ fn enemy_on_the_road_cuts_supply() {
     assert!(clean > 0.4, "干净补给线上的前线应当拿到补给：{clean}");
 
     // 敌人一个纵队插到中转省（省还是我的，但路上有人）
-    let mut raider = Unit::new("敌挺进队", Side::Jp, 1, 2);
+    let mut raider = Unit::new("敌挺进队", Side::B, 1, 2);
     raider.manual = true;
     raider.order = Order::Hold;
     w.units.push(raider);
@@ -53,11 +53,11 @@ fn starvation_kills_and_reports() {
     // 补给源在，但这支部队**接不上**：孤城和省会之间没有邻接。
     // 这是"断粮"的正确定义——不是"离得远"（那只是缺粮，有征发地板兜着），
     // 而是"在本国领土上却与补给网断开"。
-    let mut p = Province::new("孤城", Terrain::Plain, Side::Cn);
+    let mut p = Province::new("孤城", Terrain::Plain, Side::A);
     p.neighbors = vec![];
-    let mut home = Province::new("省会", Terrain::Plain, Side::Cn);
+    let mut home = Province::new("省会", Terrain::Plain, Side::A);
     home.is_supply_source = true; // 有源，但走不到
-    let mut u = Unit::new("孤军", Side::Cn, 0, 8);
+    let mut u = Unit::new("孤军", Side::A, 0, 8);
     u.max_strength = Fixed::from_int(8);
     u.supply_reach = Fixed::ZERO;
     u.manual = true;
@@ -79,18 +79,18 @@ fn starvation_kills_and_reports() {
         .collect();
     assert!(!starve.is_empty(), "断粮要报给本方（实际日志：{:?}）", w.log.len());
     // 断粮是内部消息
-    assert!(w.log.iter().any(|e| e.side == Some(Side::Cn) && e.text.contains("断粮")));
+    assert!(w.log.iter().any(|e| e.side == Some(Side::A) && e.text.contains("断粮")));
 }
 
 #[test]
 fn small_remnant_is_not_wiped_but_a_skeleton_is() {
-    let mut p = Province::new("战场", Terrain::Plain, Side::Cn);
+    let mut p = Province::new("战场", Terrain::Plain, Side::A);
     p.is_supply_source = true;
     let mut w = World::new(1, vec![p], vec![]);
 
-    let mut remnant = Unit::new("残部", Side::Cn, 0, 1);
+    let mut remnant = Unit::new("残部", Side::A, 0, 1);
     remnant.strength = Fixed::from_f64_input(0.9); // 900 人：还是师
-    let mut skeleton = Unit::new("空架子", Side::Cn, 0, 1);
+    let mut skeleton = Unit::new("空架子", Side::A, 0, 1);
     skeleton.strength = Fixed::from_f64_input(0.1); // 100 人：番号保不住
     w.units.push(remnant);
     w.units.push(skeleton);
@@ -105,7 +105,7 @@ fn reports_travel_at_courier_speed() {
     let mut w = line();
     w.comms.transmission = 1;
     w.comms.staff = 1; // 两天
-    w.report_delayed(2, sim_core::world::EventKind::Oob, "前线师 全军覆没", Some(Side::Cn));
+    w.report_delayed(2, sim_core::world::EventKind::Oob, "前线师 全军覆没", Some(Side::A));
     assert!(w.log.is_empty(), "刚发出的电报不该已经躺在日志里");
 
     sim_core::run_ticks(&mut w, 1);
@@ -127,16 +127,16 @@ fn commander_default_has_no_fate_until_it_ends() {
 #[test]
 fn encirclement_zeroes_supply_even_on_own_soil() {
     // 0（我方，守着）— 1（敌方）— 2（我方后方）
-    let mut a = Province::new("被围点", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("被围点", Terrain::Plain, Side::A);
     a.neighbors = vec![1, 2];
     a.is_supply_source = true;
-    let mut b = Province::new("敌阵地", Terrain::Plain, Side::Jp);
+    let mut b = Province::new("敌阵地", Terrain::Plain, Side::B);
     b.neighbors = vec![0];
-    let mut c = Province::new("后方", Terrain::Plain, Side::Cn);
+    let mut c = Province::new("后方", Terrain::Plain, Side::A);
     c.neighbors = vec![0];
     c.is_supply_source = true;
 
-    let mut u = Unit::new("守军", Side::Cn, 0, 6);
+    let mut u = Unit::new("守军", Side::A, 0, 6);
     u.manual = true;
     u.order = Order::Hold;
     let mut w = World::new(1, vec![a, b, c], vec![u]);
@@ -148,7 +148,7 @@ fn encirclement_zeroes_supply_even_on_own_soil() {
     assert!(!w.units[0].encircled);
 
     // 后方也丢了 → 四面皆敌
-    w.provinces[2].owner = Side::Jp;
+    w.provinces[2].owner = Side::B;
     sim_core::run_ticks(&mut w, 1);
     assert!(w.units[0].encircled, "所有邻省都不是自己的，应当判定被围");
     assert_eq!(w.units[0].supply.to_display_f64(), 0.0, "被围补给归零");
@@ -156,11 +156,11 @@ fn encirclement_zeroes_supply_even_on_own_soil() {
 
 #[test]
 fn encirclement_is_reported_once() {
-    let mut a = Province::new("被围点", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("被围点", Terrain::Plain, Side::A);
     a.neighbors = vec![1];
-    let mut b = Province::new("敌阵地", Terrain::Plain, Side::Jp);
+    let mut b = Province::new("敌阵地", Terrain::Plain, Side::B);
     b.neighbors = vec![0];
-    let mut u = Unit::new("守军", Side::Cn, 0, 6);
+    let mut u = Unit::new("守军", Side::A, 0, 6);
     u.manual = true;
     u.order = Order::Hold;
     let mut w = World::new(1, vec![a, b], vec![u]);

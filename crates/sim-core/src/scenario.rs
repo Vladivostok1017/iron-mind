@@ -11,14 +11,14 @@ use crate::world::{Province, Side, Terrain, Unit, World};
 /// 简化的走廊场景。兵力单位见 `Unit`：千人。
 pub fn nanxun_line(seed: u64) -> World {
     let spec: &[(&str, Terrain, Side)] = &[
-        ("九江", Terrain::Plain, Side::Jp),
-        ("姑塘", Terrain::Marsh, Side::Jp),
-        ("星子", Terrain::Hill, Side::Jp),
-        ("隘口", Terrain::Mountain, Side::Jp),
-        ("金官桥", Terrain::Hill, Side::Cn),
-        ("德安", Terrain::Urban, Side::Cn),
-        ("万家岭", Terrain::Mountain, Side::Cn),
-        ("南昌", Terrain::Plain, Side::Cn),
+        ("九江", Terrain::Plain, Side::B),
+        ("姑塘", Terrain::Marsh, Side::B),
+        ("星子", Terrain::Hill, Side::B),
+        ("隘口", Terrain::Mountain, Side::B),
+        ("金官桥", Terrain::Hill, Side::A),
+        ("德安", Terrain::Urban, Side::A),
+        ("万家岭", Terrain::Mountain, Side::A),
+        ("南昌", Terrain::Plain, Side::A),
     ];
 
     let n = spec.len();
@@ -45,11 +45,11 @@ pub fn nanxun_line(seed: u64) -> World {
     provinces[6].fort = 2;
 
     let units = vec![
-        Unit::new("第106师团", Side::Jp, 0, 16),
-        Unit::new("第101师团", Side::Jp, 1, 12),
-        Unit::new("第74军", Side::Cn, 4, 15),
-        Unit::new("第4军", Side::Cn, 5, 12),
-        Unit::new("第66军", Side::Cn, 6, 9),
+        Unit::new("第106师团", Side::B, 0, 16),
+        Unit::new("第101师团", Side::B, 1, 12),
+        Unit::new("第74军", Side::A, 4, 15),
+        Unit::new("第4军", Side::A, 5, 12),
+        Unit::new("第66军", Side::A, 6, 9),
     ];
 
     World::new(seed, provinces, units)
@@ -58,17 +58,17 @@ pub fn nanxun_line(seed: u64) -> World {
 /// 一条直线，用于最小回归测试。
 pub fn straight_line(seed: u64) -> World {
     let provinces = vec![
-        Province::new("A", Terrain::Plain, Side::Cn)
+        Province::new("A", Terrain::Plain, Side::A)
             .with_neighbors(&[1])
             .as_source(),
-        Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0, 2]),
-        Province::new("C", Terrain::Plain, Side::Jp)
+        Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0, 2]),
+        Province::new("C", Terrain::Plain, Side::B)
             .with_neighbors(&[1])
             .as_source(),
     ];
     let units = vec![
-        Unit::new("cn-1", Side::Cn, 0, 10),
-        Unit::new("jp-1", Side::Jp, 2, 10),
+        Unit::new("cn-1", Side::A, 0, 10),
+        Unit::new("jp-1", Side::B, 2, 10),
     ];
     World::new(seed, provinces, units)
 }

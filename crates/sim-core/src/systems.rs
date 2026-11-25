@@ -453,8 +453,8 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
 }
 
 fn run_supply(world: &mut World) {
-    let cn = compute_supply(world, Side::Cn);
-    let jp = compute_supply(world, Side::Jp);
+    let cn = compute_supply(world, Side::A);
+    let jp = compute_supply(world, Side::B);
 
     // "本方到底有没有补给源"要先分清。
     //
@@ -465,11 +465,11 @@ fn run_supply(world: &mut World) {
     let cn_has_source = world
         .provinces
         .iter()
-        .any(|p| p.is_supply_source && p.owner == Side::Cn);
+        .any(|p| p.is_supply_source && p.owner == Side::A);
     let jp_has_source = world
         .provinces
         .iter()
-        .any(|p| p.is_supply_source && p.owner == Side::Jp);
+        .any(|p| p.is_supply_source && p.owner == Side::B);
 
     // 就地征发的地板：即使补给线被切断，也不会立刻归零。
     //
@@ -497,8 +497,8 @@ fn run_supply(world: &mut World) {
         let reach = world.units[i].supply_reach;
 
         let level = match side {
-            Side::Cn => cn[pos as usize],
-            Side::Jp => jp[pos as usize],
+            Side::A => cn[pos as usize],
+            Side::B => jp[pos as usize],
         };
 
         // 补给延伸：把"离补给源的距离差距"按单位能力补上一部分。
@@ -528,8 +528,8 @@ fn run_supply(world: &mut World) {
         // "断"才会死人。
         let encircled = is_encircled(world, pos, side);
         let has_source = match side {
-            Side::Cn => cn_has_source,
-            Side::Jp => jp_has_source,
+            Side::A => cn_has_source,
+            Side::B => jp_has_source,
         };
         // 只有"在**本国**领土上、却接不上任何补给源"才算断。
         //
@@ -819,8 +819,8 @@ fn run_movement(world: &mut World) {
                     continue;
                 }
                 match u.side {
-                    Side::Cn => cn = true,
-                    Side::Jp => jp = true,
+                    Side::A => cn = true,
+                    Side::B => jp = true,
                 }
             }
             // 双方都在同一个阵地上：这个阵地还没定，不算票
@@ -838,21 +838,29 @@ fn run_movement(world: &mut World) {
             // 周围的整片战线不翻色——"阵地被逐个打穿"这件事在密集地图上表达不出来。
             // 邻接有敌仍然有代价：`compute_supply` 里那条"敌纵队踩在补给线上
             // → 通行能力 ×0.3"照旧生效。
-            let blocked = !world.fx.front_line && enemy_adjacent(world, p as u32, Side::Jp);
+            let blocked = !world.fx.front_line && enemy_adjacent(world, p as u32, Side::B);
             if !blocked {
-                if world.provinces[p].owner != Side::Cn {
+                if world.provinces[p].owner != Side::A {
                     let name = world.provinces[p].name.clone();
-                    world.report(crate::world::EventKind::Occupy, format!("国军控制 {name}"));
-                    world.provinces[p].owner = Side::Cn;
+                    // 战报里不写国名：引擎不知道这一仗是谁在打。
+                    // 用位置记号（A方/B方），界面对着模块声明的阵营名换成人话。
+                    world.report(
+                        crate::world::EventKind::Occupy,
+                        format!("{}控制 {name}", crate::endings::SIDE_A_LABEL),
+                    );
+                    world.provinces[p].owner = Side::A;
                 }
             }
         } else if jp_nodes > cn_nodes {
-            let blocked = !world.fx.front_line && enemy_adjacent(world, p as u32, Side::Cn);
+            let blocked = !world.fx.front_line && enemy_adjacent(world, p as u32, Side::A);
             if !blocked {
-                if world.provinces[p].owner != Side::Jp {
+                if world.provinces[p].owner != Side::B {
                     let name = world.provinces[p].name.clone();
-                    world.report(crate::world::EventKind::Occupy, format!("日军攻占 {name}"));
-                    world.provinces[p].owner = Side::Jp;
+                    world.report(
+                        crate::world::EventKind::Occupy,
+                        format!("{}攻占 {name}", crate::endings::SIDE_B_LABEL),
+                    );
+                    world.provinces[p].owner = Side::B;
                 }
             }
         }
@@ -1023,8 +1031,8 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
                 continue;
             }
             match u.side {
-                Side::Cn => cn.push(i),
-                Side::Jp => jp.push(i),
+                Side::A => cn.push(i),
+                Side::B => jp.push(i),
             }
         }
         if cn.is_empty() || jp.is_empty() {
@@ -1049,8 +1057,8 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
         let capacity = width * Fixed::from_int(40);
         let owner = world.provinces[p].owner;
         // 地形与工事给守方加成，舰炮给攻方与守方都可能加成
-        let cn_raw = if owner == Side::Cn { cn_power * def_mult } else { cn_power };
-        let jp_raw = if owner == Side::Jp { jp_power * def_mult } else { jp_power };
+        let cn_raw = if owner == Side::A { cn_power * def_mult } else { cn_power };
+        let jp_raw = if owner == Side::B { jp_power * def_mult } else { jp_power };
         // 展开宽度：超出部分怎么算。
         //
         // 硬截断（`clamp`）会把**双方**都截到同一个 capacity：只要两边都超了，
@@ -1069,8 +1077,8 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
                 capacity + (x - capacity) * Fixed::ratio(3, 10)
             }
         };
-        let cn_eff = cap(cn_raw) * naval_support(world, p as u32, Side::Cn);
-        let jp_eff = cap(jp_raw) * naval_support(world, p as u32, Side::Jp);
+        let cn_eff = cap(cn_raw) * naval_support(world, p as u32, Side::A);
+        let jp_eff = cap(jp_raw) * naval_support(world, p as u32, Side::B);
 
         let total = cn_eff + jp_eff;
         if total.is_zero() {
@@ -1584,8 +1592,8 @@ fn run_naval(world: &mut World, seed: u64, now: u32) {
                 continue;
             }
             match u.side {
-                Side::Cn => cn.push(i as usize),
-                Side::Jp => jp.push(i as usize),
+                Side::A => cn.push(i as usize),
+                Side::B => jp.push(i as usize),
             }
         }
         if !cn.is_empty() && !jp.is_empty() {
@@ -1690,17 +1698,17 @@ mod tests {
     fn line_world() -> World {
         // A(源) - B - C，Cn 在 A，Jp 在 C
         let provinces = vec![
-            Province::new("A", Terrain::Plain, Side::Cn)
+            Province::new("A", Terrain::Plain, Side::A)
                 .with_neighbors(&[1])
                 .as_source(),
-            Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0, 2]),
-            Province::new("C", Terrain::Plain, Side::Jp)
+            Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0, 2]),
+            Province::new("C", Terrain::Plain, Side::B)
                 .with_neighbors(&[1])
                 .as_source(),
         ];
         let units = vec![
-            Unit::new("cn-1", Side::Cn, 0, 10),
-            Unit::new("jp-1", Side::Jp, 2, 10),
+            Unit::new("cn-1", Side::A, 0, 10),
+            Unit::new("jp-1", Side::B, 2, 10),
         ];
         World::new(99, provinces, units)
     }
@@ -1708,7 +1716,7 @@ mod tests {
     #[test]
     fn supply_decays_with_distance() {
         let w = line_world();
-        let lvl = compute_supply(&w, Side::Cn);
+        let lvl = compute_supply(&w, Side::A);
         assert_eq!(lvl[0], Fixed::ONE);
         assert!(lvl[1] < lvl[0]);
         assert_eq!(lvl[2], Fixed::ZERO); // 敌省不扩散

@@ -62,8 +62,10 @@ fn meta(id: &str) -> ModuleMeta {
             max: None,
         },
         content_schema: 1,
+        sides: Vec::new(),
         hq: None,
-        playable_side: SideDef::Cn,
+        playable_side: SideDef::new("cn"),
+        playable_sides: Vec::new(),
         scale: ScaleDef::Theater,
         domains: vec![DomainDef::Land],
     }
@@ -132,9 +134,9 @@ fn unit(id: &str, side: SideDef, strength: f64, pos: u32) -> UnitDef {
 
 /// 一个最小可用模块：两省一条线，双方各一个单位。
 fn minimal_parts() -> (ModuleMeta, ScenarioDef, MapDef, OobDef) {
-    let mut a = prov(0, "甲", SideDef::Cn, &[1]);
+    let mut a = prov(0, "甲", SideDef::new("cn"), &[1]);
     a.supply_source = true;
-    let mut b = prov(1, "乙", SideDef::Jp, &[0]);
+    let mut b = prov(1, "乙", SideDef::new("jp"), &[0]);
     b.supply_source = true;
     let map = MapDef {
         bbox: None,
@@ -144,8 +146,8 @@ fn minimal_parts() -> (ModuleMeta, ScenarioDef, MapDef, OobDef) {
     let oob = OobDef {
         factions: Vec::new(),
         units: vec![
-            unit("cn-1", SideDef::Cn, 10.0, 0),
-            unit("jp-1", SideDef::Jp, 10.0, 1),
+            unit("cn-1", SideDef::new("cn"), 10.0, 0),
+            unit("jp-1", SideDef::new("jp"), 10.0, 1),
         ],
     };
     (meta("org.test.minimal"), scenario(), map, oob)
@@ -164,15 +166,15 @@ fn loads_bundled_module() {
     // 而引擎其实一个字都没改。外仓内容的变化不该让引擎的测试变红。
     assert!(m.map.provinces.len() >= 12, "省会数量应该像一个战役");
     assert!(m.oob.units.len() >= 4, "双方至少各有两个番号");
-    assert_eq!(m.meta.playable_side, SideDef::Cn);
+    assert_eq!(m.meta.playable_side, SideDef::new("cn"));
 
     let w = build_world(&m);
     assert_eq!(w.provinces.len(), m.map.provinces.len());
     assert_eq!(w.units.len(), m.oob.units.len());
     // 双方都有补给源
     assert!(w.provinces.iter().filter(|p| p.is_supply_source).count() >= 2);
-    assert!(w.units.iter().any(|u| u.side == sim_core::world::Side::Cn));
-    assert!(w.units.iter().any(|u| u.side == sim_core::world::Side::Jp));
+    assert!(w.units.iter().any(|u| u.side == sim_core::world::Side::A));
+    assert!(w.units.iter().any(|u| u.side == sim_core::world::Side::B));
 }
 
 #[test]
@@ -297,7 +299,7 @@ fn same_engine_works_for_different_eras() {
     sim_core::intel::run_intel(&mut w_slow);
 
     assert!(
-        w_slow.pending_count(sim_core::Side::Cn) >= w_fast.pending_count(sim_core::Side::Cn),
+        w_slow.pending_count(sim_core::Side::A) >= w_fast.pending_count(sim_core::Side::A),
         "慢速通信应当积压更多在途报告"
     );
     assert!(
@@ -373,7 +375,7 @@ fn rejects_unit_position_out_of_range() {
 #[test]
 fn rejects_side_without_units() {
     let (mt, sc, mp, mut oo) = minimal_parts();
-    oo.units.retain(|u| u.side == SideDef::Cn);
+    oo.units.retain(|u| u.side == SideDef::new("cn"));
     match from_parts(mt, sc, mp, oo) {
         Err(LoadError::Validation { issues, .. }) => {
             assert!(issues.iter().any(|i| i.code == "oob.side_without_units"));
@@ -385,10 +387,10 @@ fn rejects_side_without_units() {
 #[test]
 fn warns_on_unreachable_unit() {
     // 三省：甲(源)-乙-丙(源)，但乙被切断（丙只连自己）
-    let mut a = prov(0, "甲", SideDef::Cn, &[1]);
+    let mut a = prov(0, "甲", SideDef::new("cn"), &[1]);
     a.supply_source = true;
-    let b = prov(1, "乙", SideDef::Cn, &[0, 2]);
-    let mut c = prov(2, "丙", SideDef::Cn, &[1]);
+    let b = prov(1, "乙", SideDef::new("cn"), &[0, 2]);
+    let mut c = prov(2, "丙", SideDef::new("cn"), &[1]);
     c.supply_source = true;
     let map = MapDef {
         bbox: None,
@@ -396,15 +398,15 @@ fn warns_on_unreachable_unit() {
         provinces: vec![a, b, c],
     };
     // 把一个单位放在不可达的省——通过让 3 号省孤立
-    let mut d = prov(3, "丁", SideDef::Cn, &[]);
+    let mut d = prov(3, "丁", SideDef::new("cn"), &[]);
     d.supply_source = false;
     let mut map2 = map;
     map2.provinces.push(d);
     let oob = OobDef {
         factions: Vec::new(),
         units: vec![
-            unit("cn-1", SideDef::Cn, 10.0, 3),
-            unit("jp-1", SideDef::Jp, 10.0, 0),
+            unit("cn-1", SideDef::new("cn"), 10.0, 3),
+            unit("jp-1", SideDef::new("jp"), 10.0, 0),
         ],
     };
     // jp 没有补给源，应当报错；先只关心 unreachable 警告是否存在

@@ -25,7 +25,7 @@ const APPROX_ERROR: i64 = 40;
 pub fn run_intel(world: &mut World) {
     let seed = world.seed;
     let tick = world.tick;
-    for side in [Side::Cn, Side::Jp] {
+    for side in [Side::A, Side::B] {
         refresh_side(world, side, seed, tick);
     }
 }
@@ -254,17 +254,17 @@ mod tests {
 
     fn two_side_map() -> World {
         let provinces = vec![
-            Province::new("A", Terrain::Plain, Side::Cn)
+            Province::new("A", Terrain::Plain, Side::A)
                 .with_neighbors(&[1])
                 .as_source(),
-            Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0, 2]),
-            Province::new("C", Terrain::Plain, Side::Jp)
+            Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0, 2]),
+            Province::new("C", Terrain::Plain, Side::B)
                 .with_neighbors(&[1])
                 .as_source(),
         ];
         let units = vec![
-            Unit::new("cn", Side::Cn, 0, 10),
-            Unit::new("jp", Side::Jp, 2, 10),
+            Unit::new("cn", Side::A, 0, 10),
+            Unit::new("jp", Side::B, 2, 10),
         ];
         World::new(1, provinces, units)
     }
@@ -276,7 +276,7 @@ mod tests {
         // 把国军挪到 B，邻接日军所在的 C
         w.units[0].position = 1;
         run_intel(&mut w);
-        let intel = w.intel(Side::Cn);
+        let intel = w.intel(Side::A);
         assert!(
             intel[2].is_known(),
             "邻接的敌军应当被侦察到，实际 {:?}",
@@ -290,7 +290,7 @@ mod tests {
         w.comms = crate::world::CommsConfig::instant();
         // 国军在 A，离 C 两跳
         run_intel(&mut w);
-        let intel = w.intel(Side::Cn);
+        let intel = w.intel(Side::A);
         assert_eq!(intel[2].accuracy, Accuracy::Unknown, "远处敌军不应被看到");
     }
 
@@ -302,13 +302,13 @@ mod tests {
         w.units[1].position = 1;
 
         run_intel(&mut w);
-        let first = w.intel(Side::Cn)[1];
+        let first = w.intel(Side::A)[1];
         assert_eq!(first.accuracy, Accuracy::Exact, "第一次接触就该知道兵力");
         assert!(!first.identity_known, "第一次接触不该认得番号");
 
         w.tick += 1;
         run_intel(&mut w);
-        let second = w.intel(Side::Cn)[1];
+        let second = w.intel(Side::A)[1];
         assert!(second.identity_known, "第二次接触才认出番号");
     }
     #[test]
@@ -319,7 +319,7 @@ mod tests {
         w.units[0].position = 1;
         w.units[1].position = 1;
         run_intel(&mut w);
-        let intel = w.intel(Side::Cn);
+        let intel = w.intel(Side::A);
         assert_eq!(intel[1].accuracy, Accuracy::Exact, "战斗接触应当精确");
     }
 
@@ -330,7 +330,7 @@ mod tests {
         // 给国军一架侦察机，半径 2
         w.units[0].recon_radius = 2;
         run_intel(&mut w);
-        let intel = w.intel(Side::Cn);
+        let intel = w.intel(Side::A);
         assert_eq!(intel[2].accuracy, Accuracy::Exact, "侦察机应当看到远程敌军");
     }
 
@@ -347,17 +347,17 @@ mod tests {
         w.units[0].position = 1;
 
         run_intel(&mut w);
-        assert!(!w.intel(Side::Cn)[2].is_known(), "报告未送达前不应可见");
-        assert_eq!(w.pending_count(Side::Cn), 1, "应有一份在途报告");
+        assert!(!w.intel(Side::A)[2].is_known(), "报告未送达前不应可见");
+        assert_eq!(w.pending_count(Side::A), 1, "应有一份在途报告");
 
         w.tick = 1;
         run_intel(&mut w);
-        assert!(!w.intel(Side::Cn)[2].is_known(), "第 1 天仍未送达");
+        assert!(!w.intel(Side::A)[2].is_known(), "第 1 天仍未送达");
 
         w.tick = 2;
         run_intel(&mut w);
-        assert!(w.intel(Side::Cn)[2].is_known(), "第 2 天应送达");
-        // 旧的已送达并被消费，只剩本 tick 新签发的一份`n        assert!(w.pending_count(Side::Cn) <= 1);
+        assert!(w.intel(Side::A)[2].is_known(), "第 2 天应送达");
+        // 旧的已送达并被消费，只剩本 tick 新签发的一份`n        assert!(w.pending_count(Side::A) <= 1);
     }
 
     #[test]
@@ -365,7 +365,7 @@ mod tests {
         w.comms = crate::world::CommsConfig::instant();
         w.units[0].position = 1;
         run_intel(&mut w); // 首次侦察
-        let first = w.intel(Side::Cn)[2].accuracy;
+        let first = w.intel(Side::A)[2].accuracy;
         assert!(first > Accuracy::Unknown);
 
         // 国军撤走，不再有观察
@@ -375,7 +375,7 @@ mod tests {
             run_intel(&mut w);
         }
         assert_eq!(
-            w.intel(Side::Cn)[2].accuracy,
+            w.intel(Side::A)[2].accuracy,
             Accuracy::Unknown,
             "长期无侦察的情报应当失效"
         );

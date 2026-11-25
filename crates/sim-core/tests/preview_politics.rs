@@ -16,13 +16,13 @@ fn fx_pol() -> Features {
 
 /// 两省、两支部队；我方两支部队分属两个派系（0.8 与 0.3）。
 fn stage(fx: Features) -> World {
-    let a = Province::new("A", Terrain::Plain, Side::Cn)
+    let a = Province::new("A", Terrain::Plain, Side::A)
         .with_neighbors(&[1])
         .as_source();
-    let b = Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0]);
-    let mut u1 = Unit::new("1st", Side::Cn, 0, 10);
+    let b = Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0]);
+    let mut u1 = Unit::new("1st", Side::A, 0, 10);
     u1.commander.faction = Some("f_strong".into());
-    let mut u2 = Unit::new("2nd", Side::Cn, 1, 10);
+    let mut u2 = Unit::new("2nd", Side::A, 1, 10);
     u2.commander.faction = Some("f_weak".into());
     for u in [&mut u1, &mut u2] {
         u.manual = true;
@@ -30,8 +30,8 @@ fn stage(fx: Features) -> World {
     let mut w = World::new(9, vec![a, b], vec![u1, u2]).with_features(fx);
     if fx.politics {
         w.factions = vec![
-            Faction::new("f_strong", "强派", Side::Cn, Fixed::ratio(8, 10)),
-            Faction::new("f_weak", "弱派", Side::Cn, Fixed::ratio(3, 10)),
+            Faction::new("f_strong", "强派", Side::A, Fixed::ratio(8, 10)),
+            Faction::new("f_weak", "弱派", Side::A, Fixed::ratio(3, 10)),
         ];
         w.factions[0].units = vec![0];
         w.factions[1].units = vec![1];

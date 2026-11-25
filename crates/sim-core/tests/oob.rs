@@ -13,13 +13,13 @@ use sim_core::Fixed;
 /// 一个弱师（0.4 千）和一个强师（20 千）挤在同一个省。
 /// 第一 tick 战斗结算后弱师就会被打到 1 千以下 → 判定覆灭。
 fn doomed(reform_days: u32, reform_ratio: f64) -> World {
-    let mut p = Province::new("战场", Terrain::Plain, Side::Cn);
+    let mut p = Province::new("战场", Terrain::Plain, Side::A);
     p.is_supply_source = true;
-    let mut home = Province::new("后方", Terrain::Plain, Side::Cn);
+    let mut home = Province::new("后方", Terrain::Plain, Side::A);
     home.is_supply_source = true;
     home.neighbors = vec![0];
 
-    let mut weak = Unit::new("第187师", Side::Cn, 0, 1);
+    let mut weak = Unit::new("第187师", Side::A, 0, 1);
     // 200 人以下才算覆灭（阈值见 systems::WIPED_OUT）
     weak.strength = Fixed::from_f64_input(0.15);
     weak.max_strength = Fixed::from_int(6);
@@ -27,7 +27,7 @@ fn doomed(reform_days: u32, reform_ratio: f64) -> World {
     weak.reform_ratio = Fixed::from_f64_input(reform_ratio);
     weak.commander = sim_core::world::Commander::new("孔可权", 0.8, 0.5, 0.4, 0.6);
 
-    let strong = Unit::new("第106师团", Side::Jp, 0, 20);
+    let strong = Unit::new("第106师团", Side::B, 0, 20);
     let mut w = World::new(7, vec![p, home], vec![weak, strong]);
     // 战报走通信延迟；这个文件测的是编制，不是邮路，所以先把延迟清零。
     w.comms.transmission = 0;
@@ -126,13 +126,13 @@ fn oob_events_are_side_tagged() {
             .map(|e| e.text.clone())
             .collect()
     };
-    let cn = vis(Side::Cn);
+    let cn = vis(Side::A);
     // 将领的生死是内部消息：本方要知道，敌人不该知道
     assert!(
         cn.iter().any(|t| t.contains("全军覆没")),
         "本方应当收到覆灭与将领结局：{cn:?}"
     );
-    let jp = vis(Side::Jp);
+    let jp = vis(Side::B);
     assert!(
         !jp.iter().any(|t| t.contains("殉国") || t.contains("被俘")),
         "敌方不该知道我军团长的死活：{jp:?}"

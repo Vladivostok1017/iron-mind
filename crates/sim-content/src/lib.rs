@@ -44,6 +44,35 @@ pub struct LoadedModule {
 }
 
 impl LoadedModule {
+    /// 这个模块允许玩家扮演哪几方（去重、保序）。
+    ///
+    /// 没写 `playable_sides` 就是只能玩 `playable_side`——老模块的行为一字不变。
+    pub fn allowed_sides(&self) -> Vec<sim_core::Side> {
+        let ids = side_ids(&self.meta);
+        let mut out: Vec<sim_core::Side> = self
+            .meta
+            .playable_sides
+            .iter()
+            .filter_map(|s| side_of(s, &ids))
+            .collect();
+        if out.is_empty() {
+            // 没写 playable_sides：就只有 playable_side 一方。
+            if let Some(s) = side_of(&self.meta.playable_side, &ids) {
+                out.push(s);
+            }
+        }
+        let mut seen = Vec::new();
+        out.retain(|s| {
+            if seen.contains(s) {
+                false
+            } else {
+                seen.push(*s);
+                true
+            }
+        });
+        out
+    }
+
     /// 模块目录名。
     pub fn dir_name(&self) -> &str {
         self.meta.id.rsplit('.').next().unwrap_or(&self.meta.id)
@@ -270,24 +299,61 @@ fn terrain_of(t: TerrainDef) -> Terrain {
     }
 }
 
-fn side_of(s: SideDef) -> Side {
-    match s {
-        SideDef::Cn => Side::Cn,
-        SideDef::Jp => Side::Jp,
+/// 模块的阵营表：id 列表，**顺序即 A/B**。
+///
+/// 空着时退回老模块的默认 `["cn","jp"]`——那些模块的数据里写的就是这两个 id，
+/// 所以行为一字不变。引擎本身只认 A/B，不认识这些字符串。
+pub fn side_ids(meta: &ModuleMeta) -> Vec<String> {
+    let mut ids: Vec<String> = meta.sides.iter().map(|s| s.id.clone()).collect();
+    if ids.is_empty() {
+        ids = vec!["cn".to_string(), "jp".to_string()];
     }
+    // 只取前两个：这一版的模拟是二元的，第三方阵营不在范围内。
+    ids.truncate(2);
+    ids
+}
+
+/// 阵营 id → 内部的 A/B。没声明过的 id 返回 None（由校验器报错）。
+fn side_of(id: &SideDef, ids: &[String]) -> Option<Side> {
+    let s = id.as_str();
+    if ids.first().map(|x| x == s).unwrap_or(false) {
+        Some(Side::A)
+    } else if ids.get(1).map(|x| x == s).unwrap_or(false) {
+        Some(Side::B)
+    } else {
+        None
+    }
+}
+
+/// 内部 A/B → 阵营 id（写回 JSON 用）。
+pub fn side_id(side: Side, ids: &[String]) -> String {
+    let i = side.index() as usize;
+    ids.get(i).cloned().unwrap_or_else(|| {
+        if side == Side::A {
+            "cn".into()
+        } else {
+            "jp".into()
+        }
+    })
 }
 
 /// 把加载好的模块构建成模拟核心的 `World`。
 ///
 /// 这是浮点 → 定点的唯一转换点，之后全程定点。
 pub fn build_world(module: &LoadedModule) -> World {
+    // 阵营表：这一仗有哪两方（顺序即 A/B）。后面所有 id→Side 的换算都用它。
+    let ids = side_ids(&module.meta);
     // 按 id 排序，保证索引与 id 一致
     let mut defs: Vec<&ProvinceDef> = module.map.provinces.iter().collect();
     defs.sort_by_key(|p| p.id);
 
     let mut provinces = Vec::with_capacity(defs.len());
     for d in defs {
-        let owner = d.owner.map(side_of).unwrap_or(Side::Cn);
+        let owner = d
+            .owner
+            .as_ref()
+            .and_then(|s| side_of(s, &ids))
+            .unwrap_or(Side::A);
         let mut p = Province::new(&d.name, terrain_of(d.terrain), owner);
         p.fort = d.fort.min(5);
         p.elev = d.elev;
@@ -319,7 +385,8 @@ pub fn build_world(module: &LoadedModule) -> World {
     // 保持 oob 中的书写顺序（也是确定性的一部分）
     for u in &module.oob.units {
         let strength_k = u.strength.round() as i32;
-        let mut unit = Unit::new(&u.name, side_of(u.side), u.position, strength_k);
+        let side = side_of(&u.side, &ids).unwrap_or(Side::A);
+        let mut unit = Unit::new(&u.name, side, u.position, strength_k);
         // 支持小数兵力
         let frac = u.strength - u.strength.round();
         if frac.abs() > 1e-9 {
@@ -414,15 +481,15 @@ pub fn build_world(module: &LoadedModule) -> World {
         }
         world.formations = forms;
     }
-    world.endings = endings_from(&module.scenario.endings);
+    world.endings = endings_from(&module.scenario.endings, &ids);
 
     // 派系（预览版）：把将领按 `faction` 归组，算好部队下标。
     if world.fx.politics {
-        build_factions(&mut world, &module.oob.factions);
+        build_factions(&mut world, &module.oob.factions, &ids);
     }
 
     // 编译模块声明的规则
-    let (rule_set, _problems) = rules_from(&module.scenario.rules);
+    let (rule_set, _problems) = rules_from(&module.scenario.rules, &ids);
     world.rules = std::sync::Arc::new(rule_set);
 
     world
@@ -472,11 +539,14 @@ pub fn features_from(
 ///
 /// 忽略的引用不报错：内容层永远可能写错（引用了不存在的派系 id），
 /// 那时候这支部队就算"无派系"，不 panic、也不影响确定性。
-fn build_factions(world: &mut World, defs: &[FactionDef]) {
+fn build_factions(world: &mut World, defs: &[FactionDef], ids: &[String]) {
     use sim_core::politics::Faction;
     let mut out: Vec<Faction> = Vec::new();
     for d in defs {
-        let side = side_of(d.side);
+        let Some(side) = side_of(&d.side, ids) else {
+            eprintln!("警告：派系 {} 的 side 没在 module.sides 里声明，已忽略", d.id);
+            continue;
+        };
         let f = Faction::new(
             &d.id,
             &d.name,
@@ -503,7 +573,7 @@ fn build_factions(world: &mut World, defs: &[FactionDef]) {
 ///
 /// 指标名写错不 panic：整条子句被丢掉，并在 `problems` 里留一句。
 /// 内容层永远可能写错，引擎不该因此崩掉整局。
-pub fn endings_from(defs: &[EndingDef]) -> Vec<sim_core::endings::Ending> {
+pub fn endings_from(defs: &[EndingDef], ids: &[String]) -> Vec<sim_core::endings::Ending> {
     use sim_core::endings::{Clause, Cmp, Ending, Metric};
 
     let mut out = Vec::new();
@@ -541,7 +611,7 @@ pub fn endings_from(defs: &[EndingDef]) -> Vec<sim_core::endings::Ending> {
             };
             clauses.push(Clause {
                 metric,
-                side: c.side.map(side_of),
+                side: c.side.as_ref().and_then(|s| side_of(s, ids)),
                 cmp,
                 // 省略 value 时按 metric 给默认：holds_province 是 0/1 量纲，
                 // 缺省 0.0 会让 `>= 0` 恒真（淞沪模块第 1 天就结束的原因）。
@@ -698,7 +768,7 @@ mod tests {
 ///
 /// 遇到写错的条目时**跳过并收集警告**，不整体失败——
 /// 一条规则写错不该让整个战役装不进去。
-pub fn rules_from(defs: &[RuleDef]) -> (sim_core::RuleSet, Vec<String>) {
+pub fn rules_from(defs: &[RuleDef], ids: &[String]) -> (sim_core::RuleSet, Vec<String>) {
     use sim_core::{Phase, Rule};
 
     let mut rules = Vec::new();
@@ -714,7 +784,7 @@ pub fn rules_from(defs: &[RuleDef]) -> (sim_core::RuleSet, Vec<String>) {
             PhaseDef::PostTick => Phase::PostTick,
         };
 
-        let when = match condition_from(&d.when) {
+        let when = match condition_from(&d.when, ids) {
             Ok(c) => c,
             Err(e) => {
                 problems.push(format!("规则 {} 的条件无效：{}", d.id, e));
@@ -770,15 +840,17 @@ fn kind_from(s: &str) -> Result<sim_core::UnitKind, String> {
     }
 }
 
-fn side_from(s: &str) -> Result<sim_core::Side, String> {
-    match s {
-        "cn" => Ok(sim_core::Side::Cn),
-        "jp" => Ok(sim_core::Side::Jp),
-        other => Err(format!("未知阵营 `{other}`")),
-    }
+/// 阵营 id（字符串）→ 内部的 A/B，按模块声明的顺序。
+fn side_from(s: &str, ids: &[String]) -> Result<sim_core::Side, String> {
+    side_of(&SideDef::new(s), ids).ok_or_else(|| {
+        format!(
+            "未知阵营 `{s}`：这个模块声明的是 {}",
+            ids.join(" / ")
+        )
+    })
 }
 
-fn condition_from(c: &ConditionDef) -> Result<sim_core::Condition, String> {
+fn condition_from(c: &ConditionDef, ids: &[String]) -> Result<sim_core::Condition, String> {
     use sim_core::Condition as C;
     Ok(match c {
         ConditionDef::Always => C::Always,
@@ -786,23 +858,23 @@ fn condition_from(c: &ConditionDef) -> Result<sim_core::Condition, String> {
         ConditionDef::All(v) => {
             let mut out = Vec::new();
             for x in v {
-                out.push(condition_from(x)?);
+                out.push(condition_from(x, ids)?);
             }
             C::All(out)
         }
         ConditionDef::Any(v) => {
             let mut out = Vec::new();
             for x in v {
-                out.push(condition_from(x)?);
+                out.push(condition_from(x, ids)?);
             }
             C::Any(out)
         }
-        ConditionDef::Not(x) => C::Not(Box::new(condition_from(x)?)),
+        ConditionDef::Not(x) => C::Not(Box::new(condition_from(x, ids)?)),
         ConditionDef::Terrain(s) => C::ProvinceTerrain(terrain_from(s)?),
         ConditionDef::UnitKind(s) => C::UnitKindIs(kind_from(s)?),
         ConditionDef::StrengthBelow(r) => C::StrengthBelow(Fixed::from_f64_input(*r)),
-        ConditionDef::ProvinceOwner(s) => C::ProvinceOwner(side_from(s)?),
-        ConditionDef::Side(s) => C::UnitSide(side_from(s)?),
+        ConditionDef::ProvinceOwner(s) => C::ProvinceOwner(side_from(s, ids)?),
+        ConditionDef::Side(s) => C::UnitSide(side_from(s, ids)?),
         ConditionDef::InCombat => C::InCombat,
     })
 }

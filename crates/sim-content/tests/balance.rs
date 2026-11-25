@@ -19,7 +19,10 @@ fn meta(playable: SideDef) -> ModuleMeta {
         description: String::new(),
         engine: EngineReq { min: "0.1.0".into(), max: None },
         content_schema: 1,
+        // 兵力对比只关心"可玩方 vs 另一方"，不声明阵营名字（引擎默认 cn/jp）
+        sides: Vec::new(),
         playable_side: playable,
+        playable_sides: Vec::new(),
         // 兵力对比与敌方有没有统帅部无关，这里不声明
         hq: None,
         scale: ScaleDef::Theater,
@@ -93,18 +96,18 @@ fn build(cn: f64, jp: f64) -> Vec<String> {
         bbox: None,
         projection: None,
         provinces: vec![
-            prov(0, "甲", SideDef::Cn, &[1], true),
-            prov(1, "乙", SideDef::Jp, &[0], true),
+            prov(0, "甲", SideDef::new("cn"), &[1], true),
+            prov(1, "乙", SideDef::new("jp"), &[0], true),
         ],
     };
     let oob = OobDef {
         factions: Vec::new(),
         units: vec![
-            unit("cn-1", SideDef::Cn, cn, 0),
-            unit("jp-1", SideDef::Jp, jp, 1),
+            unit("cn-1", SideDef::new("cn"), cn, 0),
+            unit("jp-1", SideDef::new("jp"), jp, 1),
         ],
     };
-    match from_parts(meta(SideDef::Cn), scenario(), map, oob) {
+    match from_parts(meta(SideDef::new("cn")), scenario(), map, oob) {
         Ok(m) => m.warnings.iter().map(|i| i.code.to_string()).collect(),
         Err(LoadError::Validation { issues, .. }) => {
             issues.iter().map(|i| i.code.to_string()).collect()

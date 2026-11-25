@@ -70,15 +70,15 @@ impl Clause {
         let actual = match self.metric {
             Metric::Day => w.tick as f64,
             Metric::Provinces => {
-                let s = self.side.unwrap_or(Side::Cn);
+                let s = self.side.unwrap_or(Side::A);
                 w.provinces.iter().filter(|p| p.owner == s).count() as f64
             }
             Metric::Strength => {
-                let s = self.side.unwrap_or(Side::Cn);
+                let s = self.side.unwrap_or(Side::A);
                 w.total_strength(s).to_display_f64()
             }
             Metric::Losses => {
-                let s = self.side.unwrap_or(Side::Cn);
+                let s = self.side.unwrap_or(Side::A);
                 w.units
                     .iter()
                     .filter(|u| u.side == s)
@@ -86,21 +86,21 @@ impl Clause {
                     .sum()
             }
             Metric::UnitsAlive => {
-                let s = self.side.unwrap_or(Side::Cn);
+                let s = self.side.unwrap_or(Side::A);
                 w.units
                     .iter()
                     .filter(|u| u.side == s && u.in_being())
                     .count() as f64
             }
             Metric::CommandersLost => {
-                let s = self.side.unwrap_or(Side::Cn);
+                let s = self.side.unwrap_or(Side::A);
                 w.units
                     .iter()
                     .filter(|u| u.side == s && u.commander.fate == crate::world::Fate::Killed)
                     .count() as f64
             }
             Metric::HoldsProvince => {
-                let s = self.side.unwrap_or(Side::Cn);
+                let s = self.side.unwrap_or(Side::A);
                 let name = self.province.as_deref().unwrap_or("");
                 let held = w
                     .provinces
@@ -182,32 +182,40 @@ pub fn evaluate(w: &World) -> Option<Outcome> {
 }
 
 /// 给玩家看的几个数：这些是"为什么是这个结局"的依据。
+///
+/// 标签里**不写任何国名/阵营名**——引擎不知道这一仗是谁在打。
+/// 用位置记号 `A方`/`B方`（= 模块 `sides` 里的第 1、2 个），
+/// 由界面在显示前换成模块给这一方起的名字。
 fn key_metrics(w: &World) -> Vec<(String, f64)> {
-    let cn_prov = w.provinces.iter().filter(|p| p.owner == Side::Cn).count();
-    let jp_prov = w.provinces.iter().filter(|p| p.owner == Side::Jp).count();
-    let cn_loss: f64 = w
+    let a_prov = w.provinces.iter().filter(|p| p.owner == Side::A).count();
+    let b_prov = w.provinces.iter().filter(|p| p.owner == Side::B).count();
+    let a_loss: f64 = w
         .units
         .iter()
-        .filter(|u| u.side == Side::Cn)
+        .filter(|u| u.side == Side::A)
         .map(|u| u.losses.to_display_f64())
         .sum();
-    let jp_loss: f64 = w
+    let b_loss: f64 = w
         .units
         .iter()
-        .filter(|u| u.side == Side::Jp)
+        .filter(|u| u.side == Side::B)
         .map(|u| u.losses.to_display_f64())
         .sum();
-    let cn_alive = w.units.iter().filter(|u| u.side == Side::Cn && u.in_being()).count();
-    let jp_alive = w.units.iter().filter(|u| u.side == Side::Jp && u.in_being()).count();
+    let a_alive = w.units.iter().filter(|u| u.side == Side::A && u.in_being()).count();
+    let b_alive = w.units.iter().filter(|u| u.side == Side::B && u.in_being()).count();
     vec![
         ("天数".into(), w.tick as f64),
-        ("国军控制省份".into(), cn_prov as f64),
-        ("日军控制省份".into(), jp_prov as f64),
-        ("国军兵力（千）".into(), w.total_strength(Side::Cn).to_display_f64()),
-        ("日军兵力（千）".into(), w.total_strength(Side::Jp).to_display_f64()),
-        ("国军伤亡（千）".into(), cn_loss),
-        ("日军伤亡（千）".into(), jp_loss),
-        ("国军尚存番号".into(), cn_alive as f64),
-        ("日军尚存番号".into(), jp_alive as f64),
+        (format!("{SIDE_A_LABEL}控制省份"), a_prov as f64),
+        (format!("{SIDE_B_LABEL}控制省份"), b_prov as f64),
+        (format!("{SIDE_A_LABEL}兵力（千）"), w.total_strength(Side::A).to_display_f64()),
+        (format!("{SIDE_B_LABEL}兵力（千）"), w.total_strength(Side::B).to_display_f64()),
+        (format!("{SIDE_A_LABEL}伤亡（千）"), a_loss),
+        (format!("{SIDE_B_LABEL}伤亡（千）"), b_loss),
+        (format!("{SIDE_A_LABEL}尚存番号"), a_alive as f64),
+        (format!("{SIDE_B_LABEL}尚存番号"), b_alive as f64),
     ]
 }
+
+/// 结局指标里的位置记号。界面拿它去换模块声明的阵营名。
+pub const SIDE_A_LABEL: &str = "A方";
+pub const SIDE_B_LABEL: &str = "B方";

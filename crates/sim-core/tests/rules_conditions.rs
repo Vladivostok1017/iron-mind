@@ -12,14 +12,14 @@ use sim_core::world::{Order, Province, Terrain, Unit};
 use sim_core::{systems, Fixed, Side, World};
 
 fn setup() -> World {
-    let a = Province::new("A", Terrain::Urban, Side::Cn)
+    let a = Province::new("A", Terrain::Urban, Side::A)
         .with_neighbors(&[1])
         .as_source();
-    let b = Province::new("B", Terrain::Urban, Side::Jp).with_neighbors(&[0]);
-    let mut cn = Unit::new("cn", Side::Cn, 0, 10);
+    let b = Province::new("B", Terrain::Urban, Side::B).with_neighbors(&[0]);
+    let mut cn = Unit::new("cn", Side::A, 0, 10);
     cn.manual = true;
     cn.order = Order::Hold;
-    let mut jp = Unit::new("jp", Side::Jp, 0, 10);
+    let mut jp = Unit::new("jp", Side::B, 0, 10);
     jp.manual = true;
     jp.order = Order::Hold;
     World::new(5, vec![a, b], vec![cn, jp])
@@ -49,7 +49,7 @@ fn one_day(mut w: World) -> (f64, f64) {
 fn side_condition_only_hits_one_side() {
     let control = one_day(setup());
     let mut ruled = setup();
-    with_rule(&mut ruled, Condition::UnitSide(Side::Cn));
+    with_rule(&mut ruled, Condition::UnitSide(Side::A));
     let got = one_day(ruled);
     assert!(got.0 < control.0 - 1e-6, "国军应该掉兵：{} vs 对照 {}", got.0, control.0);
     assert!((got.1 - control.1).abs() < 1e-6, "日军不该被这条规则影响");
@@ -89,7 +89,7 @@ fn combinations_work() {
     let mut ruled = setup();
     with_rule(
         &mut ruled,
-        Condition::All(vec![Condition::UnitSide(Side::Cn), Condition::InCombat]),
+        Condition::All(vec![Condition::UnitSide(Side::A), Condition::InCombat]),
     );
     let got = one_day(ruled);
     assert!(got.0 < control.0 - 1e-6, "国军应该掉兵");

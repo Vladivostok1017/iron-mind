@@ -13,34 +13,34 @@ use sim_core::world::{Order, Province, Side, Terrain, Unit, UnitKind, World};
 
 /// 一点在中间，三个省围着它：1 是国军地面部队，2、3 是日军。
 fn star() -> World {
-    let mut a = Province::new("基地", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("基地", Terrain::Plain, Side::A);
     a.neighbors = vec![1, 2, 3];
     a.is_supply_source = true;
-    let mut b = Province::new("我方阵地", Terrain::Plain, Side::Cn);
+    let mut b = Province::new("我方阵地", Terrain::Plain, Side::A);
     b.neighbors = vec![0];
     b.is_supply_source = true;
-    let mut c = Province::new("敌甲", Terrain::Plain, Side::Jp);
+    let mut c = Province::new("敌甲", Terrain::Plain, Side::B);
     c.neighbors = vec![0, 4];
     c.is_supply_source = true;
-    let mut d = Province::new("敌乙", Terrain::Plain, Side::Jp);
+    let mut d = Province::new("敌乙", Terrain::Plain, Side::B);
     d.neighbors = vec![0, 4];
     d.is_supply_source = true;
     // 敌方后方：让 2、3 号省不算"被合围"。
     // （合围会把补给打成 0，两位守军会同时饿掉兵，这个测试就测不出空袭了。）
-    let mut e = Province::new("敌后方", Terrain::Plain, Side::Jp);
+    let mut e = Province::new("敌后方", Terrain::Plain, Side::B);
     e.neighbors = vec![2, 3];
     e.is_supply_source = true;
 
-    let mut air = Unit::new("某飞行团", Side::Cn, 0, 1);
+    let mut air = Unit::new("某飞行团", Side::A, 0, 1);
     air.kind = UnitKind::Air;
     air.recon_radius = 2;
     air.strike_power = sim_core::Fixed::ratio(35, 100);
 
     let units = vec![
         air,
-        Unit::new("我军", Side::Cn, 1, 10),
-        Unit::new("敌甲队", Side::Jp, 2, 6),
-        Unit::new("敌乙队", Side::Jp, 3, 6),
+        Unit::new("我军", Side::A, 1, 10),
+        Unit::new("敌甲队", Side::B, 2, 6),
+        Unit::new("敌乙队", Side::B, 3, 6),
     ];
     let mut w = World::new(1, vec![a, b, c, d, e], units);
     // 地面部队全部钉住：这个测试测的是空军，不是规则 AI 的调度。
@@ -121,20 +121,20 @@ fn air_reports_what_it_hit() {
 #[test]
 fn fleet_moves_along_water_and_shells_the_shore() {
     // 岸上省 0 —— 水道 1 —— 水道 2
-    let mut shore = Province::new("江岸", Terrain::Plain, Side::Cn);
+    let mut shore = Province::new("江岸", Terrain::Plain, Side::A);
     shore.neighbors = vec![1];
-    let mut w1 = Province::new("长江·上", Terrain::Water, Side::Cn);
+    let mut w1 = Province::new("长江·上", Terrain::Water, Side::A);
     w1.neighbors = vec![0, 2];
-    let mut w2 = Province::new("长江·下", Terrain::Water, Side::Cn);
+    let mut w2 = Province::new("长江·下", Terrain::Water, Side::A);
     w2.neighbors = vec![1];
 
-    let mut ship = Unit::new("某战队", Side::Jp, 2, 3);
+    let mut ship = Unit::new("某战队", Side::B, 2, 3);
     ship.kind = UnitKind::Naval;
 
     let mut w = World::new(1, vec![shore, w1, w2], vec![ship]);
     // 舰队在上游时，江岸战斗拿不到支援
     assert_eq!(
-        sim_core::systems::naval_support(&w, 0, Side::Jp).to_display_f64(),
+        sim_core::systems::naval_support(&w, 0, Side::B).to_display_f64(),
         1.0
     );
 
@@ -144,7 +144,7 @@ fn fleet_moves_along_water_and_shells_the_shore() {
     sim_core::run_ticks(&mut w, 1);
     assert_eq!(w.units[0].position, 1, "舰队应当沿水道移动");
 
-    let b = sim_core::systems::naval_support(&w, 0, Side::Jp).to_display_f64();
+    let b = sim_core::systems::naval_support(&w, 0, Side::B).to_display_f64();
     assert!(b > 1.0, "到位后应当给江岸战斗加成（实际 ×{b}）");
 }
 

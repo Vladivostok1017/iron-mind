@@ -18,15 +18,15 @@ fn fx_ammo() -> Features {
 /// 为什么不是两省：两省图上，双方各自的邻省全是敌人，`is_encircled` 会把
 /// 两边都判成被围，补给同时归零——那样测的就不是弹药而是断粮了。
 fn line(fx: Features) -> World {
-    let a = Province::new("A", Terrain::Plain, Side::Cn)
+    let a = Province::new("A", Terrain::Plain, Side::A)
         .with_neighbors(&[1])
         .as_source();
-    let b = Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0, 2]);
-    let c = Province::new("C", Terrain::Plain, Side::Jp).with_neighbors(&[1]);
-    let mut cn = Unit::new("1st", Side::Cn, 1, 10);
+    let b = Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0, 2]);
+    let c = Province::new("C", Terrain::Plain, Side::B).with_neighbors(&[1]);
+    let mut cn = Unit::new("1st", Side::A, 1, 10);
     cn.order = Order::Attack(2);
     cn.manual = true; // AI 不接管：这里测的是玩家下的命令
-    let mut jp = Unit::new("2nd", Side::Jp, 2, 10);
+    let mut jp = Unit::new("2nd", Side::B, 2, 10);
     jp.order = Order::Hold;
     jp.manual = true;
     World::new(11, vec![a, b, c], vec![cn, jp]).with_features(fx)
@@ -97,12 +97,12 @@ fn ammo_floor_still_fights_but_weaker() {
 
 #[test]
 fn armored_units_burn_fuel_when_they_move() {
-    let a = Province::new("A", Terrain::Plain, Side::Cn)
+    let a = Province::new("A", Terrain::Plain, Side::A)
         .with_neighbors(&[1])
         .as_source();
-    let b = Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0, 2]);
-    let c = Province::new("C", Terrain::Plain, Side::Cn).with_neighbors(&[1]);
-    let mut tank = Unit::new("tank", Side::Cn, 0, 5);
+    let b = Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0, 2]);
+    let c = Province::new("C", Terrain::Plain, Side::A).with_neighbors(&[1]);
+    let mut tank = Unit::new("tank", Side::A, 0, 5);
     tank.kind = UnitKind::Armor;
     tank.fuel_burn = Fixed::ratio(15, 100);
     tank.order = Order::Move(2);
@@ -121,12 +121,12 @@ fn armored_units_burn_fuel_when_they_move() {
 #[test]
 fn no_fuel_no_movement_when_cut_off() {
     // 断补给的装甲：燃料补不上来，烧干之后就动不了。
-    let a = Province::new("A", Terrain::Plain, Side::Jp)
+    let a = Province::new("A", Terrain::Plain, Side::B)
         .with_neighbors(&[1])
         .as_source();
-    let b = Province::new("B", Terrain::Plain, Side::Jp).with_neighbors(&[0, 2]);
-    let c = Province::new("C", Terrain::Plain, Side::Jp).with_neighbors(&[1]);
-    let mut tank = Unit::new("tank", Side::Cn, 0, 5);
+    let b = Province::new("B", Terrain::Plain, Side::B).with_neighbors(&[0, 2]);
+    let c = Province::new("C", Terrain::Plain, Side::B).with_neighbors(&[1]);
+    let mut tank = Unit::new("tank", Side::A, 0, 5);
     tank.kind = UnitKind::Armor;
     tank.fuel_burn = Fixed::ratio(15, 100);
     tank.fuel = Fixed::ZERO;

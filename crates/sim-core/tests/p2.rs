@@ -11,23 +11,23 @@ use sim_core::Fixed;
 
 /// 一段水道 + 两岸，双方各一支舰队。
 fn naval() -> World {
-    let mut shore = Province::new("江岸", Terrain::Plain, Side::Cn);
+    let mut shore = Province::new("江岸", Terrain::Plain, Side::A);
     shore.is_supply_source = true;
     shore.neighbors = vec![1];
-    let mut river = Province::new("长江·某段", Terrain::Water, Side::Cn);
+    let mut river = Province::new("长江·某段", Terrain::Water, Side::A);
     river.neighbors = vec![0, 2];
     river.is_supply_source = true;
     // 日军控制的下一段水道：给日军舰队一条补给线。
     // 没有它，日军舰队会被"合围"打成补给 0 → 战斗力 0 → 只能挨打不能还手。
-    let mut lower = Province::new("长江·下游", Terrain::Water, Side::Jp);
+    let mut lower = Province::new("长江·下游", Terrain::Water, Side::B);
     lower.neighbors = vec![1];
     lower.is_supply_source = true;
 
-    let mut cn = Unit::new("海军炮艇队", Side::Cn, 1, 2);
+    let mut cn = Unit::new("海军炮艇队", Side::A, 1, 2);
     cn.kind = UnitKind::Naval;
     cn.manual = true;
     cn.order = Order::Hold;
-    let mut jp = Unit::new("第11战队", Side::Jp, 1, 3);
+    let mut jp = Unit::new("第11战队", Side::B, 1, 3);
     jp.kind = UnitKind::Naval;
     jp.manual = true;
     jp.order = Order::Hold;
@@ -71,34 +71,34 @@ fn fleets_in_different_reaches_do_not_fight() {
 
 /// 空军 + 一个敌军目标。
 fn air_war(enemy_air: Option<f64>) -> World {
-    let mut base = Province::new("机场", Terrain::Plain, Side::Cn);
+    let mut base = Province::new("机场", Terrain::Plain, Side::A);
     base.is_supply_source = true;
     base.neighbors = vec![1];
-    let mut target = Province::new("敌阵地", Terrain::Plain, Side::Jp);
+    let mut target = Province::new("敌阵地", Terrain::Plain, Side::B);
     target.is_supply_source = true;
     target.neighbors = vec![0, 2];
     // 再往南两跳：给"行军纵队"测试留出路程。
     // 否则一个 tick 就走到头，命令被清成固守，测不出"在路上"。
-    let mut mid = Province::new("敌中途", Terrain::Plain, Side::Jp);
+    let mut mid = Province::new("敌中途", Terrain::Plain, Side::B);
     mid.neighbors = vec![1, 3];
-    let mut rear = Province::new("敌后方", Terrain::Plain, Side::Jp);
+    let mut rear = Province::new("敌后方", Terrain::Plain, Side::B);
     rear.neighbors = vec![2];
     rear.is_supply_source = true;
 
-    let mut air = Unit::new("第3飞行团", Side::Cn, 0, 1);
+    let mut air = Unit::new("第3飞行团", Side::A, 0, 1);
     air.kind = UnitKind::Air;
     air.recon_radius = 2;
     air.strike_power = Fixed::ratio(35, 100);
     // 制空权测试要让空军自己占优势方
-    air.side = Side::Cn;
+    air.side = Side::A;
 
-    let mut ground = Unit::new("敌守军", Side::Jp, 1, 10);
+    let mut ground = Unit::new("敌守军", Side::B, 1, 10);
     ground.manual = true;
     ground.order = Order::Hold;
 
     let mut w = World::new(5, vec![base, target, mid, rear], vec![air, ground]);
     if let Some(power) = enemy_air {
-        let mut foe = Unit::new("敌飞行团", Side::Jp, 1, 1);
+        let mut foe = Unit::new("敌飞行团", Side::B, 1, 1);
         foe.kind = UnitKind::Air;
         foe.recon_radius = 1;
         foe.strike_power = Fixed::from_f64_input(power);
@@ -152,15 +152,15 @@ fn marching_columns_are_easier_to_bomb() {
 fn railway_carries_supply_further() {
     // 0(补给源) — 1(普通) — 2(远端)
     let build = |rail: bool| {
-        let mut a = Province::new("后方", Terrain::Plain, Side::Cn);
+        let mut a = Province::new("后方", Terrain::Plain, Side::A);
         a.is_supply_source = true;
         a.neighbors = vec![1];
-        let mut b = Province::new("中间", Terrain::Plain, Side::Cn);
+        let mut b = Province::new("中间", Terrain::Plain, Side::A);
         b.neighbors = vec![0, 2];
         b.rail = rail;
-        let mut c = Province::new("前线", Terrain::Plain, Side::Cn);
+        let mut c = Province::new("前线", Terrain::Plain, Side::A);
         c.neighbors = vec![1];
-        let mut u = Unit::new("前线师", Side::Cn, 2, 8);
+        let mut u = Unit::new("前线师", Side::A, 2, 8);
         u.supply_reach = Fixed::ZERO;
         u.manual = true;
         u.order = Order::Hold;
@@ -180,14 +180,14 @@ fn railway_carries_supply_further() {
 #[test]
 fn river_carries_supply() {
     // 补给源在江对岸的水道省：以前水道被直接跳过，根本送不过去
-    let mut a = Province::new("后方", Terrain::Plain, Side::Cn);
+    let mut a = Province::new("后方", Terrain::Plain, Side::A);
     a.is_supply_source = true;
     a.neighbors = vec![1];
-    let mut river = Province::new("长江·某段", Terrain::Water, Side::Cn);
+    let mut river = Province::new("长江·某段", Terrain::Water, Side::A);
     river.neighbors = vec![0, 2];
-    let mut c = Province::new("前线", Terrain::Plain, Side::Cn);
+    let mut c = Province::new("前线", Terrain::Plain, Side::A);
     c.neighbors = vec![1];
-    let mut u = Unit::new("前线师", Side::Cn, 2, 8);
+    let mut u = Unit::new("前线师", Side::A, 2, 8);
     u.supply_reach = Fixed::ZERO;
     u.manual = true;
     u.order = Order::Hold;

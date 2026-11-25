@@ -1499,6 +1499,25 @@ function el(tag, attrs, parent) {
 // 顶栏不写死国名与战区名：那是**模块的内容**，不是引擎的。
 // 引擎只负责把模块自己声明的名字显示出来——否则换一场战役，
 // 左上角还挂着上一场仗的番号。
+// 阵营 id → 人类可读的名字。
+//
+// 名字是**模块给的**（"第九战区"/"第11军"/"联邦军"）：引擎只认 A/B 两个位置，
+// 界面也不该知道"国军/日军"这种叫法——那是某一仗的内容，不是框架的常识。
+//
+// 关键：**必须按模块查**。不同模块的 `cn` 不是一回事（一仗里是守军，
+// 另一仗里可能是北军），做成全局映射会让最后加载的那个模块把所有战役的
+// 称呼都覆盖掉。
+let MODS = [];
+function curModule() {
+  return MODS.find((m) => m.current) || MODS[0] || null;
+}
+function sideName(id, m) {
+  if (!id) return "";
+  const mod = m || curModule();
+  const hit = ((mod && mod.sides) || []).find((s) => s && s.id === id);
+  return (hit && hit.name) || String(id);
+}
+
 function paintTop(m) {
   if (!m) return;
   const nm = (m.name || "钢心").trim();
@@ -1507,7 +1526,9 @@ function paintTop(m) {
   if ($("t-sub")) {
     const bits = [];
     if (m.scale) bits.push(m.scale);
-    if (m.playable_side) bits.push("扮演 " + String(m.playable_side).toUpperCase());
+    // 可以选阵营：显示"你指挥的是哪一边"，而不是模块的默认方。
+    const side = (S && S.player) || m.playable_side;
+    if (side) bits.push("指挥" + sideName(side, m));
     if (m.version) bits.push("v" + m.version);
     $("t-sub").textContent = bits.join(" · ") || "模块";
   }
@@ -1564,6 +1585,7 @@ async function loadModules() {
     const j = await (await fetch("/api/modules")).json();
     sel.innerHTML = "";
     const list = j.modules || [];
+    MODS = list;
     paintTop(list.find((m) => m.current) || list[0]);
     for (const m of list) {
       const o = document.createElement("option");
@@ -2970,7 +2992,7 @@ const Home = (() => {
     const bits = [];
     if (cur && cur.scale) bits.push(cur.scale);
     if (cur && cur.version) bits.push("v" + cur.version);
-    if (cur && cur.playable_side) bits.push("扮演 " + String(cur.playable_side).toUpperCase());
+    if (cur && cur.playable_side) bits.push("扮演 " + sideName(cur.playable_side, cur));
     if ($("hc-meta")) $("hc-meta").textContent = bits.join(" · ") || "—";
     if ($("hc-desc")) $("hc-desc").textContent = (cur && cur.description) || "这个模块没有写描述。";
     if ($("hb-roots")) {
@@ -3014,8 +3036,24 @@ const Home = (() => {
       const row = Dlg.h("div", "dg-row", list);
       Dlg.h("span", "r-main", row, x.name + (x.scale ? "（" + x.scale + "）" : ""));
       Dlg.h("span", "r-dim", row, shortPath(x.path));
-      Dlg.h("span", "r-act", row, x.current ? "当前" : "开始");
-      row.addEventListener("click", () => startModule(x.path));
+      // 能挑阵营的模块：一方一个按钮，写模块给这一方起的名字。
+      // 只给一方的模块保持原来的"开始"，不多一步。
+      const sides = (x.sides || []).filter((s) => s && s.id);
+      if (sides.length > 1) {
+        const act = Dlg.h("span", "r-act", row, "");
+        sides.forEach((s, i) => {
+          const b = document.createElement("button");
+          b.className = "btn" + (i === 0 ? " primary" : "");
+          b.style.marginLeft = "6px";
+          b.textContent = "作为" + (s.name || s.id);
+          b.addEventListener("click", (ev) => { ev.stopPropagation(); startModule(x.path, s.id); });
+          act.appendChild(b);
+        });
+      } else {
+        const label = x.current ? "当前" : "开始";
+        Dlg.h("span", "r-act", row, label);
+      }
+      row.addEventListener("click", () => startModule(x.path, sides[0] ? sides[0].id : null));
     }
     Dlg.open({
       title: "新的战役", body,
@@ -3106,7 +3144,7 @@ const Home = (() => {
     inp.click();
   }
 
-  async function startModule(path) {
+  async function startModule(path, side) {
     if (S && S.tick > 0 && !confirm("换战役会丢掉当前进度（除非先存档）。继续？")) return;
     try {
       const r = await fetch("/api/module", {
@@ -3115,8 +3153,19 @@ const Home = (() => {
       });
       const j = await r.json();
       if (j.error) { toast(j.error); return; }
-      DEV_GEN = null;   // 同上：图我们自己换了，别让轮询再换一次
       S = j;
+      // 选阵营（1.1）：先装模块、再设阵营。`/api/side` 会重开这一局
+      // （两边的命令流不能混着重放），所以它必须排在模块加载之后。
+      if (side) {
+        const sr = await fetch("/api/side", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ side }),
+        });
+        const sj = await sr.json();
+        if (sj.error) { toast(sj.error); return; }
+        S = sj;
+      }
+      DEV_GEN = null;   // 同上：图我们自己换了，别让轮询再换一次
       GEO = null;
       BASEMAP = null;
       selUnit = null; curProv = null; nodeProv = null; geom = null;
@@ -3125,10 +3174,13 @@ const Home = (() => {
       if (oc) oc.classList.remove("on");
       await loadGeo();
       loadBasemap();
-      loadModules();
+      // 要等它回来：阵营名字是**按模块**查的，不刷新 MODS 就会用上一仗的名字。
+      await loadModules();
       render();
       hide();
-      toast("开新战役：" + path.split("/").pop());
+      const nm = S && S.player ? sideName(S.player) : "";
+      const who = nm ? "（指挥" + nm + "）" : "";
+      toast("开新战役：" + path.split("/").pop() + who);
     } catch (e) { toast("切换失败：连不上内核"); }
   }
 

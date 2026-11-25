@@ -10,31 +10,36 @@ use crate::hash::Hasher;
 
 /// 参战方。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// 阵营。**内核只知道有两个阵营，不知道它们是谁。**
+///
+/// 谁是「我方」、谁叫什么名字，全由模块声明（module.json 的 sides）：
+/// 一个模块可以是国军/日军，也可以是美军/日军、罗马/迦太基。
+/// 引擎只保证「两方」这件事——所有战斗、补给、情报都是二元的。
 pub enum Side {
-    Cn,
-    Jp,
+    A,
+    B,
 }
 
 impl Side {
     pub fn opponent(self) -> Self {
         match self {
-            Side::Cn => Side::Jp,
-            Side::Jp => Side::Cn,
+            Side::A => Side::B,
+            Side::B => Side::A,
         }
     }
 
     pub fn index(self) -> u32 {
         match self {
-            Side::Cn => 0,
-            Side::Jp => 1,
+            Side::A => 0,
+            Side::B => 1,
         }
     }
 
     pub fn from_index(i: usize) -> Self {
         if i == 0 {
-            Side::Cn
+            Side::A
         } else {
-            Side::Jp
+            Side::B
         }
     }
 }
@@ -1277,32 +1282,32 @@ impl World {
 
     /// 某方"在路上"的报告队列。
     pub fn pending_mut(&mut self, side: Side) -> &mut Vec<PendingReport> {        match side {
-            Side::Cn => &mut self.pending_cn,
-            Side::Jp => &mut self.pending_jp,
+            Side::A => &mut self.pending_cn,
+            Side::B => &mut self.pending_jp,
         }
     }
 
     /// 某方"在路上"的报告数。用于界面提示"有 N 份战报未到"。
     pub fn pending_count(&self, side: Side) -> usize {
         match side {
-            Side::Cn => self.pending_cn.len(),
-            Side::Jp => self.pending_jp.len(),
+            Side::A => self.pending_cn.len(),
+            Side::B => self.pending_jp.len(),
         }
     }
 
     /// 某方的情报视图（只读）。
     pub fn intel(&self, side: Side) -> &[ProvinceIntel] {
         match side {
-            Side::Cn => &self.intel_cn,
-            Side::Jp => &self.intel_jp,
+            Side::A => &self.intel_cn,
+            Side::B => &self.intel_jp,
         }
     }
 
     /// 某方的情报视图（可写）。
     pub fn intel_mut(&mut self, side: Side) -> &mut [ProvinceIntel] {
         match side {
-            Side::Cn => &mut self.intel_cn,
-            Side::Jp => &mut self.intel_jp,
+            Side::A => &mut self.intel_cn,
+            Side::B => &mut self.intel_jp,
         }
     }
 
@@ -1533,12 +1538,12 @@ mod tests {
 
     fn tiny_world() -> World {
         let provinces = vec![
-            Province::new("A", Terrain::Plain, Side::Cn)
+            Province::new("A", Terrain::Plain, Side::A)
                 .with_neighbors(&[1])
                 .as_source(),
-            Province::new("B", Terrain::Hill, Side::Cn).with_neighbors(&[0]),
+            Province::new("B", Terrain::Hill, Side::A).with_neighbors(&[0]),
         ];
-        let units = vec![Unit::new("1st", Side::Cn, 0, 1000)];
+        let units = vec![Unit::new("1st", Side::A, 0, 1000)];
         World::new(7, provinces, units)
     }
 
@@ -1565,11 +1570,11 @@ mod tests {
 
     #[test]
     fn defense_scales_with_terrain_and_fort() {
-        let plain = Province::new("p", Terrain::Plain, Side::Cn);
-        let mountain = Province::new("m", Terrain::Mountain, Side::Cn);
+        let plain = Province::new("p", Terrain::Plain, Side::A);
+        let mountain = Province::new("m", Terrain::Mountain, Side::A);
         assert!(mountain.defense_multiplier() > plain.defense_multiplier());
 
-        let fortified = Province::new("f", Terrain::Mountain, Side::Cn).with_fort(5);
+        let fortified = Province::new("f", Terrain::Mountain, Side::A).with_fort(5);
         assert!(fortified.defense_multiplier() > mountain.defense_multiplier());
     }
 }

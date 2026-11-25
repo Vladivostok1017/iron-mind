@@ -7,14 +7,14 @@ use sim_core::world::{Order, Province, Terrain, Unit};
 use sim_core::{systems, Features, Side, World};
 
 fn stage() -> World {
-    let a = Province::new("A", Terrain::Plain, Side::Cn)
+    let a = Province::new("A", Terrain::Plain, Side::A)
         .with_neighbors(&[1])
         .as_source();
-    let b = Province::new("B", Terrain::Plain, Side::Cn).with_neighbors(&[0]);
-    let mut early = Unit::new("early", Side::Cn, 0, 5);
+    let b = Province::new("B", Terrain::Plain, Side::A).with_neighbors(&[0]);
+    let mut early = Unit::new("early", Side::A, 0, 5);
     early.manual = true;
     early.order = Order::Hold;
-    let mut late = Unit::new("late", Side::Cn, 1, 5);
+    let mut late = Unit::new("late", Side::A, 1, 5);
     late.manual = true;
     late.order = Order::Hold;
     late.arrives_on = Some(2);
@@ -45,7 +45,7 @@ fn unit_is_invisible_until_its_day() {
 fn arrival_is_deferred_when_the_beachhead_is_lost() {
     let mut w = stage();
     // 登陆场落到敌人手里：部队在海上等，不顺移、不瞬移。
-    w.provinces[1].owner = Side::Jp;
+    w.provinces[1].owner = Side::B;
     for _ in 0..5 {
         systems::tick(&mut w);
     }

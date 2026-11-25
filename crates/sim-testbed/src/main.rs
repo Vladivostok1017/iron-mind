@@ -189,8 +189,8 @@ fn simulate(mut world: World, ticks: u32, verbose: bool, trace: Option<&str>) ->
                     u.strength.to_display_f64(),
                     u.supply.to_display_f64(),
                     match prov.owner {
-                        Side::Cn => "国",
-                        Side::Jp => "日",
+                        Side::A => "国",
+                        Side::B => "日",
                     },
                     target
                 );
@@ -205,10 +205,10 @@ fn simulate(mut world: World, ticks: u32, verbose: bool, trace: Option<&str>) ->
 }
 
 fn report(w: &World) {
-    let cn = w.total_strength(Side::Cn);
-    let jp = w.total_strength(Side::Jp);
-    let cn_prov = w.provinces.iter().filter(|p| p.owner == Side::Cn).count();
-    let jp_prov = w.provinces.iter().filter(|p| p.owner == Side::Jp).count();
+    let cn = w.total_strength(Side::A);
+    let jp = w.total_strength(Side::B);
+    let cn_prov = w.provinces.iter().filter(|p| p.owner == Side::A).count();
+    let jp_prov = w.provinces.iter().filter(|p| p.owner == Side::B).count();
     println!(
         "  tick {:3} | 国军 {:5.1} 千 守 {:2} 省 | 日军 {:5.1} 千 占 {:2} 省 | 存活 {}",
         w.tick,
@@ -250,8 +250,8 @@ fn report(w: &World) {
 fn print_map(w: &World) {
     for (i, p) in w.provinces.iter().enumerate() {
         let mark = match p.owner {
-            Side::Cn => "中",
-            Side::Jp => "日",
+            Side::A => "中",
+            Side::B => "日",
         };
         let unit_here: Vec<&str> = w
             .units

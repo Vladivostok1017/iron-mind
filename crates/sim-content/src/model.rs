@@ -18,21 +18,43 @@ fn default_schema() -> u32 {
     CURRENT_CONTENT_SCHEMA
 }
 
-/// 参战方。模块里用小写字串（"cn" / "jp"）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SideDef {
-    Cn,
-    Jp,
-}
+/// 参战方的一个 id。**引擎不认识具体是谁**——"cn"/"jp" 只是老模块的写法，
+/// 新模块可以写 "us"/"de"、"rome"/"carthage"，只要在 `module.json` 的 `sides`
+/// 里按顺序声明过（第 1 个是 A 方，第 2 个是 B 方）。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct SideDef(pub String);
 
 impl SideDef {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SideDef::Cn => "cn",
-            SideDef::Jp => "jp",
-        }
+    pub fn new(s: &str) -> Self {
+        SideDef(s.to_string())
     }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// 一个阵营的声明：id（数据里引用它）+ name（界面显示的名字）。
+///
+/// 为什么放在模块里而不是引擎里：引擎只保证"有两方"，谁是国军、谁是日军、
+/// 谁是美军，都是**这一仗的内容**。引擎里写死"cn/jp"就等于把一场战争
+/// 钉进了框架——那是模块该决定的事。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
+pub struct SideMeta {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// 这一方的统帅部（有人则 AI 替他下决心，无人则不成军）。
+    ///
+    /// 为什么要按方写：玩家能挑阵营，AI 就得**替另一边**指挥。
+    /// 玩家玩 A 时 AI 是 B 的司令官，玩家玩 B 时 AI 就得换成 A 的司令官——
+    /// 一个模块只写一个 `hq` 的话，换边之后 AI 会拿敌将的性格指挥我军，
+    /// 电报抬头还挂着对面的番号。
+    ///
+    /// 不写就退回顶层的 `hq`（老模块的写法：那一个就是"非玩家那一方"的司令部）。
+    #[serde(default)]
+    pub hq: Option<HqDef>,
 }
 
 /// `module.json`
@@ -49,9 +71,20 @@ pub struct ModuleMeta {
     pub engine: EngineReq,
     #[serde(default = "default_schema")]
     pub content_schema: u32,
-    /// 玩家可操作的一方。当前引擎只支持单方可玩。
+    /// 阵营声明：**这一仗有哪两方、各自叫什么**。
+    ///
+    /// 空着 = 老模块的默认（`["cn","jp"]`，显示名同 id）。写了就以你为准，
+    /// 第 1 个是 A 方、第 2 个是 B 方；引擎内部只认 A/B。
+    #[serde(default)]
+    pub sides: Vec<SideMeta>,
+    /// 玩家默认操作的一方（`sides` 里的 id）。
     #[serde(default = "default_playable")]
     pub playable_side: SideDef,
+    /// 允许玩家挑阵营时写这一段（1.1）：`["cn", "jp"]` 就是两边都能玩。
+    ///
+    /// 不写 = 只能玩 `playable_side`。引擎与 AI 不因为"谁是人"而改变模拟。
+    #[serde(default)]
+    pub playable_sides: Vec<SideDef>,
     /// 非玩家阵营的统帅部（AI 玩家）。
     ///
     /// 这是**敌方那一局的总指挥**：他有自己的战役目标、自己的性格，
@@ -76,7 +109,7 @@ pub struct ModuleMeta {
 }
 
 fn default_playable() -> SideDef {
-    SideDef::Cn
+    SideDef::new("cn")
 }
 
 /// 战役尺度。见 `ModuleMeta::scale`。

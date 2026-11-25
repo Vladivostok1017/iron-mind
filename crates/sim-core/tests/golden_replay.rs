@@ -116,8 +116,8 @@ fn simulation_terminates_with_a_winner_or_standoff() {
     let mut w = scenario::nanxun_line(GOLDEN_SEED);
     run_ticks(&mut w, GOLDEN_TICKS);
 
-    let cn = w.total_strength(Side::Cn);
-    let jp = w.total_strength(Side::Jp);
+    let cn = w.total_strength(Side::A);
+    let jp = w.total_strength(Side::B);
 
     // 不是断言谁赢，而是断言"没有崩到两边都没了"
     assert!(
@@ -130,7 +130,7 @@ fn simulation_terminates_with_a_winner_or_standoff() {
     // （八省一条直线）完全可能被一路推平——那不是 bug，是
     // "溃退—追击—再溃退"这条链跑到底的样子。所以断言改成
     // "日军占到过省"，仍然抓得住"谁也不动"这类真问题。
-    let jp_prov = w.provinces.iter().filter(|p| p.owner == Side::Jp).count();
+    let jp_prov = w.provinces.iter().filter(|p| p.owner == Side::B).count();
     // "攻占过"而不是"现在占着"：加了战线连续性（`can_step`）之后，
     // 一条八省直线上的日军可能打进去又被推回来。这不影响断言的本意——
     // 抓的是"谁也不动"这种真问题，不是某一天的旗子。

@@ -20,18 +20,18 @@ fn fx_rail() -> Features {
 ///
 /// 空军侦察半径 2，所以 B、C 都在作战半径内。
 fn line(fx: Features) -> World {
-    let a = Province::new("A", Terrain::Plain, Side::Cn)
+    let a = Province::new("A", Terrain::Plain, Side::A)
         .with_neighbors(&[1])
         .as_source();
-    let mut b = Province::new("B", Terrain::Plain, Side::Jp).with_neighbors(&[0, 2]);
+    let mut b = Province::new("B", Terrain::Plain, Side::B).with_neighbors(&[0, 2]);
     b.rail = true;
-    let mut c = Province::new("C", Terrain::Plain, Side::Jp).with_neighbors(&[1]);
+    let mut c = Province::new("C", Terrain::Plain, Side::B).with_neighbors(&[1]);
     c.rail = true;
-    let mut air = Unit::new("air", Side::Cn, 0, 1);
+    let mut air = Unit::new("air", Side::A, 0, 1);
     air.kind = UnitKind::Air;
     air.recon_radius = 2;
     air.manual = true;
-    let mut garrison = Unit::new("garrison", Side::Jp, 1, 5);
+    let mut garrison = Unit::new("garrison", Side::B, 1, 5);
     garrison.manual = true;
     World::new(5, vec![a, b, c], vec![air, garrison]).with_features(fx)
 }

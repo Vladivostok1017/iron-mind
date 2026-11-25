@@ -11,24 +11,24 @@ use sim_core::world::{Commander, Formation, Province, Side, Terrain, Unit, World
 use sim_core::Fixed;
 
 fn world() -> World {
-    let p = Province::new("战场", Terrain::Plain, Side::Cn);
-    let mut hq = Unit::new("第29军团", Side::Cn, 0, 8);
+    let p = Province::new("战场", Terrain::Plain, Side::A);
+    let mut hq = Unit::new("第29军团", Side::A, 0, 8);
     hq.formation = "第1兵团".into();
     hq.commander = Commander::new("李汉魂", 0.8, 0.5, 0.6, 0.5);
-    let mut sub = Unit::new("第187师", Side::Cn, 0, 6);
+    let mut sub = Unit::new("第187师", Side::A, 0, 6);
     sub.formation = "第29军团".into();
     sub.commander = Commander::new("孔可权", 0.8, 0.5, 0.4, 0.6);
     let mut w = World::new(1, vec![p], vec![hq, sub]);
     w.formations = vec![
         Formation {
             name: "第1兵团".into(),
-            side: Side::Cn,
+            side: Side::A,
             hq: None, // 纸面番号：没有兵团部这个单位
             units: vec![0],
         },
         Formation {
             name: "第29军团".into(),
-            side: Side::Cn,
+            side: Side::A,
             hq: Some(0), // 兵团部就是 0 号单位自己
             units: vec![0, 1],
         },

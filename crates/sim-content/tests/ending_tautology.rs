@@ -38,11 +38,16 @@ fn clause(metric: &str, province: Option<&str>, cmp: Option<&str>, value: Option
     }
 }
 
+// 阵营 id 顺序 = A/B。这组用例不关心是谁，只关心条款怎么补默认值。
+fn ids() -> Vec<String> {
+    vec!["cn".to_string(), "jp".to_string()]
+}
+
 #[test]
 fn holds_province_without_value_is_not_tautological() {
     // 不写 value 的 holds_province 必须是"确实控制着"（1.0），不再是 `>= 0`。
     let s = scen(vec![clause("holds_province", Some("松江"), None, None)]);
-    let e = sim_content::endings_from(&s.endings);
+    let e = sim_content::endings_from(&s.endings, &ids());
     assert_eq!(e.len(), 1);
     assert_eq!(e[0].clauses[0].value, 1.0, "缺省必须是 1.0，不能是 0.0");
 }
@@ -52,7 +57,7 @@ fn other_metrics_still_default_to_zero() {
     // 其余指标沿用 0.0（`provinces >= 0` 这种写法仍然"恒真"，由校验器提醒，
     // 不在转换时硬改语义——改语义会让既有模块的结局突然变严）。
     let s = scen(vec![clause("day", None, None, None)]);
-    let e = sim_content::endings_from(&s.endings);
+    let e = sim_content::endings_from(&s.endings, &ids());
     assert_eq!(e[0].clauses[0].value, 0.0);
 }
 

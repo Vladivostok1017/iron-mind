@@ -73,6 +73,8 @@ pub fn validate_all(
 
 pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
     let mut issues = Vec::new();
+    // 按模块声明的顺序遍历两方（老模块 = cn/jp）。引擎不认识它们是谁。
+    let side_list: Vec<SideDef> = crate::side_ids(meta).into_iter().map(|s| SideDef::new(&s)).collect();
 
     // ---------- 元数据 ----------
     if meta.id.trim().is_empty() {
@@ -181,11 +183,11 @@ pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
     }
 
     // ---------- 补给源 ----------
-    for side in [SideDef::Cn, SideDef::Jp] {
+    for side in &side_list {
         let has_source = map
             .provinces
             .iter()
-            .any(|p| p.supply_source && p.owner == Some(side));
+            .any(|p| p.supply_source && p.owner.as_ref() == Some(side));
         if !has_source {
             issues.push(Issue::error(
                 "map.no_supply_source",
@@ -242,7 +244,7 @@ pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
         }
         // 单位在自己没有补给源的敌省出生 → 警告
         let prov = &map.provinces[u.position as usize];
-        if prov.owner != Some(u.side) {
+        if prov.owner.as_ref().map(|s| s.as_str()) != Some(u.side.as_str()) {
             issues.push(Issue::warn(
                 "oob.starts_in_enemy_land",
                 format!("{} 初始位置 {} 不属于本方", u.name, prov.name),
@@ -250,8 +252,8 @@ pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
         }
     }
 
-    for side in [SideDef::Cn, SideDef::Jp] {
-        if !oob.units.iter().any(|u| u.side == side) {
+    for side in &side_list {
+        if !oob.units.iter().any(|u| &u.side == side) {
             issues.push(Issue::error(
                 "oob.side_without_units",
                 format!("{} 没有任何单位，无法对战", side.as_str()),
@@ -260,7 +262,7 @@ pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
     }
 
     // ---------- 连通性 ----------
-    issues.extend(check_reachability(map, oob));
+    issues.extend(check_reachability(map, oob, meta));
 
     // ---------- 尺度与作战域 ----------
     issues.extend(check_scale(map, oob, meta));
@@ -405,16 +407,18 @@ fn check_scale(map: &MapDef, oob: &OobDef, meta: &ModuleMeta) -> Vec<Issue> {
     issues
 }
 /// 从每方补给源出发，检查其控制省与单位是否可达。
-fn check_reachability(map: &MapDef, oob: &OobDef) -> Vec<Issue> {
+fn check_reachability(map: &MapDef, oob: &OobDef, meta: &ModuleMeta) -> Vec<Issue> {
     let mut issues = Vec::new();
     let n = map.provinces.len();
+    // 按模块声明的顺序遍历两方（老模块 = cn/jp）。引擎不认识它们是谁。
+    let side_list: Vec<SideDef> = crate::side_ids(meta).into_iter().map(|s| SideDef::new(&s)).collect();
 
-    for side in [SideDef::Cn, SideDef::Jp] {
+    for side in &side_list {
         let mut reachable = vec![false; n];
         let mut queue: VecDeque<u32> = VecDeque::new();
 
         for p in &map.provinces {
-            if p.supply_source && p.owner == Some(side) {
+            if p.supply_source && p.owner.as_ref() == Some(side) {
                 reachable[p.id as usize] = true;
                 queue.push_back(p.id);
             }
@@ -426,7 +430,7 @@ fn check_reachability(map: &MapDef, oob: &OobDef) -> Vec<Issue> {
                 if (nb as usize) >= n {
                     continue;
                 }
-                if map.provinces[nb as usize].owner == Some(side) && !reachable[nb as usize] {
+                if map.provinces[nb as usize].owner.as_ref() == Some(side) && !reachable[nb as usize] {
                     reachable[nb as usize] = true;
                     queue.push_back(nb);
                 }
@@ -437,7 +441,7 @@ fn check_reachability(map: &MapDef, oob: &OobDef) -> Vec<Issue> {
         let orphans: Vec<&str> = map
             .provinces
             .iter()
-            .filter(|p| p.owner == Some(side) && !reachable[p.id as usize])
+            .filter(|p| p.owner.as_ref() == Some(side) && !reachable[p.id as usize])
             .map(|p| p.name.as_str())
             .collect();
         if !orphans.is_empty() {
@@ -452,7 +456,7 @@ fn check_reachability(map: &MapDef, oob: &OobDef) -> Vec<Issue> {
         }
 
         // 单位在不可达省 → 开局即断补给
-        for u in oob.units.iter().filter(|u| u.side == side) {
+        for u in oob.units.iter().filter(|u| &u.side == side) {
             if (u.position as usize) < n && !reachable[u.position as usize] {
                 issues.push(Issue::warn(
                     "oob.unit_unreachable",

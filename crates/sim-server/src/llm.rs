@@ -761,7 +761,14 @@ pub struct HqJudgement {
     pub reason: String,
 }
 
-const HQ_SYSTEM: &str = r#"你是一支侵华日军的军司令官，正在自己的司令部里决定这一仗怎么打。
+// 统帅部的大脑：**不写任何国名、任何具体编制**。
+//
+// 这一段是引擎的一部分，而引擎不知道这一仗是谁在打——是 1938 年的华中、
+// 还是 1805 年的中欧、还是某个玩家自己编的架空战役。是哪一支军队、
+// 对面是谁、番号叫什么，全部由模块塞进用户消息里（`HqAsk`）。
+// 以前这里写着"侵华日军的军司令官"，等于把一场战争钉进了提示词：
+// 玩家选另一边时，AI 会以敌人的身份替我军下命令。
+const HQ_SYSTEM: &str = r#"你是一支军队的军司令官，正在自己的司令部里决定这一仗怎么打。
 
 你不是助手，不在回答提问。你手上有一份战役目标，有若干师团，有补给与时间。
 
@@ -769,15 +776,21 @@ const HQ_SYSTEM: &str = r#"你是一支侵华日军的军司令官，正在自�
 1. 先判断战场态势，再决定这一阶段要什么（进攻？巩固？集中到哪一点？）；
 2. 只给具体师团下**少数几条**电报（0-3 条），每条一句话，像真电报；
 3. 不要复述数字，不要写报告文学，不要自称 AI；
-4. 你的判断可以与国内大本营的期待不一致，但要说清理由；
+4. 你的判断可以与上级大本营的期待不一致，但要说清理由；
 5. 你没有无限的兵：被打残的师团不要派去攻坚。
 
 只输出一个 JSON 对象，不要代码围栏：
-{"plan":"本阶段方针，60字内","orders":[{"to":"第106师团","text":"一句话命令"}],"reason":"20-60字，你的判断依据"}"#;
+{"plan":"本阶段方针，60字内","orders":[{"to":"某师团","text":"一句话命令"}],"reason":"20-60字，你的判断依据"}"#;
 
 fn build_hq_user(a: &HqAsk) -> String {
     let mut s = String::new();
     s.push_str(&format!("你是{}，{}。\n", a.general, a.title));
+    // 你在替哪一边打——这是模块给这一方起的名字（"第九战区"/"第11军"），
+    // 不是引擎的常识。选阵营之后必须写进提示词：同一套将官、同一张地图，
+    // 换个视角就是对面，提示词里不说清，模型会照着对面的话说。
+    if !a.side.is_empty() {
+        s.push_str(&format!("你所属的一方：{}。\n", a.side));
+    }
     if !a.persona.is_empty() {
         s.push_str(&format!("你的经历与用兵习惯：{}\n", a.persona));
     }
@@ -1085,20 +1098,22 @@ impl HqDriver {
 mod hq_tests {
     use super::*;
 
+    /// 全编造的统帅部：引擎的测试**不许**依赖某一仗的真实番号——
+    /// 那正是分层要防的事（引擎里混进"这仗是谁在打"的常识）。
     fn ask() -> HqAsk {
         HqAsk {
             day: 3,
-            side: "日本".into(),
-            title: "第11军司令官".into(),
-            general: "岡村寧次".into(),
-            persona: "情报参谋出身".into(),
-            agenda: "打通南浔线".into(),
-            objectives: vec!["夺取德安".into(), "保护长江补给线".into()],
+            side: "甲集团军".into(),
+            title: "集团军司令官".into(),
+            general: "某将军".into(),
+            persona: "出身参谋，用兵谨慎".into(),
+            agenda: "打通甲城走廊".into(),
+            objectives: vec!["夺取甲城".into(), "保住乙城补给线".into()],
             units: vec![
-                ("第6师团".into(), "九江".into(), 24.0, 0.6, "固守".into(), false),
-                ("第106师团".into(), "万家岭".into(), 16.0, 0.2, "进攻".into(), true),
+                ("第1师".into(), "乙城".into(), 24.0, 0.6, "固守".into(), false),
+                ("第2师".into(), "丙岭".into(), 16.0, 0.2, "进攻".into(), true),
             ],
-            enemy: vec![("德安".into(), 20.0, "敌方控制".into())],
+            enemy: vec![("甲城".into(), 20.0, "敌方控制".into())],
             last_plan: String::new(),
         }
     }
@@ -1109,7 +1124,7 @@ mod hq_tests {
         assert!(!j.plan.is_empty(), "要有方针");
         assert!(!j.orders.is_empty(), "要有给师团的电报");
         // 被围的部队收到的是固守，不是推进
-        let encircled = j.orders.iter().find(|(to, _)| to == "第106师团");
+        let encircled = j.orders.iter().find(|(to, _)| to == "第2师");
         if let Some((_, text)) = encircled {
             assert!(text.contains("固守"), "被围的师团不该被派去推进：{text}");
         }
@@ -1118,11 +1133,12 @@ mod hq_tests {
     #[test]
     fn prompt_carries_who_he_is_and_what_he_wants() {
         let s = build_hq_user(&ask());
-        assert!(s.contains("第11军司令官"), "提示词里要有职务");
-        assert!(s.contains("夺取德安"), "提示词里要有战役目标");
-        assert!(s.contains("第106师团"), "提示词里要有麾下各部");
+        assert!(s.contains("集团军司令官"), "提示词里要有职务");
+        assert!(s.contains("你所属的一方：甲集团军"), "提示词里要写清他替哪一边打");
+        assert!(s.contains("夺取甲城"), "提示词里要有战役目标");
+        assert!(s.contains("第2师"), "提示词里要有麾下各部");
         assert!(s.contains("被围"), "被围的部队要标出来");
-        assert!(s.contains("德安"), "提示词里要有已知敌情");
+        assert!(s.contains("甲城"), "提示词里要有已知敌情");
     }
 
     #[test]

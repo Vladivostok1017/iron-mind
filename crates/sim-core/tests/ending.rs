@@ -10,19 +10,19 @@ use sim_core::world::{Order, Province, Side, Terrain, Unit, World};
 use sim_core::Fixed;
 
 fn two_province() -> World {
-    let mut a = Province::new("南昌", Terrain::Urban, Side::Cn);
+    let mut a = Province::new("南昌", Terrain::Urban, Side::A);
     a.is_supply_source = true;
     a.neighbors = vec![1];
-    let mut b = Province::new("九江", Terrain::Plain, Side::Jp);
+    let mut b = Province::new("九江", Terrain::Plain, Side::B);
     b.is_supply_source = true;
     b.neighbors = vec![0];
     // 后方：不让南昌变成"四面皆敌"的孤城（合围会把补给打成 0，整补就测不出来了）
-    let mut rear = Province::new("吉安", Terrain::Plain, Side::Cn);
+    let mut rear = Province::new("吉安", Terrain::Plain, Side::A);
     rear.is_supply_source = true;
     rear.neighbors = vec![0];
     a.neighbors = vec![1, 2];
 
-    let mut u = Unit::new("第74军", Side::Cn, 0, 10);
+    let mut u = Unit::new("第74军", Side::A, 0, 10);
     u.manual = true;
     u.order = Order::Hold;
     let mut w = World::new(1, vec![a, b, rear], vec![u]);
@@ -44,7 +44,7 @@ fn keep_provinces(value: f64) -> Ending {
         at_end_only: true,
         clauses: vec![Clause {
             metric: Metric::Provinces,
-            side: Some(Side::Cn),
+            side: Some(Side::A),
             cmp: Cmp::Ge,
             value,
             province: None,
@@ -85,7 +85,7 @@ fn early_ending_can_fire_before_the_end() {
         at_end_only: false, // 允许提前
         clauses: vec![Clause {
             metric: Metric::Provinces,
-            side: Some(Side::Cn),
+            side: Some(Side::A),
             cmp: Cmp::Le,
             value: 0.0,
             province: None,
@@ -93,9 +93,9 @@ fn early_ending_can_fire_before_the_end() {
     }];
     // 把国军那个省给日军，并在邻省留一支敌军。
     // 不留的话我方部队会在下个 tick 把它重新占回来（"邻接无敌军才占领"）。
-    w.provinces[0].owner = Side::Jp;
-    w.provinces[2].owner = Side::Jp;
-    let mut jp = Unit::new("敌一部", Side::Jp, 1, 3);
+    w.provinces[0].owner = Side::B;
+    w.provinces[2].owner = Side::B;
+    let mut jp = Unit::new("敌一部", Side::B, 1, 3);
     jp.manual = true;
     jp.order = Order::Hold;
     w.units.push(jp);
@@ -111,7 +111,7 @@ fn early_ending_can_fire_before_the_end() {
 fn end_only_ending_does_not_fire_early() {
     let mut w = two_province();
     w.endings = vec![keep_provinces(1.0)]; // at_end_only = true
-    w.provinces[0].owner = Side::Jp;
+    w.provinces[0].owner = Side::B;
     sim_core::run_ticks(&mut w, 2);
     assert!(w.outcome.is_none(), "只判期末的结局，中途条件满足也不该触发");
 }
@@ -132,9 +132,9 @@ fn rest_makes_replacements_only_when_supplied() {
 
 #[test]
 fn rest_without_supply_brings_no_replacements() {
-    let mut p = Province::new("绝地", Terrain::Plain, Side::Cn);
+    let mut p = Province::new("绝地", Terrain::Plain, Side::A);
     p.is_supply_source = false; // 没有补给源 → 补给恒 0
-    let mut u = Unit::new("残部", Side::Cn, 0, 10);
+    let mut u = Unit::new("残部", Side::A, 0, 10);
     u.strength = Fixed::from_int(4);
     u.max_strength = Fixed::from_int(10);
     u.manual = true;

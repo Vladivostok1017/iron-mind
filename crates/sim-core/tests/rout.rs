@@ -11,28 +11,28 @@ use sim_core::Fixed;
 /// 崩了的一方 + 当面之敌 + 一条退路
 fn routable(retreat_available: bool) -> World {
     // 0 前线（国军守，已崩）— 1 后方（国军空省，可选作退路）— 2 敌占
-    let mut front = Province::new("前线", Terrain::Plain, Side::Cn);
+    let mut front = Province::new("前线", Terrain::Plain, Side::A);
     front.is_supply_source = true;
     front.neighbors = if retreat_available { vec![1, 2] } else { vec![2] };
-    let mut rear = Province::new("后方", Terrain::Plain, Side::Cn);
+    let mut rear = Province::new("后方", Terrain::Plain, Side::A);
     rear.neighbors = vec![0];
-    let mut foe_prov = Province::new("敌阵地", Terrain::Plain, Side::Jp);
+    let mut foe_prov = Province::new("敌阵地", Terrain::Plain, Side::B);
     foe_prov.is_supply_source = true;
     foe_prov.neighbors = vec![0];
 
-    let mut broken = Unit::new("第187师", Side::Cn, 0, 6);
+    let mut broken = Unit::new("第187师", Side::A, 0, 6);
     broken.morale = Fixed::ratio(2, 10); // 已经崩了
     broken.manual = true;
     broken.order = Order::Hold;
 
-    let mut foe = Unit::new("第106师团", Side::Jp, 0, 12);
+    let mut foe = Unit::new("第106师团", Side::B, 0, 12);
     foe.manual = true;
     foe.order = Order::Hold;
 
     let mut w = World::new(1, vec![front, rear, foe_prov], vec![broken, foe]);
     if !retreat_available {
         // 唯一的邻省上驻着敌人 —— 这才是"四面皆敌"，不是"背后没自己的旗子"
-        let mut blocker = Unit::new("敌守备队", Side::Jp, 2, 4);
+        let mut blocker = Unit::new("敌守备队", Side::B, 2, 4);
         blocker.manual = true;
         blocker.order = Order::Hold;
         w.units.push(blocker);

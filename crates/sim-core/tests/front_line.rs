@@ -15,17 +15,17 @@ fn fx() -> Features {
 
 /// A(我方) — B(争夺中) — C(敌方)，B、C 相邻。B 有我的一个团，C 有敌人的一个团。
 fn front(flag: bool) -> World {
-    let a = Province::new("A", Terrain::Plain, Side::Cn)
+    let a = Province::new("A", Terrain::Plain, Side::A)
         .with_neighbors(&[1])
         .as_source();
-    let b = Province::new("B", Terrain::Plain, Side::Jp).with_neighbors(&[0, 2]);
-    let c = Province::new("C", Terrain::Plain, Side::Jp)
+    let b = Province::new("B", Terrain::Plain, Side::B).with_neighbors(&[0, 2]);
+    let c = Province::new("C", Terrain::Plain, Side::B)
         .with_neighbors(&[1])
         .as_source();
-    let mut mine = Unit::new("mine", Side::Cn, 1, 10); // 已经打进 B
+    let mut mine = Unit::new("mine", Side::A, 1, 10); // 已经打进 B
     mine.manual = true;
     mine.order = Order::Hold;
-    let mut foe = Unit::new("foe", Side::Jp, 2, 1); // 只剩 1 千的残部
+    let mut foe = Unit::new("foe", Side::B, 2, 1); // 只剩 1 千的残部
     foe.manual = true;
     foe.order = Order::Hold;
     let fx = if flag { fx() } else { Features::none() };
@@ -46,8 +46,8 @@ fn adjacent_friendly_units_break_the_encirclement() {
     // 把 A 改成敌省（B 的四邻都是敌人），但 A 里放一个我方部队。
     let build = |flag: bool| {
         let mut w = front(false);
-        w.provinces[0].owner = Side::Jp;
-        let mut helper = Unit::new("helper", Side::Cn, 0, 5);
+        w.provinces[0].owner = Side::B;
+        let mut helper = Unit::new("helper", Side::A, 0, 5);
         helper.manual = true;
         w.units.push(helper);
         w.fx = if flag { fx() } else { Features::none() };
@@ -69,11 +69,11 @@ fn occupation_does_not_need_every_neighbor_cleared() {
     // 打开后 B 归我。
     let mut off = front(false);
     systems::tick(&mut off);
-    assert_eq!(off.provinces[1].owner, Side::Jp, "关着：邻省有敌 → 不改归属");
+    assert_eq!(off.provinces[1].owner, Side::B, "关着：邻省有敌 → 不改归属");
 
     let mut on = front(true);
     systems::tick(&mut on);
-    assert_eq!(on.provinces[1].owner, Side::Cn, "打开：占领只看本省");
+    assert_eq!(on.provinces[1].owner, Side::A, "打开：占领只看本省");
 }
 
 #[test]
@@ -82,24 +82,24 @@ fn narrow_front_does_not_equalize_the_sides() {
     // 双方都不被围（各自都有本方邻省），所以量到的伤亡是**对射**造成的，
     // 不是断粮或饿死。
     let build = |flag: bool| {
-        let a2 = Province::new("A2", Terrain::Plain, Side::Cn)
+        let a2 = Province::new("A2", Terrain::Plain, Side::A)
             .with_neighbors(&[1])
             .as_source();
-        let a1 = Province::new("A", Terrain::Plain, Side::Cn)
+        let a1 = Province::new("A", Terrain::Plain, Side::A)
             .with_neighbors(&[0, 2])
             .as_source();
-        let mut b = Province::new("B", Terrain::Plain, Side::Jp).with_neighbors(&[1, 3]);
+        let mut b = Province::new("B", Terrain::Plain, Side::B).with_neighbors(&[1, 3]);
         // 窄阵地：capacity = 0.1×40 = 4，双方都会被截断
         let mut pos = sim_core::world::Position::new("窄正面", Terrain::Plain);
         pos.width = Fixed::ratio(1, 10);
         b.positions.push(pos);
-        let c = Province::new("C", Terrain::Plain, Side::Jp)
+        let c = Province::new("C", Terrain::Plain, Side::B)
             .with_neighbors(&[2])
             .as_source();
-        let mut big = Unit::new("big", Side::Cn, 1, 40);
+        let mut big = Unit::new("big", Side::A, 1, 40);
         big.manual = true;
         big.order = Order::Attack(2);
-        let mut small = Unit::new("small", Side::Jp, 2, 4);
+        let mut small = Unit::new("small", Side::B, 2, 4);
         small.manual = true;
         small.order = Order::Hold;
         let fx = if flag { fx() } else { Features::none() };

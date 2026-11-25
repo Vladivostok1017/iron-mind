@@ -6,7 +6,12 @@
   "description": "专门用来验证第一版发行版之后的三个实验机制：弹药与油料、铁路被炸/抢修、派系与人事。地图与番号都是编的，只为了能在十分钟内看到这四个系统各自的反应。不带 preview 块的模块不会跑这些规则。",
   "engine": { "min": "0.12.0" },
   "content_schema": 1,
+  "sides": [
+    { "id": "cn", "name": "红方" },
+    { "id": "jp", "name": "蓝方" }
+  ],
   "playable_side": "cn",
+  "playable_sides": ["cn", "jp"],
   "scale": "battle",
   "domains": ["land", "air"]
 }
