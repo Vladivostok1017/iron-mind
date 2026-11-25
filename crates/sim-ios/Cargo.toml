@@ -1,0 +1,23 @@
+[package]
+name = "sim-ios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "钢心 / Iron Mind —— iOS 外壳的 Rust 半边：进程内内核 + 给 Swift 的 C 接口"
+
+[lib]
+name = "sim_ios"
+path = "src/lib.rs"
+# staticlib 给 Xcode 链（libsim_ios.a）；rlib 让宿主上的集成测试能直接调
+# （见 tests/kernel.rs：在 macOS 上把内核真起起来、真打一次 HTTP）。
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+sim-server = { path = "../sim-server" }
+
+[build-dependencies]
+sim-bundle = { path = "../sim-bundle" }
+
+[dev-dependencies]
+# 宿主测试里用**真正的加载器**验一遍内嵌模块（不是只看文件在不在）。
+sim-content = { path = "../sim-content" }

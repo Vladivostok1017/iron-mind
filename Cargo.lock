@@ -1804,8 +1804,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "sim-bundle"
+version = "1.3.0"
+dependencies = [
+ "zip",
+]
+
+[[package]]
 name = "sim-content"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1815,11 +1822,11 @@ dependencies = [
 
 [[package]]
 name = "sim-core"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "sim-desktop"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "tao",
  "windows-sys 0.61.2",
@@ -1827,20 +1834,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-ios"
+version = "1.3.0"
+dependencies = [
+ "sim-bundle",
+ "sim-content",
+ "sim-server",
+]
+
+[[package]]
 name = "sim-mobile"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "jni",
  "ndk-context",
+ "sim-bundle",
  "sim-server",
  "tao",
  "wry",
- "zip",
 ]
 
 [[package]]
 name = "sim-server"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1850,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "sim-testbed"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "sim-content",
  "sim-core",

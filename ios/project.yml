@@ -1,0 +1,85 @@
+# project.yml —— Xcode 工程的**源文件**。
+#
+# `IronMind.xcodeproj` 是这份 yml 生成的（XcodeGen），提交进仓库，这样
+# 玩家/下一个接手的人只要装了 Xcode 就能打开、不用再装 XcodeGen。
+# 改了工程设置请改这里再跑一次 `xcodegen generate`（见 docs/25-iOS.md），
+# **不要**在 Xcode 里手改 pbxproj 之后两边不一致。
+#
+# 工程里没有一行游戏逻辑：壳是 Swift 那五个文件，内核是 cargo 编出来的
+# `libsim_ios.a`（由 preBuildScript 现场编，见 tools/build-ios-rust.sh）。
+
+name: IronMind
+
+options:
+  bundleIdPrefix: com.ironmind
+  deploymentTarget:
+    iOS: "15.4"          # 15.4 起 CSS 的 dvh 才可用（手机布局靠它撑满屏）
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "1.3.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    # cargo 要往 ../target 写东西，脚本沙箱必须关掉（Xcode 15 默认是开的）
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # 不为 bitcode 操心（Xcode 14 起已移除）
+    ENABLE_BITCODE: NO
+
+targets:
+  IronMind:
+    type: application
+    platform: iOS
+    sources:
+      - path: IronMind
+        excludes:
+          # 这两个不进编译/资源：清单由 INFOPLIST_FILE 指过去，头文件由
+          # SWIFT_OBJC_BRIDGING_HEADER 指过去。放进 sources 会被当资源拷一份，
+          # 报 "Multiple commands produce Info.plist"。
+          - "Info.plist"
+          - "IronMind-Bridging-Header.h"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ironmind.steelheart
+        PRODUCT_NAME: IronMind
+        INFOPLIST_FILE: IronMind/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_OBJC_BRIDGING_HEADER: IronMind/IronMind-Bridging-Header.h
+        TARGETED_DEVICE_FAMILY: "1,2"      # iPhone + iPad
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        # Rust 静态库：脚本每次都写同一个路径，见 tools/build-ios-rust.sh
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/../target/ios"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          # crate 叫 sim-ios，产出的是 libsim_ios.a（名字对不上就是
+          # `ld: library 'ironmind_ios' not found`，而这个报错不会告诉你在哪儿找过）
+          - "-lsim_ios"
+          # Rust std 在 Apple 平台上会摸随机数与 iconv；留着这两条，
+          # 换工具链时不会突然少符号（用不上时链接器会忽略）。
+          - "-framework"
+          - "Security"
+          - "-liconv"
+    preBuildScripts:
+      - name: 编译 Rust 内核（cargo → libsim_ios.a）
+        # 只写一行去调外部脚本：XcodeGen 会把 `path:` 的内容**整段内联**进
+        # pbxproj，那样改脚本就得重生成工程，还会在 diff 里塞几百行。
+        script: bash "$SRCROOT/../tools/build-ios-rust.sh"
+        # cargo 自己是增量的（没改就 0.1 秒返回），所以每次都跑最省心：
+        # 声明输入输出反而容易在"改了 Rust 却没重编"上栽跟头。
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+
+schemes:
+  IronMind:
+    build:
+      targets:
+        IronMind: all
+    run:
+      config: Debug
+    archive:
+      config: Release

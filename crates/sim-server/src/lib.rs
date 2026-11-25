@@ -21,6 +21,9 @@ use sim_core::world::{Order, Side, Terrain, World};
 use sim_core::Accuracy;
 use sim_content::{build_world, load_module, LoadedModule};
 
+// 出站 HTTP 单独一个模块：桌面/安卓用 curl，iOS 由外壳装一个 URLSession 传输。
+// `pub` 是给 iOS 那层（`sim-ios`）用的——它要把 Swift 的函数装进来。
+pub mod http;
 mod llm;
 
 const DEFAULT_PORT: u16 = 8899;

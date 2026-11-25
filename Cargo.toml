@@ -4,13 +4,15 @@ members = [
     "crates/sim-core",
     "crates/sim-content",
     "crates/sim-testbed",
+    "crates/sim-bundle",
     "crates/sim-server",
     "crates/sim-desktop",
     "crates/sim-mobile",
+    "crates/sim-ios",
 ]
 
 [workspace.package]
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 license = "MIT"
 

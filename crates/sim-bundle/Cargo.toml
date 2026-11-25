@@ -1,0 +1,11 @@
+[package]
+name = "sim-bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "钢心 / Iron Mind —— 外壳的 build.rs 公共部分：把战役模块打成 .imod 编进壳里"
+publish = false
+
+# 只在 build.rs 里用（[build-dependencies]），不进最终产物。
+[dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }

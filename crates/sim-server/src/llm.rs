@@ -88,6 +88,14 @@ pub fn settings_path() -> std::path::PathBuf {
     cwd
 }
 
+/// 拼出 chat/completions 的地址。`base` 末尾带不带斜杠都行——
+///
+/// 填 `https://api.deepseek.com/v1/` 的人多于不带的，以前两处重复拼字符串，
+/// 带斜杠就会得到 `//chat/completions`（多数服务端能吃，少数不吃）。
+fn chat_url(cfg: &Config) -> String {
+    format!("{}/chat/completions", cfg.base.trim_end_matches('/'))
+}
+
 /// LLM 配置。全部来自环境变量（或 settings.env）。
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -468,44 +476,8 @@ pub fn ask(cfg: &Config, a: &Ask) -> Result<Judgement, String> {
     })
     .to_string();
 
-    // 用 curl 发请求：不引第三方 HTTP 依赖；key 写进 curl 配置文件，不出现在命令行参数里。
-    let dir = std::env::temp_dir().join(format!("ironmind-llm-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("建临时目录失败：{e}"))?;
-    let body_path = dir.join("body.json");
-    let cfg_path = dir.join("curl.conf");
-    std::fs::write(&body_path, body).map_err(|e| format!("写请求失败：{e}"))?;
-    std::fs::write(
-        &cfg_path,
-        format!(
-            "url = \"{}/chat/completions\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\n",
-            cfg.base.trim_end_matches('/'),
-            cfg.key.trim()
-        ),
-    )
-    .map_err(|e| format!("写 curl 配置失败：{e}"))?;
-
-    let out = std::process::Command::new("curl")
-        .args([
-            "-s",
-            "--max-time",
-            &cfg.timeout_secs.to_string(),
-            "-K",
-            &cfg_path.to_string_lossy(),
-            "-d",
-            &format!("@{}", body_path.to_string_lossy()),
-        ])
-        .output()
-        .map_err(|e| format!("调用 curl 失败：{e}"))?;
-
-    let _ = std::fs::remove_dir_all(&dir);
-
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
-    if text.trim().is_empty() {
-        return Err(format!(
-            "模型无响应（stderr: {}）",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
+    // 发请求：传输层在 `http.rs` 里按平台选（桌面/安卓 = curl，iOS = URLSession）。
+    let text = crate::http::post(&chat_url(cfg), cfg.key.trim(), &body, cfg.timeout_secs, "llm")?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}"))?;
     if let Some(err) = v.get("error") {
@@ -891,10 +863,11 @@ pub fn ask_hq(cfg: &Config, a: &HqAsk) -> Result<HqJudgement, String> {
     Ok(HqJudgement { plan, orders, reason })
 }
 
-/// 发一次请求（司令部专用）。
-///
-/// 刻意**没有**去重构 `ask()` 里的那段 curl：那条路是跑通过了的东西，
-/// 为了少写四十行去动它不划算。两段代码都只做""拼 JSON → curl -K → 取 content""。
+// 注：`ask` 和 `hq_chat` 里原来各有一段一模一样的 curl，当时刻意没合并
+// （"跑通过了的东西别动"）。1.3 上 iOS 时不得不合——那边既没有 curl，
+// 也不许 fork/exec。现在两处都走 `http::post`，行为与错误文案一字未变。
+// 理由记在 docs/25 第 4.1 节。
+
 /// 连通性测试：用给定配置真的打一次模型。
 ///
 /// 首次设置里那个"测试连接"就是它。**强制走网络**（即使当前是 mock/本地模式），
@@ -1010,42 +983,7 @@ fn hq_chat(cfg: &Config, system: &str, user: &str, max_tokens: u32) -> Result<St
     })
     .to_string();
 
-    let dir = std::env::temp_dir().join(format!("ironmind-hq-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("建临时目录失败：{e}"))?;
-    let body_path = dir.join("body.json");
-    let cfg_path = dir.join("curl.conf");
-    std::fs::write(&body_path, body).map_err(|e| format!("写请求失败：{e}"))?;
-    std::fs::write(
-        &cfg_path,
-        format!(
-            "url = \"{}/chat/completions\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\n",
-            cfg.base.trim_end_matches('/'),
-            cfg.key.trim()
-        ),
-    )
-    .map_err(|e| format!("写 curl 配置失败：{e}"))?;
-
-    let out = std::process::Command::new("curl")
-        .args([
-            "-s",
-            "--max-time",
-            &cfg.timeout_secs.to_string(),
-            "-K",
-            &cfg_path.to_string_lossy(),
-            "-d",
-            &format!("@{}", body_path.to_string_lossy()),
-        ])
-        .output()
-        .map_err(|e| format!("调用 curl 失败：{e}"))?;
-    let _ = std::fs::remove_dir_all(&dir);
-
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
-    if text.trim().is_empty() {
-        return Err(format!(
-            "模型无响应（stderr: {}）",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
+    let text = crate::http::post(&chat_url(cfg), cfg.key.trim(), &body, cfg.timeout_secs, "hq")?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}"))?;
     if let Some(err) = v.get("error") {

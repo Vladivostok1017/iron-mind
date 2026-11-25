@@ -25,4 +25,6 @@ ndk-context = "0.1"
 
 [build-dependencies]
 # 把选定的战役模块打成 zip 塞进 .so —— 手机上不依赖任何外部文件。
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# 打包逻辑和 iOS 壳共用一份（`sim-bundle`）：两个平台对同一个模块目录
+# 必须打出字节一致的包，否则"为什么我这台手机上不一样"永远查不完。
+sim-bundle = { path = "../sim-bundle" }

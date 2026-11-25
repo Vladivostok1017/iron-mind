@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  钢心 / Iron Mind —— iOS 清单。
+
+  几个必须写对的键（每条都对应一个"不写就白屏/没反应"的坑）：
+
+  · NSAllowsLocalNetworking：页面和内核对的是 http://127.0.0.1:<port>。
+    ATS 默认只放行 https，不放行这一条 WebView 会直接白屏。
+  · UIApplicationSceneManifest + UISceneDelegateClassName：不用 storyboard，
+    窗口由 SceneDelegate 建，少一个 launch storyboard 文件。
+  · UIFileSharingEnabled / LSSupportsOpeningDocumentsInPlace：「文件」App 里能看见
+    本 App 的 Documents，玩家可以把 .imod 拖进 modules/（模块导入的另一条路）。
+  · UIRequiresFullScreen：不许 iPad 分屏。一个进程只有一份内核，两个窗口会抢端口。
+  · ITSAppUsesNonExemptEncryption：只用了系统 TLS，不是自研加密——省掉每次上传
+    构建时的出口合规问卷。
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>钢心</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+
+	<!-- 启动画面：系统只认这一份颜色，别的地方改不动。和网页底色一致，不闪白。 -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+
+	<!-- 横竖都放开。
+	     安卓那边锁横屏是**绕坑**：它对 WebView 不重排，只能一开始就横着建窗口
+	     （见 MainActivity.kt）。iOS 没这个毛病——WebKit 会自己重排，竖屏的
+	     `@media (max-width: 820px)` 那套（底栏三行 + 抽屉）本来就是为手机写的，
+	     所以两种方向都留着，顺手玩得舒服。
+	     iPhone 不要倒置（刘海在下面时安全区的算法会别扭）；iPad 允许。 -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UIStatusBarHidden</key>
+	<true/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 只放行本机回环（和 .local）。模型 API 走 https，不需要例外。
+		     局域网里 http 的自建模型（如 Ollama）会被挡：想用就把下面这条换成
+		     NSExceptionDomains 里那条具体域名，或者临时加 NSAllowsArbitraryLoads。
+		     见 docs/25-iOS.md「已知限制」。 -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>只有在你把模型地址填成本机或局域网里的服务时才需要联网。游戏本体完全离线。</string>
+
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

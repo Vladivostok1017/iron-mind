@@ -61,3 +61,17 @@ Thumbs.db
 /android/app/build/
 /android/local.properties
 /android/.cxx/
+
+# ---- iOS 构建产物 ----
+# Xcode 的中间产物
+# — tools/build-ios.sh 用 -derivedDataPath build/ios-*
+# — 平台包缺失时的 -target 回退模式会把 obj/sym 落在 ios/build/ 下
+/build/
+/ios/build/
+# 每个人的签名、断点、窗口位置都在这里面；工程本身（project.pbxproj）要入库
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+# 未签名的 .ipa / .app 在 dist/ 与 build/ 下，已被上面忽略
+*.hmap
+*.dSYM/
