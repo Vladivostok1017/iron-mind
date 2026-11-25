@@ -166,7 +166,7 @@ node imdev.mjs --module ..\nanxun-1938\nanxun_1938.imod
 | `engine.max` | 否 | 最高支持版本。不填就一直不管 |
 | `content_schema` | 否 | 模块格式版本，当前 `1`。高于引擎支持值会报 `meta.future_schema` |
 | `playable_side` | 否 | 玩家操作的一方：`cn` / `jp`，默认 `cn`。**当前只支持单方可玩** |
-| `scale` | 否 | `theater`（默认）/ `battle` / `siege` / `naval`。只影响校验严格程度 |
+| `scale` | 否 | `theater`（默认，约 35 km/省）/ `front`（正面/方面军，约 5–10 km/省，12–48 省）/ `battle` / `siege` / `naval`。只影响校验严格程度 |
 | `domains` | 否 | `["land","naval","air"]` 的子集。声明了却没有对应单位会报错/告警 |
 | `hq` | 否 | **非玩家阵营的统帅部（AI 玩家）**，见下 |
 
@@ -456,7 +456,8 @@ AI 默认"邻接有敌就进攻，没有就朝最近敌人推进"。给防守方
 "preview": {
   "ammo_fuel": true,     // 弹药与油料
   "rail_damage": true,   // 铁路可被炸断、可被抢修
-  "politics": true       // 派系与人事
+  "politics": true,      // 派系与人事
+  "front_line": true     // 连续正面模型（密集正面战役用）
 }
 ```
 
@@ -464,7 +465,7 @@ AI 默认"邻接有敌就进攻，没有就朝最近敌人推进"。给防守方
 
 1. **不写就是关。** 老模块（没有这一段）跑出来的每个字节都和定稿版本一致，
    连状态哈希都不变——旧存档、旧回放照样能验。
-2 **三个开关互相独立。** 只写 `rail_damage` 不会顺手把弹药也打开。
+2. **四个开关互相独立。** 只写 `rail_damage` 不会顺手把弹药也打开。
 3. **开了就不在"定稿平衡"里。** 界面会挂"预览版"角标，数值随时可能变。
    想做一个"正式"战役，就别开；想试新玩法，单独做一个模块。
 
@@ -479,6 +480,51 @@ AI 默认"邻接有敌就进攻，没有就朝最近敌人推进"。给防守方
 | | `commander.faction` | `oob.json` 将领 | 这个将领属于哪个派系 id |
 
 铁路被炸不需要新字段：它作用于 `map.json` 里已经声明的 `rail: true` 那些省。
+
+### `front_line`：连续正面模型（预览版）
+
+一个省 5–10 公里、战线连续的战役（淞沪、南京、台儿庄、长沙）会遇到三处只在
+"密集正面"上暴露的语义问题。`"preview": { "front_line": true }` 把三处一起换掉：
+
+| 原来的口径 | 打开后 | 为什么 |
+|---|---|---|
+| 邻省都不在我手里 → 被围（补给归零） | 邻省里有我的**地面部队**也算没断 | 战线连续时每个突出部都四邻皆敌，进攻方会自己先饿死 |
+| 占领要求目标省**和所有邻省**都没有敌人 | 只看目标省内有没有敌人 | 一个 1 千人的残部就能冻住整条战线，"逐个打穿阵地"表达不出来 |
+| 超出 `width×40` 的战力硬截成相等 | 超出部分按 30% 计入 | 硬截断会把双方战力拉平，强者优势归零（实测 effectiveness ×3 后自身伤亡率一动不动） |
+
+默认关闭：第一版发行版、南浔线、示例模块全都跑原来的语义，连状态哈希都不变。
+
+---
+
+## 5.6 迟到番号（arrivals）
+
+**没有哪一场战役是第一天全员到齐的。** 淞沪的第10军第 84 天才在金山卫登陆，
+南浔线的 74 军/桂系/川军也是中途到场。以前只能把部队事先摆在滩头上，
+等于把"登陆"变成"一开始就在那儿"。
+
+```json
+// scenario.json
+"arrivals": [
+  { "day": 48, "unit": "jp.9",  "province": "狮子林" },
+  { "day": 84, "unit": "jp.6",  "province": "杭州湾滩头" }
+]
+```
+
+| 字段 | 说明 |
+|---|---|
+| `day` | 战役第几日到场（0 = 开局就在场） |
+| `unit` | `oob.json` 里的单位 `id` |
+| `province` | 到场省**名**，必须和 `map.json` 的 `name` 一致 |
+
+也可以写简写：在 `oob.json` 的单位上加 `"arrives_on": 48`，省名取它自己的 `position`。
+
+语义（都不 panic、都不瞬移）：
+
+- 到场前这支部队**对全世界不存在**：不参战、不占堆叠、不进情报、不计入总兵力；
+- 到场当天即可参战（史实里第10军登陆当天就投入了战斗）；
+- 登陆场丢了或堆叠满了 → **顺延一天**，明天再试（部队在海上等着）；
+- 到场没有写入状态哈希，回放能复现"第 84 天在金山卫登陆"；
+- 不写 `arrivals` 的模块 = 全员开局在场，行为与以前完全一致。
 
 打开方式（复制一个现有模块改最省事）：
 
@@ -526,7 +572,7 @@ cargo run -q --release -p sim-testbed --features sim-content/strict -- --module 
     "at_end_only": true,
     "require": [
       { "metric": "provinces", "side": "cn", "cmp": "ge", "value": 50 },
-      { "metric": "holds_province", "side": "cn", "province": "德安" }
+      { "metric": "holds_province", "side": "cn", "cmp": "ge", "value": 1, "province": "德安" }
     ]
   },
   {
@@ -536,7 +582,7 @@ cargo run -q --release -p sim-testbed --features sim-content/strict -- --module 
     "priority": 5,
     "at_end_only": false,
     "require": [
-      { "metric": "holds_province", "side": "jp", "province": "德安" }
+      { "metric": "holds_province", "side": "jp", "cmp": "ge", "value": 1, "province": "德安" }
     ]
   }
 ]
@@ -559,6 +605,7 @@ cargo run -q --release -p sim-testbed --features sim-content/strict -- --module 
 |---|---|
 | `metric` | 见下表 |
 | `side` | `cn` / `jp`。`holds_province` 必须写 |
+| `value` | 阈值。**`holds_province` 必须写 `1`**：它是 0/1 量纲，省略值 + 默认 `ge` 会变成 `x >= 0`，**恒成立**——那条结局会在第 1 天命中并把战役判死（引擎现在缺省按 1.0 处理，并对恒真子句报 `ending.clause_tautology` 警告） |
 | `cmp` | `ge`（默认）/ `gt` / `le` / `lt` |
 | `value` | 阈值 |
 | `province` | 仅 `holds_province` 用：**省名，必须和 map.json 里的 `name` 完全一致** |
@@ -620,6 +667,8 @@ cargo run -q --release -p sim-testbed --features sim-content/strict -- --module 
 | `{"unit_kind": "armor"}` | 单位是装甲 |
 | `{"strength_below": 0.35}` | 兵力低于编制的 35% |
 | `{"province_owner": "cn"}` | 所在省归中方 |
+| `{"side": "cn"}` | **单位本身**属于中方（写单向机制用，例如"国军弹药不足"只影响国军） |
+| `{"in_combat": true}` | 该单位当下**真的在交战**（同省有敌方地面单位）。写"巷战只伤害正在打的部队"，不会给所有驻军按天收税 |
 | `{"all": [...]}` | 全部满足 |
 | `{"any": [...]}` | 任一满足 |
 | `{"not": {...}}` | 取反 |
@@ -788,6 +837,7 @@ JSON 没有注释语法，作者一定会想写点什么。约定：**以下划�
 | `oob.side_without_units` | Error | 某一方没有任何单位 |
 | `oob.unit_unreachable` | Warning | 某个单位开局即断补给 |
 | `balance.lopsided` | Warning | 可玩方兵力明显少于敌方 |
+| `ending.clause_tautology` | Warning | 结局子句恒成立（省略 `value`、或 `ge 0`/`le 0`）——**这条会在第 1 天命中**，几乎一定是写错了 |
 | `scale.too_few_provinces` | Warning | `battle`/`siege` 的省数太少 |
 | `scale.too_many_provinces` | Warning | `siege` 的省数太多 |
 | `scale.missing_positions` | Warning | 小尺度战役却没拆阵地 |

@@ -270,6 +270,10 @@ pub fn tick(world: &mut World) {
     let seed = world.seed;
     let now = world.tick;
 
+    // 迟到番号先到。放在最前面：这一天才到的部队应该当天就能参战，
+    // 而不是"到了但要等下一天"——史实里第10军登陆当天就投入了战斗。
+    settle_arrivals(world);
+
     use crate::rules::Phase;
 
     // 规则集的 Arc 先取出来，避免和 &mut world 的借用冲突。
@@ -323,6 +327,60 @@ pub fn tick(world: &mut World) {
             world.report(crate::world::EventKind::Rule, format!("战役结束：{}", o.name));
             world.outcome = Some(o);
         }
+    }
+}
+
+/// 让"迟到番号"到场。
+///
+/// 规则（都不 panic、都不瞬移到别处）：
+/// - 到日子了、登录场还在本方手里、堆叠没满 → 到场，当天即可参战；
+/// - 登录场丢了或挤满了 → **顺延一天**，明天再试（部队在海上等着）；
+/// - 还没到日子 → 什么都不做。
+///
+/// 未到场的部队 `is_alive()` 为假，所以补给、移动、战斗、占领、堆叠上限
+/// 全都会自动跳过它——不需要在每个系统里加判断。
+pub fn settle_arrivals(world: &mut World) {
+    if !world.has_arrivals {
+        return;
+    }
+    let now = world.tick;
+    for i in 0..world.units.len() {
+        let u = &world.units[i];
+        if u.arrived {
+            continue;
+        }
+        let Some(day) = u.arrives_on else { continue };
+        if now < day {
+            continue;
+        }
+        let Some(target) = u.arrive_at else { continue };
+        let Some(prov) = world.provinces.get(target as usize) else { continue };
+        // 登录场必须是自己的（别人的滩头登不上去）
+        if prov.owner != u.side {
+            continue;
+        }
+        // 堆叠满了就明天再来：和移动用的上限是同一个数
+        let mates = world
+            .units_in(target)
+            .iter()
+            .filter(|&&j| {
+                let v = &world.units[j as usize];
+                v.is_alive() && v.kind.is_ground() && v.side == u.side
+            })
+            .count();
+        if u.kind.is_ground() && mates >= STACK_LIMIT as usize {
+            continue;
+        }
+        let name = world.units[i].name.clone();
+        let pname = world.provinces[target as usize].name.clone();
+        let side = world.units[i].side;
+        world.units[i].position = target;
+        world.units[i].arrived = true;
+        world.report_for(
+            crate::world::EventKind::Oob,
+            format!("{name} 抵达 {pname}，转入战斗序列"),
+            side,
+        );
     }
 }
 
@@ -544,9 +602,26 @@ fn is_encircled(world: &World, pos: u32, side: Side) -> bool {
     if p.neighbors.is_empty() {
         return false;
     }
-    p.neighbors
-        .iter()
-        .all(|&nb| world.provinces[nb as usize].owner != side)
+    // 连续正面（`Features::front_line`）：邻省不在我手里，但**有我的地面部队**
+    // 也算这条边没断。否则战线连续时每个突出部都被判"被围"——
+    // 补给归零 → 战斗力归零 → 进攻方自己先崩（实测淞沪：推进到罗店当天补 0.00）。
+    // 这个口径和 `can_step` 里"挨着本方部队也算前线"是一致的，不是新概念。
+    let front_line = world.fx.front_line;
+    p.neighbors.iter().all(|&nb| {
+        if world.provinces[nb as usize].owner == side {
+            return false;
+        }
+        if front_line {
+            let held = world.units_in(nb).iter().any(|&i| {
+                let u = &world.units[i as usize];
+                u.is_alive() && u.kind.is_ground() && u.side == side
+            });
+            if held {
+                return false;
+            }
+        }
+        true
+    })
 }
 
 // ---------------------------------------------------------------- 移动
@@ -756,7 +831,15 @@ fn run_movement(world: &mut World) {
             }
         }
         if cn_nodes > jp_nodes {
-            if !enemy_adjacent(world, p as u32, Side::Jp) {
+            // 连续正面（`Features::front_line`）：占领只看**这个省**里还有没有敌人，
+            // 不再要求所有邻省都清空。
+            //
+            // 原来的口径下，一个 1.3 千人的残部（满编 9 千，剩 14%）就能让它
+            // 周围的整片战线不翻色——"阵地被逐个打穿"这件事在密集地图上表达不出来。
+            // 邻接有敌仍然有代价：`compute_supply` 里那条"敌纵队踩在补给线上
+            // → 通行能力 ×0.3"照旧生效。
+            let blocked = !world.fx.front_line && enemy_adjacent(world, p as u32, Side::Jp);
+            if !blocked {
                 if world.provinces[p].owner != Side::Cn {
                     let name = world.provinces[p].name.clone();
                     world.report(crate::world::EventKind::Occupy, format!("国军控制 {name}"));
@@ -764,7 +847,8 @@ fn run_movement(world: &mut World) {
                 }
             }
         } else if jp_nodes > cn_nodes {
-            if !enemy_adjacent(world, p as u32, Side::Cn) {
+            let blocked = !world.fx.front_line && enemy_adjacent(world, p as u32, Side::Cn);
+            if !blocked {
                 if world.provinces[p].owner != Side::Jp {
                     let name = world.provinces[p].name.clone();
                     world.report(crate::world::EventKind::Occupy, format!("日军攻占 {name}"));
@@ -967,10 +1051,26 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
         // 地形与工事给守方加成，舰炮给攻方与守方都可能加成
         let cn_raw = if owner == Side::Cn { cn_power * def_mult } else { cn_power };
         let jp_raw = if owner == Side::Jp { jp_power * def_mult } else { jp_power };
-        let cn_eff = cn_raw.clamp(Fixed::ZERO, capacity)
-            * naval_support(world, p as u32, Side::Cn);
-        let jp_eff = jp_raw.clamp(Fixed::ZERO, capacity)
-            * naval_support(world, p as u32, Side::Jp);
+        // 展开宽度：超出部分怎么算。
+        //
+        // 硬截断（`clamp`）会把**双方**都截到同一个 capacity：只要两边都超了，
+        // `cn_eff == jp_eff`，损耗就按 50:50 分——强者的优势被完全抹掉。
+        // 实测：进攻方 effectiveness ×1.8 → ×5.4（三倍），自己的伤亡率一动不动。
+        //
+        // `front_line` 打开后改成"超出部分按 30% 计入"：宽度仍然限制展开，
+        // 但压倒性火力依然值钱。
+        let cap = |x: Fixed| -> Fixed {
+            if !world.fx.front_line {
+                return x.clamp(Fixed::ZERO, capacity);
+            }
+            if x <= capacity {
+                x
+            } else {
+                capacity + (x - capacity) * Fixed::ratio(3, 10)
+            }
+        };
+        let cn_eff = cap(cn_raw) * naval_support(world, p as u32, Side::Cn);
+        let jp_eff = cap(jp_raw) * naval_support(world, p as u32, Side::Jp);
 
         let total = cn_eff + jp_eff;
         if total.is_zero() {

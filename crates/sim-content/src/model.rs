@@ -83,9 +83,15 @@ fn default_playable() -> SideDef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ScaleDef {
-    /// 战役级（默认）
+    /// 战役级（默认）：几十到上百个省，约 35 公里一个
     #[default]
     Theater,
+    /// 正面/方面军级：十几个到几十个省，约 5–10 公里一个，几个军的正面
+    ///
+    /// 为什么要有这一档：淞沪、南京、台儿庄、长沙前三次这些战役的尺度
+    /// 落在 theater 与 battle 之间——用 theater 会把"10 公里一个省"标成
+    /// "战役级地图"，用 battle 又装不下（上限 12 省）。
+    Front,
     /// 战斗级
     Battle,
     /// 攻坚
@@ -98,6 +104,7 @@ impl ScaleDef {
     pub fn as_str(self) -> &'static str {
         match self {
             ScaleDef::Theater => "theater",
+            ScaleDef::Front => "front",
             ScaleDef::Battle => "battle",
             ScaleDef::Siege => "siege",
             ScaleDef::Naval => "naval",
@@ -156,6 +163,9 @@ pub struct ScenarioDef {
     /// 模块自定义规则。这是模块"扩展玩法"的入口。
     #[serde(default)]
     pub rules: Vec<RuleDef>,
+    /// 迟到番号：第几日、哪个番号、在哪到场。不写 = 开局全员在场（老行为）。
+    #[serde(default)]
+    pub arrivals: Vec<ArrivalDef>,
     /// **预览版功能开关**。不写 = 全关 = 第一版发行版的定稿行为。
     ///
     /// 为什么放在内容里而不是命令行开关：同一台引擎要能同时跑
@@ -163,6 +173,21 @@ pub struct ScenarioDef {
     /// 否则同一个模块在两个人的机器上会跑出两种结果。
     #[serde(default)]
     pub preview: Option<PreviewDef>,
+}
+
+/// 一个"迟到番号"（战役中途到场）。
+///
+/// 没有哪一场战役是第一天全员到齐的：淞沪第10军第 84 天才在金山卫登陆，
+/// 南浔线的 74 军/桂系/川军也是中途到场。以前只能把部队事先摆在滩头上。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "strict", serde(deny_unknown_fields))]
+pub struct ArrivalDef {
+    /// 战役第几日到场（0 = 开局就在）。
+    pub day: u32,
+    /// `oob.json` 里的单位 id。
+    pub unit: String,
+    /// 在哪个省到场（省名）。写错省的会一直顺延，不会瞬移到别处。
+    pub province: String,
 }
 
 /// 预览版功能的开关表。
@@ -182,6 +207,10 @@ pub struct PreviewDef {
     /// 派系与人事：将领有靠山，靠山影响服从，可以撤换。
     #[serde(default)]
     pub politics: bool,
+    /// 连续正面模型：围歼/占领/展开宽度三处按"密集正面"的口径算。
+    /// 默认关——关着时就是第一版发行版的行为。
+    #[serde(default)]
+    pub front_line: bool,
 }
 
 /// 规则的阶段。
@@ -217,6 +246,11 @@ pub enum ConditionDef {
     StrengthBelow(f64),
     /// 所在省归属：cn / jp
     ProvinceOwner(String),
+    /// **单位**属于哪一方：cn / jp（写"只影响国军"的规则用）
+    Side(String),
+    /// 该单位当下正在交战（同省内有敌方地面单位）。
+    /// 写"巷战只伤害正在打的部队"用，不会给所有驻军上税。
+    InCombat,
 }
 
 /// 原语（动作）。
@@ -427,8 +461,15 @@ pub struct ClauseDef {
     /// ge / gt / le / lt。默认 ge。
     #[serde(default)]
     pub cmp: Option<String>,
+    /// 阈值。**省略时按 metric 给默认**：`holds_province` 缺省 1.0，其余缺省 0.0。
+    ///
+    /// 为什么是 `Option`：以前是 `f64` + `#[serde(default)]`，省略即 0.0，
+    /// 而默认比较是 `ge`，于是"不写 value"变成 `x >= 0`——**恒真**。
+    /// 一条 `holds_province` 结局不带 value 会在第 1 天就命中并结束战役
+    /// （实测：淞沪模块的 E7）。现在至少让 `holds_province` 缺省成 1.0，
+    /// 并且在 validate 里对"恒真子句"报 Warning。
     #[serde(default)]
-    pub value: f64,
+    pub value: Option<f64>,
     /// `holds_province` 用的省名。
     #[serde(default)]
     pub province: Option<String>,
@@ -531,6 +572,9 @@ pub struct UnitDef {
     /// 开局油料基数 0-1。同上。
     #[serde(default = "default_one_f64")]
     pub fuel: f64,
+    /// 简写：第几日到场（等价于在 scenario.arrivals 里写一条，省名取 `position`）。
+    #[serde(default)]
+    pub arrives_on: Option<u32>,
     /// 每天每动一步的油料消耗 0-1（默认按兵种给：步兵 0，装甲 0.12，海空军 0.15）。
     ///
     /// 写 0 表示"这支部队不吃油"（马拉炮兵、徒步步兵）。

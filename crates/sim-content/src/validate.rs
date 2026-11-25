@@ -11,9 +11,66 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::error::Issue;
-use crate::model::{DomainDef, MapDef, ModuleMeta, OobDef, ScaleDef, SideDef, TerrainDef, UnitKindDef};
+use crate::model::{
+    DomainDef, MapDef, ModuleMeta, OobDef, ScaleDef, ScenarioDef, SideDef, TerrainDef, UnitKindDef,
+};
 
 /// 对整个模块做静态校验。返回全部问题（含 Warning）。
+/// 检查结局子句里"恒真"的写法。
+///
+/// 为什么单独一条：`value` 省略时是 0.0、`cmp` 默认是 `ge`，于是 `x >= 0` 永远成立。
+/// 一条 `holds_province` 结局不写 value，会在**第 1 天**把战役判死，
+/// 而 validate 里原来没有任何一条能发现它（淞沪模块踩过：E7 在 tick 1 命中）。
+///
+/// 这里的口径是"默认值 + 恒真"，不是"禁写 0"：
+/// 作者真想表达 `provinces >= 0` 这种（无意义的）条件也会被提示，那正是我们要的。
+pub fn validate_scenario(scenario: &ScenarioDef) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    for e in &scenario.endings {
+        for (i, c) in e.require.iter().enumerate() {
+            let cmp = c.cmp.as_deref().unwrap_or("ge");
+            let v = c.value;
+            let tautology = match (cmp, v) {
+                // 省略 value + 默认 ge → `x >= 0`（holds_province 缺省 1.0，这里单列）
+                (_, None) => c.metric != "holds_province",
+                (CMP_GE, Some(0.0)) | (CMP_LE, Some(0.0)) => true,
+                _ => false,
+            };
+            if tautology {
+                issues.push(Issue::warn(
+                    "ending.clause_tautology",
+                    format!(
+                        "结局 {} 的第 {} 条子句（{}）恒成立：{} {}，等于没写条件。\
+                         这条结局会在第 1 天就命中，请写明 value。",
+                        e.id,
+                        i + 1,
+                        c.metric,
+                        cmp,
+                        v.unwrap_or(0.0)
+                    ),
+                ));
+            }
+        }
+    }
+    issues
+}
+
+/// 这两个常量只是让上面的 match 读起来像话，不是配置项。
+const CMP_GE: &str = "ge";
+const CMP_LE: &str = "le";
+
+/// 检查整份模块（元数据 + 地图 + 序列 + 场景）。
+pub fn validate_all(
+    meta: &ModuleMeta,
+    map: &MapDef,
+    oob: &OobDef,
+    scenario: &ScenarioDef,
+) -> Vec<Issue> {
+    let mut issues = validate(meta, map, oob);
+    issues.extend(validate_scenario(scenario));
+    issues
+}
+
 pub fn validate(meta: &ModuleMeta, map: &MapDef, oob: &OobDef) -> Vec<Issue> {
     let mut issues = Vec::new();
 
@@ -258,6 +315,8 @@ fn check_scale(map: &MapDef, oob: &OobDef, meta: &ModuleMeta) -> Vec<Issue> {
     // 按尺度检查图的规模与阵地
     let (min_p, max_p) = match meta.scale {
         ScaleDef::Theater => (12, usize::MAX),
+        // 正面/方面军：十几个到几十个省，约 5–10 公里一个（淞沪、南京、台儿庄、长沙）
+        ScaleDef::Front => (12, 48),
         ScaleDef::Battle => (2, 12),
         ScaleDef::Siege => (1, 6),
         ScaleDef::Naval => (2, usize::MAX),

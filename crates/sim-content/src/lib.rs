@@ -85,6 +85,58 @@ fn from_value<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T,
     serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
+/// 把"迟到番号"装到单位上。
+///
+/// 两种写法都支持，效果一样：
+/// - `scenario.json` 的 `arrivals: [{day, unit, province}]`（推荐，一眼能看全）；
+/// - `oob.json` 里单位的 `arrives_on: 48`（简写，省名取它自己的 `position`）。
+///
+/// 解析不到的单位 id / 省名不 panic，只打一行警告——内容层永远可能写错，
+/// 而"某个番号没能按时到场"不该让整场战役起不来。
+fn apply_arrivals(world: &mut World, module: &LoadedModule) {
+    use std::collections::HashMap;
+    // 省名 → 下标（省名是内容层的东西，单位表里写的是名字）
+    let by_name: HashMap<&str, u32> = world
+        .provinces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i as u32))
+        .collect();
+    // 单位 id → 下标（保持 oob 书写顺序，索引即下标）
+    let mut list: Vec<(u32, usize, Option<u32>)> = Vec::new();
+    for a in &module.scenario.arrivals {
+        match module.oob.units.iter().position(|u| u.id == a.unit) {
+            Some(idx) => match by_name.get(a.province.as_str()) {
+                Some(&pid) => list.push((a.day, idx, Some(pid))),
+                None => eprintln!(
+                    "警告：迟到番号 {} 的到场省「{}」不存在，这条被忽略",
+                    a.unit, a.province
+                ),
+            },
+            None => eprintln!("警告：迟到番号里的单位 id「{}」在 oob.json 里找不到", a.unit),
+        }
+    }
+    // 简写：单位自己写 arrives_on
+    for (idx, u) in module.oob.units.iter().enumerate() {
+        if let Some(d) = u.arrives_on {
+            let pid = by_name.get(world.provinces.get(u.position as usize).map(|p| p.name.as_str()).unwrap_or("")).copied();
+            list.push((d, idx, pid.or(Some(u.position))));
+        }
+    }
+    if list.is_empty() {
+        return;
+    }
+    world.has_arrivals = true;
+    for (day, idx, pid) in list {
+        if let Some(u) = world.units.get_mut(idx) {
+            u.arrives_on = Some(day);
+            u.arrive_at = pid;
+            // 第 0 日到场 = 开局就在，不用等到 tick
+            u.arrived = day == 0;
+        }
+    }
+}
+
 /// 只读 `module.json`（不校验整包），给"列模块"这种轻量场景用。
 ///
 /// 为什么需要它：模块列表要在首页把每张战役卡的标题、规模、简介填出来。
@@ -157,7 +209,8 @@ pub fn load_module(path: &Path) -> Result<LoadedModule, LoadError> {
         );
     }
 
-    let issues = validate::validate(&meta, &map, &oob);
+    // 全部检查：元数据/地图/序列 + 场景（结局子句恒真之类）。
+    let issues = validate::validate_all(&meta, &map, &oob, &scenario);
     let errors: Vec<Issue> = issues.iter().filter(|i| i.is_error()).cloned().collect();
     if !errors.is_empty() {
         return Err(LoadError::Validation {
@@ -186,7 +239,8 @@ pub fn from_parts(
     map: MapDef,
     oob: OobDef,
 ) -> Result<LoadedModule, LoadError> {
-    let issues = validate::validate(&meta, &map, &oob);
+    // 全部检查：元数据/地图/序列 + 场景（结局子句恒真之类）。
+    let issues = validate::validate_all(&meta, &map, &oob, &scenario);
     let errors: Vec<Issue> = issues.iter().filter(|i| i.is_error()).cloned().collect();
     if !errors.is_empty() {
         return Err(LoadError::Validation {
@@ -324,6 +378,8 @@ pub fn build_world(module: &LoadedModule) -> World {
     };
 
     let mut world = World::new(seed, provinces, units);
+    // 迟到番号：先在单位上记下"第几日、在哪到场"，再由 tick() 每天结算到场。
+    apply_arrivals(&mut world, module);
     // 预览版开关：模块不声明 = 全关 = 第一版发行版的定稿行为。
     // 这一行是"定稿不被改"的总闸：下面所有新系统都先看这几个布尔值。
     world.fx = features_from(module.scenario.preview.as_ref());
@@ -383,6 +439,7 @@ pub fn features_from(def: Option<&PreviewDef>) -> sim_core::Features {
             ammo_fuel: d.ammo_fuel,
             rail_damage: d.rail_damage,
             politics: d.politics,
+            front_line: d.front_line,
         },
     }
 }
@@ -462,7 +519,9 @@ pub fn endings_from(defs: &[EndingDef]) -> Vec<sim_core::endings::Ending> {
                 metric,
                 side: c.side.map(side_of),
                 cmp,
-                value: c.value,
+                // 省略 value 时按 metric 给默认：holds_province 是 0/1 量纲，
+                // 缺省 0.0 会让 `>= 0` 恒真（淞沪模块第 1 天就结束的原因）。
+                value: clause_default_value(metric, c.value),
                 province: c.province.clone(),
             });
         }
@@ -481,6 +540,20 @@ pub fn endings_from(defs: &[EndingDef]) -> Vec<sim_core::endings::Ending> {
     }
     out
 }
+/// 子句省略 `value` 时的默认阈值。
+///
+/// `holds_province` 是 0/1 量纲：缺省 0.0 配上默认的 `ge` 就是 `x >= 0`，
+/// **两个方向都恒真**——一条写错的结局会在第 1 天把战役判死。
+/// 所以这里给它 1.0（"确实控制着"），其余指标沿用 0.0，
+/// 并由 `validate::validate_scenario` 对"恒真子句"报 Warning。
+pub fn clause_default_value(metric: sim_core::endings::Metric, raw: Option<f64>) -> f64 {
+    use sim_core::endings::Metric;
+    raw.unwrap_or(match metric {
+        Metric::HoldsProvince => 1.0,
+        _ => 0.0,
+    })
+}
+
 pub fn comms_from(def: Option<&CommsDef>) -> sim_core::world::CommsConfig {
     use sim_core::world::{CommsConfig, CommsKind};
 
@@ -705,6 +778,8 @@ fn condition_from(c: &ConditionDef) -> Result<sim_core::Condition, String> {
         ConditionDef::UnitKind(s) => C::UnitKindIs(kind_from(s)?),
         ConditionDef::StrengthBelow(r) => C::StrengthBelow(Fixed::from_f64_input(*r)),
         ConditionDef::ProvinceOwner(s) => C::ProvinceOwner(side_from(s)?),
+        ConditionDef::Side(s) => C::UnitSide(side_from(s)?),
+        ConditionDef::InCombat => C::InCombat,
     })
 }
 

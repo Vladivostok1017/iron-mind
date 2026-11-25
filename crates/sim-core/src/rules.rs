@@ -55,6 +55,18 @@ pub enum Condition {
     StrengthBelow(Fixed),
     /// 所在省的归属方。
     ProvinceOwner(Side),
+    /// 规则涉及的**单位**属于哪一方。
+    ///
+    /// 没有这一条就写不出单向机制：任何"某地的部队掉兵/掉补给"的规则
+    /// 都会同时作用在双方身上。淞沪的"国军弹药与炮兵火力不足"
+    /// 这类事实，只能靠 `side` 表达。
+    UnitSide(Side),
+    /// 该单位当下是否真的在交战（同省内有敌方地面单位）。
+    ///
+    /// 为什么需要：以前想写"巷战绞肉"，只能写成 `terrain == urban` + 每天掉 X%，
+    /// 那是对**所有**驻军收税，不分敌我、不分打没打——实测 91 天固定 −32%，
+    /// 把胜负彻底搅浑。有了这个谓词，"只伤害正在交战的部队"才写得出来。
+    InCombat,
 }
 
 /// 原语：引擎提供的原子操作。模块**只能**调用这些改状态。
@@ -193,6 +205,14 @@ fn eval(c: &Condition, w: &World, p: usize, u: usize) -> bool {
         Condition::UnitKindIs(k) => w.units[u].kind == *k,
         Condition::StrengthBelow(r) => w.units[u].strength < w.units[u].max_strength * *r,
         Condition::ProvinceOwner(s) => w.provinces[p].owner == *s,
+        Condition::UnitSide(s) => w.units[u].side == *s,
+        Condition::InCombat => {
+            let mine = w.units[u].side;
+            w.units_in(p as u32).iter().any(|&i| {
+                let x = &w.units[i as usize];
+                x.is_alive() && x.kind.is_ground() && x.side != mine
+            })
+        }
     }
 }
 

@@ -58,6 +58,7 @@ fn feature_names_are_stable() {
         ammo_fuel: true,
         rail_damage: true,
         politics: true,
+        front_line: true,
     };
-    assert_eq!(fx.names(), vec!["ammo_fuel", "rail_damage", "politics"]);
+    assert_eq!(fx.names(), vec!["ammo_fuel", "rail_damage", "politics", "front_line"]);
 }

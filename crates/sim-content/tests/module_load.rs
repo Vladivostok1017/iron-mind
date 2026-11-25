@@ -78,7 +78,7 @@ fn scenario() -> ScenarioDef {
         seed: 123,
         comms: None,
         rules: Vec::new(),
-        endings: Vec::new(),
+        endings: Vec::new(),        arrivals: Vec::new(),
         preview: None,
     }
 }
@@ -123,7 +123,7 @@ fn unit(id: &str, side: SideDef, strength: f64, pos: u32) -> UnitDef {
         commander: None,
         reform_days: 0,
         reform_ratio: 0.0,
-        ammo: 1.0,
+        arrives_on: None,        ammo: 1.0,
         fuel: 1.0,
         fuel_burn: None,
         note: String::new(),

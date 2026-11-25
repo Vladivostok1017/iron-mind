@@ -240,14 +240,18 @@ impl Posture {
 /// 3. 只考虑**够得着**的（邻接本方部队），同级按省号保序。
 pub fn theater_plan(world: &World, side: Side) -> TheaterPlan {
     let enemy = side.opponent();
-    let own_power = world.total_strength(side);
-    let foe_power = world.total_strength(enemy);
+    // 用**有效战斗力**而不是人头：历史上进攻方普遍人数劣势
+    // （淞沪 1:2.6），只看人头会让入侵者永远被建议"收缩"。
+    let own_power = world.total_combat_power(side);
+    let foe_power = world.total_combat_power(enemy);
 
+    // 阈值也按有效战力重标：1.0 / 0.7 一档。
+    // 原来的 1.25 / 2.0 倍人头口径，在"人少但精锐"的进攻方身上永远判成收缩。
     let posture = if own_power.is_zero() || foe_power.is_zero() {
         Posture::Hold
-    } else if own_power * Fixed::ratio(8, 10) > foe_power {
+    } else if own_power > foe_power {
         Posture::Advance
-    } else if own_power * Fixed::ratio(5, 10) > foe_power {
+    } else if own_power * Fixed::ratio(7, 10) > foe_power {
         Posture::Hold
     } else {
         Posture::Withdraw

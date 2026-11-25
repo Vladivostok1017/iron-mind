@@ -915,11 +915,25 @@ pub struct Features {
     pub rail_damage: bool,
     /// 派系与人事：将领的靠山会变，靠山影响他的服从。
     pub politics: bool,
+    /// 连续正面模型（预览版）。
+    ///
+    /// 修的是三处只在"密集正面"（一个省 5–10 公里、战线连续）上才暴露的语义：
+    ///
+    /// 1. **围歼判定**：邻省不在我手里、但**有我的地面部队**，不再算被切断
+    ///    （否则突出部里的每一支部队都"被围"→ 补给归零 → 战斗力归零）；
+    /// 2. **占领判定**：只要求目标省内没有敌方地面单位，不再要求**所有邻省**
+    ///    都没有敌人（否则一个 1 千人的残部就能冻住整条战线）；
+    /// 3. **展开宽度**：超出 `width×40` 的部分按 30% 计入，而不是硬截成相等
+    ///    （否则窄正面会把双方战力拉平，强者的优势归零）。
+    ///
+    /// 默认关闭：第一版发行版、南浔线、引擎自带的示例全都跑原来的语义，
+    /// 连状态哈希都不变。做密集正面战役的模块打开它。
+    pub front_line: bool,
 }
 
 impl Features {
     pub fn any(&self) -> bool {
-        self.ammo_fuel || self.rail_damage || self.politics
+        self.ammo_fuel || self.rail_damage || self.politics || self.front_line
     }
 
     /// 界面与 SDK 用的能力名（顺序稳定，别随便改）。
@@ -933,6 +947,9 @@ impl Features {
         }
         if self.politics {
             v.push("politics");
+        }
+        if self.front_line {
+            v.push("front_line");
         }
         v
     }
@@ -1025,6 +1042,16 @@ pub struct Unit {
     pub fuel: Fixed,
     /// 每动一步消耗的油料 0-1。0 = 不吃油（徒步步兵、马拉炮兵）。
     pub fuel_burn: Fixed,
+    /// 预定到达日（战役第几日）。None = 开局就在场。
+    ///
+    /// 为什么需要它：没有哪一场战役是第一天全员到齐的——淞沪的第10军
+    /// 是第 84 天才在金山卫登陆，而那正是战役的转折点。以前只能把部队
+    /// 事先摆在滩头，等于把"登陆"变成"一开始就在那儿"。
+    pub arrives_on: Option<u32>,
+    /// 到达时进哪个省（模块声明的登陆场/集结地）。
+    pub arrive_at: Option<u32>,
+    /// 已经到场没有。未到场的部队 `is_alive()` 为假，所有系统都会跳过它。
+    pub arrived: bool,
 }
 
 impl Unit {
@@ -1068,6 +1095,9 @@ impl Unit {
             ammo: Fixed::ONE,
             fuel: Fixed::ONE,
             fuel_burn: Fixed::ZERO,
+            arrives_on: None,
+            arrive_at: None,
+            arrived: true,
         }
     }
 
@@ -1095,7 +1125,9 @@ impl Unit {
     }
 
     pub fn is_alive(&self) -> bool {
-        self.strength.raw() > 0
+        // 还没到场的部队对全世界都是"不存在"：不参战、不占名额、不进情报。
+        // 结局判定、堆叠上限、AI 选目标全都走这一个入口，所以只需要改这里。
+        self.arrived && self.strength.raw() > 0
     }
 
     /// 战斗力 = 兵力 × 士气 × 补给 × 战斗力系数。
@@ -1129,6 +1161,8 @@ pub struct World {
     pub formations: Vec<Formation>,
     /// 预览版功能开关。全部关闭 = 第一版发行版的定稿行为。
     pub fx: Features,
+    /// 有没有"迟到番号"。没有时一切照旧（也不进哈希）。
+    pub has_arrivals: bool,
     /// 派系（预览版）。模块不声明就永远是空的，也不进哈希。
     pub factions: Vec<crate::politics::Faction>,
     /// 已去职的将领（预览版 politics）：(部队, 将领, 第几日)。
@@ -1168,6 +1202,7 @@ impl World {
             in_transit: Vec::new(),
             formations: Vec::new(),
             fx: Features::default(),
+            has_arrivals: false,
             factions: Vec::new(),
             dismissed: Vec::new(),
             campaign_days: u32::MAX,
@@ -1282,6 +1317,22 @@ impl World {
         for u in &self.units {
             if u.side == side && u.is_alive() {
                 total += u.strength;
+            }
+        }
+        total
+    }
+
+    /// 某方的**有效**战斗力总和（兵力 × 士气 × 补给 × 系数）。
+    ///
+    /// 为什么不能只看人头：历史上几乎所有进攻方人数都少于守方
+    /// （淞沪 1:2.6、南浔线 1:1.66、武汉 1:3）。用 `total_strength` 算姿态，
+    /// 侵略者的统帅部永远被判成"收缩"，而这个判断会进 LLM 提示词
+    /// （`theater_plan().summary`），于是模型会劝一支正在进攻的部队撤退。
+    pub fn total_combat_power(&self, side: Side) -> Fixed {
+        let mut total = Fixed::ZERO;
+        for u in &self.units {
+            if u.side == side && u.is_alive() {
+                total += u.combat_power();
             }
         }
         total
@@ -1404,6 +1455,15 @@ impl World {
         //
         // 这是"定稿的第一版不受影响"的关键：老模块（fx 全关）走不到下面任何一行，
         // 哈希字节流与 0.11.0 完全一致，旧回放、旧存档、黄金哈希都还成立。
+
+        // 迟到番号：到场没有也是世界状态（回放要能复现"第 84 天在金山卫登陆"）。
+        // 模块没有迟到番号时一个字节都不写。
+        if self.has_arrivals {
+            for u in &self.units {
+                h.write_u32(u.arrives_on.map(|d| d + 1).unwrap_or(0));
+                h.write_u32(u.arrived as u32);
+            }
+        }
         if self.fx.ammo_fuel {
             for u in &self.units {
                 h.write_i32(u.ammo.raw());
