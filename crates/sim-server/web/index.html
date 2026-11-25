@@ -2947,7 +2947,8 @@ const Home = (() => {
       cont.disabled = !saves.length;
       if ($("hm-continue-d")) {
         $("hm-continue-d").textContent = saves.length
-          ? ("最近：" + saves[0].slot + "（第 " + saves[0].day + " 日）")
+          ? ("最近：" + saves[0].slot + "（第 " + saves[0].day + " 日）" +
+             (saves[0].module_name ? " · " + saves[0].module_name : ""))
           : "还没有存档";
       }
       // 没有存档时，主角应该是"新的战役"，而不是一个点不动的"继续"
@@ -3341,7 +3342,8 @@ async function saveGame() {
     for (const s of saves.slice(0, 10)) {
       const row = Dlg.h("div", "dg-row", list);
       Dlg.h("span", "r-main", row, slotLabel(s.slot));
-      Dlg.h("span", "r-dim", row, "第 " + s.day + " 日 · " + s.commands + " 条命令");
+      Dlg.h("span", "r-dim", row,
+      (s.module_name ? s.module_name + " · " : "") + "第 " + s.day + " 日 · " + s.commands + " 条命令");
       Dlg.h("span", "r-act", row, fmtWhen(s.modified));
       row.addEventListener("click", () => { inp.value = s.slot; inp.focus(); });
     }
@@ -3376,7 +3378,8 @@ async function loadGame(slot) {
   for (const s of saves) {
     const row = Dlg.h("div", "dg-row", list);
     Dlg.h("span", "r-main", row, slotLabel(s.slot));
-    Dlg.h("span", "r-dim", row, "第 " + s.day + " 日 · " + s.commands + " 条命令");
+    Dlg.h("span", "r-dim", row,
+      (s.module_name ? s.module_name + " · " : "") + "第 " + s.day + " 日 · " + s.commands + " 条命令");
     Dlg.h("span", "r-act", row, fmtWhen(s.modified));
     row.addEventListener("click", () => applyLoad(s.slot));
   }
@@ -3391,12 +3394,26 @@ async function applyLoad(slot) {
     });
     const j = await r.json();
     if (!j.ok) { toast(j.error || "读档失败"); return; }
+    // 内核可能在读档时顺带换了战役（存档属于另一个模块）。
+    // 那种情况下地图、省界、模块列表全是新的，必须重拉——
+    // 只换 S 会画出一张"南浔线的部队摆在上一个模块的地形上"的错图。
+    if (j.switched_to) {
+      GEO = null;
+      BASEMAP = null;
+      DEV_GEN = null;
+      await loadModules();
+      await loadGeo();
+      loadBasemap();
+    }
     S = j.state;
     selUnit = null; curProv = null; nodeProv = null; geom = null;
     Dlg.close();
     Home.hide();
     render();
-    toast("读档到第 " + j.day + " 日" + (j.hash_matched ? "（哈希一致）" : "，⚠ 哈希不一致"));
+    toast(
+      (j.switched_to ? "已切换到「" + j.switched_to + "」并读档到第 " + j.day + " 日" : "读档到第 " + j.day + " 日") +
+        (j.hash_matched ? "（哈希一致）" : "，⚠ 哈希不一致")
+    );
   } catch (e) { toast("读档失败：连不上内核"); }
 }
 

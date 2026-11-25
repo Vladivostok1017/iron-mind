@@ -768,29 +768,11 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 let _ = respond(&mut stream, 400, "application/json", "{\"error\":\"模块路径不合法\"}");
                 return Ok(());
             }
-            let loaded = match load_module(&PathBuf::from(&path)) {
-                Ok(m) => m,
-                Err(e) => {
-                    let msg = json!({ "error": format!("加载失败：{e}") });
-                    let _ = respond(&mut stream, 400, "application/json", &msg.to_string());
-                    return Ok(());
-                }
-            };
-            let geo = loaded.geo.clone();
-            let mut world = build_world(&loaded);
-            sim_core::intel::run_intel(&mut world);
-            *state.module.lock().unwrap() = loaded;
-            *state.module_path.lock().unwrap() = path.clone();
-            *state.provinces_geo.lock().unwrap() = geo;
-            *state.world.lock().unwrap() = Some(world);
-            state.commands.lock().unwrap().clear();
-            state.reports.lock().unwrap().clear();
-            state.telegrams.lock().unwrap().clear();
-            // 世界换代号：前端轮询 /api/llm 看到 generation 变了就重拉地图。
-            // 这是"存盘即换图"的整套机制，SDK 的 imdev 就靠它（引擎里不再有 --watch）。
-            state
-                .generation
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Err(e) = activate_module(state, &path) {
+                let msg = json!({ "error": format!("加载失败：{e}") });
+                let _ = respond(&mut stream, 400, "application/json", &msg.to_string());
+                return Ok(());
+            }
             trace(format!("   切换模块 → {path}"));
             let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap());
             respond(&mut stream, 200, "application/json", &snap)
@@ -1129,9 +1111,18 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
+                let mid = v
+                    .get("module_id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                // 存档属于哪场战役，要能看见。读档现在会自动切模块，
+                // 但玩家在"读取存档"列表里还是得知道这一条是哪一仗的。
+                let mname = mid_display_name(&mid);
                 arr.push(json!({
                     "slot": slot,
-                    "module_id": v.get("module_id").cloned().unwrap_or(json!("")),
+                    "module_id": mid,
+                    "module_name": mname,
                     "day": v.get("day").cloned().unwrap_or(json!(0)),
                     "commands": v.get("commands").and_then(|c| c.as_array()).map(|a| a.len()).unwrap_or(0),
                     "modified": modified,
@@ -1190,13 +1181,55 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let parsed: Result<SaveFile, _> = serde_json::from_str(&text);
             match parsed {
                 Ok(sv) => {
-                    if sv.module_id != state.module.lock().unwrap().meta.id {
-                        let msg = json!({
-                            "ok": false,
-                            "error": format!("存档属于模块 {}，当前是 {}", sv.module_id, state.module.lock().unwrap().meta.id),
-                        })
-                        .to_string();
-                        return respond(&mut stream, 200, "application/json", &msg);
+                    // 存档属于**另一场战役**怎么办？
+                    //
+                    // 以前这里是直接报错返回："存档属于模块 A，当前是 B"。玩家看到的是
+                    // 首页"继续（第 10 日）"点下去**毫无反应**——只有一条一闪而过的 toast，
+                    // 而且不知道该怎么办（去设置里换战役？换哪个？）。
+                    //
+                    // 现在：自动找到那个模块并切过去，再读档。首页的"继续"就该是
+                    // "接着上次那一仗打"，不该要求玩家先记住上次玩的是哪个模块。
+                    let mut switched: Option<String> = None;
+                    {
+                        let current_id = state.module.lock().unwrap().meta.id.clone();
+                        if sv.module_id != current_id {
+                            let found = discover_modules().into_iter().find(|p| {
+                                sim_content::peek_meta_json(p)
+                                    .and_then(|m| {
+                                        m.get("id")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                    })
+                                    == Some(sv.module_id.clone())
+                            });
+                            match found {
+                                Some(p) => {
+                                    let path = p.to_string_lossy().to_string();
+                                    match activate_module(state, &path) {
+                                        Ok(m) => switched = Some(m.meta.name.clone()),
+                                        Err(e) => {
+                                            let msg = json!({
+                                                "ok": false,
+                                                "error": format!("这个存档属于「{}」，但加载它失败了：{e}", sv.module_id),
+                                            })
+                                            .to_string();
+                                            return respond(&mut stream, 200, "application/json", &msg);
+                                        }
+                                    }
+                                }
+                                None => {
+                                    let msg = json!({
+                                        "ok": false,
+                                        "error": format!(
+                                            "这个存档属于「{}」，但这台机器上已经找不到那个模块了（可能被删了或挪走了）。",
+                                            sv.module_id
+                                        ),
+                                    })
+                                    .to_string();
+                                    return respond(&mut stream, 200, "application/json", &msg);
+                                }
+                            }
+                        }
                     }
                     let world = rebuild(&state.module.lock().unwrap(), &sv.commands, sv.day);
                     let hash = world.state_hash();
@@ -1222,6 +1255,8 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         "path": path,
                         "day": sv.day,
                         "hash_matched": matched,
+                        // 顺带换了战役的话要告诉前端：地图换了，得重拉省界。
+                        "switched_to": switched,
                         "state": serde_json::from_str::<serde_json::Value>(&snap).unwrap_or(json!({})),
                     })
                     .to_string();
@@ -1498,6 +1533,49 @@ struct SaveFile {
 ///
 /// 这个名字会被拼进文件路径，所以只留字母数字、`-`、`_`、下划线以外的
 /// 一概换成 `-`，并砍到 40 字符。空名 = 不指定槽位（走时间戳）。
+/// 模块 id → 显示名（存档列表里用）。找不到就返回 id 本身，不编造。
+fn mid_display_name(module_id: &str) -> String {
+    if module_id.is_empty() {
+        return String::new();
+    }
+    for p in discover_modules() {
+        if let Some(m) = sim_content::peek_meta_json(&p) {
+            if m.get("id").and_then(|v| v.as_str()) == Some(module_id) {
+                if let Some(name) = m.get("name").and_then(|v| v.as_str()) {
+                    return name.to_string();
+                }
+            }
+        }
+    }
+    module_id.to_string()
+}
+
+/// 把一个模块装进正在跑的服务：切模块、以及"读档时顺带换战役"都走这里。
+///
+/// 为什么抽出来：这两条路径要做的事情一字不差（换模块、换省界、重建世界、
+/// 清空命令/电报/公文、世界代号 +1）。分开写迟早会漏一条——
+/// 漏掉 `telegrams.clear()` 的那次表现是"重开之后电报台还挂着上一局的电报"。
+fn activate_module(
+    state: &Arc<ServerState>,
+    path: &str,
+) -> Result<sim_content::LoadedModule, String> {
+    let loaded = sim_content::load_module(&std::path::PathBuf::from(path))
+        .map_err(|e| format!("{e}"))?;
+    let mut world = build_world(&loaded);
+    sim_core::intel::run_intel(&mut world);
+    *state.module.lock().unwrap() = loaded.clone();
+    *state.module_path.lock().unwrap() = path.to_string();
+    *state.provinces_geo.lock().unwrap() = loaded.geo.clone();
+    *state.world.lock().unwrap() = Some(world);
+    state.commands.lock().unwrap().clear();
+    state.reports.lock().unwrap().clear();
+    state.telegrams.lock().unwrap().clear();
+    state
+        .generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Ok(loaded)
+}
+
 /// 解 base64（标准字母表，容忍换行与 `=` 补齐）。
 ///
 /// 为什么手写而不是拉一个 crate：只需要"把浏览器 `btoa` 出来的东西还原成字节"
