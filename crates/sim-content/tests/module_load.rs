@@ -157,15 +157,22 @@ fn loads_bundled_module() {
     assert!(dir.exists(), "示例模块目录应存在：{}", dir.display());
     let m = load_module(&dir).expect("示例模块应能加载");
 
-    assert_eq!(m.map.provinces.len(), 87);
-    assert_eq!(m.oob.units.len(), 18);
+    // 只断言**结构不变量**，不钉死具体数量。
+    //
+    // 这个模块住在另一个仓库（nanxun-1938），作者调平衡时会加/删番号——
+    // 曾经这里写死 `units.len() == 18`，作者补了 8 个守备师之后引擎测试就红了，
+    // 而引擎其实一个字都没改。外仓内容的变化不该让引擎的测试变红。
+    assert!(m.map.provinces.len() >= 12, "省会数量应该像一个战役");
+    assert!(m.oob.units.len() >= 4, "双方至少各有两个番号");
     assert_eq!(m.meta.playable_side, SideDef::Cn);
 
     let w = build_world(&m);
-    assert_eq!(w.provinces.len(), 87);
-    assert_eq!(w.units.len(), 18);
+    assert_eq!(w.provinces.len(), m.map.provinces.len());
+    assert_eq!(w.units.len(), m.oob.units.len());
     // 双方都有补给源
     assert!(w.provinces.iter().filter(|p| p.is_supply_source).count() >= 2);
+    assert!(w.units.iter().any(|u| u.side == sim_core::world::Side::Cn));
+    assert!(w.units.iter().any(|u| u.side == sim_core::world::Side::Jp));
 }
 
 #[test]

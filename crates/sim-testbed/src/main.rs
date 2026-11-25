@@ -103,6 +103,23 @@ fn main() {
     // ---- 终局 ----
     println!("\n-- 终局 --");
     report(&world_a);
+    // 跑到最后判了哪个结局，是作者最想知道的一件事之一：
+    // 数据改完到底算"苦撑"还是"速溃"，光看省份数和兵力是猜不出来的。
+    match &world_a.outcome {
+        Some(o) => {
+            println!("\n-- 结局：{}（第 {} 日）--", o.name, o.day);
+            println!("  {}", o.text);
+            if !o.metrics.is_empty() {
+                let parts: Vec<String> = o
+                    .metrics
+                    .iter()
+                    .map(|(k, v)| format!("{k} {v:.1}"))
+                    .collect();
+                println!("  {}", parts.join(" · "));
+            }
+        }
+        None => println!("\n-- 结局：未判定（战役还没打完，或没有可命中的结局）--"),
+    }
     if !world_a.log.is_empty() {
         println!("\n-- 战报 --");
         for e in world_a.log.iter().take(10) {

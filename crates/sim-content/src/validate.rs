@@ -315,8 +315,11 @@ fn check_scale(map: &MapDef, oob: &OobDef, meta: &ModuleMeta) -> Vec<Issue> {
     // 按尺度检查图的规模与阵地
     let (min_p, max_p) = match meta.scale {
         ScaleDef::Theater => (12, usize::MAX),
-        // 正面/方面军：十几个到几十个省，约 5–10 公里一个（淞沪、南京、台儿庄、长沙）
-        ScaleDef::Front => (12, 48),
+        // 正面/方面军：十几个到上百个省，约 5–10 公里一个（淞沪 41 省、南浔 87 省）
+        //
+        // 上限原来是 48，实测南浔线（87 省、35×30 公里战场）就装不下——
+        // 一个 10 公里粒度的正面本来就可能有一百个格子，数量不是判据，粒度才是。
+        ScaleDef::Front => (12, 120),
         ScaleDef::Battle => (2, 12),
         ScaleDef::Siege => (1, 6),
         ScaleDef::Naval => (2, usize::MAX),
