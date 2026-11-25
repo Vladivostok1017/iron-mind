@@ -456,6 +456,9 @@
     display: inline-flex; align-items: center; justify-content: center;
   }
   .fab .dot:empty, .fab .dot[data-n="0"] { display: none; }
+  /* 抽屉里的"操作"段：只在手机布局下出现（桌面那些按钮都在底部工具栏上） */
+  #ops-sec { display: none; }
+
   /* ───────────────── 手机布局 ─────────────────
      桌面是"左地图 + 右 316px 侧栏"。手机上不做缩微版：地图占满屏幕，
      侧栏变成**从底部拉起来的面板**（#app.sheet-open 时滑上来）。
@@ -500,21 +503,56 @@
     }
     #app.sheet-open #sheet-backdrop { display: block; }
 
-    /* 底部工具栏：横向滚动，否则一行塞不下会挤成两行小字 */
+    /* ── 底部工具栏：手机上**不滚动**，只留高频动作 ──
+       滑动的工具栏在手机上很难用：这个游戏每分钟都要按"推进"，
+       而它被挤到最右边，得先滑一下才能按到。
+       所以手机上底栏只放三段：视图切换 + 推进一日（主）+ 推进到有事。
+       其余（存档/读档/重开/晨报/菜单/换模块）搬进抽屉顶部的"操作"段，
+       它们一天也用不上一次，不值得占底栏。 */
     #bottom {
-      padding: 0 8px; gap: 6px; overflow-x: auto; overflow-y: hidden;
-      white-space: nowrap; scrollbar-width: none;
+      padding: 0 10px; gap: 8px;
+      overflow: visible; white-space: nowrap;
     }
-    #bottom::-webkit-scrollbar { display: none; }
-    #bottom #hint { display: none; }
-    #bottom #plan { display: none; }
-    #bottom .btn { flex: 0 0 auto; padding: 7px 10px; font-size: 11.5px; }
-    #bottom #mod-sel { flex: 0 0 auto; max-width: 120px; }
+    #bottom #hint, #bottom #plan, #bottom #mod-sel,
+    #bottom #btn-save, #bottom #btn-load, #bottom #btn-reset,
+    #bottom #btn-3, #bottom #btn-morning, #bottom #btn-home,
+    #bottom .sep { display: none; }
+
+    /* 视图切换：四个短词压成分段控件，别用桌面那套按钮间距 */
+    #bottom #modes { gap: 0; flex: 0 0 auto; }
+    #bottom #modes .mode {
+      padding: 7px 9px; font-size: 11.5px; min-height: 32px;
+      border-radius: 0; border-right-width: 0;
+    }
+    #bottom #modes .mode:first-child { border-radius: 5px 0 0 5px; }
+    #bottom #modes .mode:last-child { border-radius: 0 5px 5px 0; border-right-width: 1px; }
+
+    /* 推进一日：占满剩下的宽度，是这一屏的主动作 */
+    #bottom #btn-1 {
+      flex: 1 1 auto; min-width: 0;
+      background: #2c6cb0; border-color: #3b82c9; color: #fff;
+      font-size: 13px; font-weight: 600; min-height: 36px;
+    }
+    #bottom #btn-next {
+      flex: 0 0 auto; padding: 7px 10px; font-size: 11.5px; min-height: 36px;
+    }
 
     /* 触屏上 44px 是最小可用点击面积，桌面那套 6px padding 点不准 */
     .btn, .m-chip, .mode, .rp-btn { min-height: 34px; }
     #dp-text { font-size: 16px; }  /* 16px 以下 iOS/Android 会自动放大页面 */
     #dp-to { font-size: 16px; }
+
+    /* 抽屉里的"操作"段：桌面没有这一段（那边的按钮都在底栏上） */
+    #ops-sec { display: block; }
+    #ops-sec .ops-grid {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px;
+    }
+    #ops-sec .ops-grid .btn { width: 100%; padding: 10px 6px; font-size: 12px; }
+    #ops-sec #ops-plan {
+      font-size: 11.5px; color: #9aa6b3; line-height: 1.6; margin-top: 8px;
+      border-left: 2px solid #2c6b4f; padding-left: 8px;
+    }
+    #ops-sec #ops-mod-sel { width: 100%; margin-top: 8px; font-size: 13px; padding: 8px; }
 
     /* 战报信箱：手机上改成"列表在上、正文在下"，全屏 */
     #mail { inset: 0; border-radius: 0; border: none; }
@@ -613,6 +651,7 @@
       </div>
     </div>
     <aside>
+
       <!-- 电报台：玩家唯一的指挥手段。地图只用来查看。 -->
       <div class="sec" id="dispatch-sec">
         <h3>电报台 <button class="m-chip" id="dp-call" style="float:right;margin-top:-2px">通话</button></h3>
@@ -653,6 +692,27 @@
         <h3>战报</h3>
         <div id="log-latest" style="font-size:12px;color:#a8b3c0;line-height:1.6;margin-bottom:8px"></div>
         <button class="btn" id="open-mail" style="width:100%">打开战报信箱</button>
+      </div>
+      <!-- 操作（手机专用）：桌面底栏上那排按钮在手机上放不下，也不值得占
+           底栏——存档/读档/重开/晨报一天用不上一次。这里用"镜像按钮"转发
+           到原来的按钮上（原按钮仍在 DOM 里，只是被 CSS 隐藏），
+           所以逻辑只有一份，不会出现两套行为。 -->
+      <div class="sec" id="ops-sec">
+        <h3>操作</h3>
+        <div class="ops-grid">
+          <button class="btn" data-op="btn-1">推进 1 日</button>
+          <button class="btn" data-op="btn-3">推进 3 日</button>
+          <button class="btn" data-op="btn-next">推进到有事</button>
+          <button class="btn" data-op="btn-save">存档</button>
+          <button class="btn" data-op="btn-load">读档</button>
+          <button class="btn" data-op="btn-reset">重开</button>
+          <button class="btn" data-op="btn-morning">晨报</button>
+          <button class="btn" data-op="btn-home">菜单</button>
+          <button class="btn" data-op="open-mail">战报信箱</button>
+        </div>
+        <select id="ops-mod-sel" title="切换模块（会重开一局）"></select>
+        <!-- 本方统帅部的方针：桌面显示在底栏，手机上搬到这里 -->
+        <div id="ops-plan"></div>
       </div>
     </aside>
   </div>
@@ -1293,6 +1353,11 @@ function renderTop() {
         ? S.plan.posture + " → " + S.plan.focus.join("、")
         : S.plan.posture);
       el.title = S.plan.summary;
+      // 手机上底栏藏了方针，抽屉里那份要跟着同一份数据走
+      const ops = document.getElementById("ops-plan");
+      if (ops) {
+        ops.textContent = S.plan.summary || el.textContent;
+      }
     }
   } catch (e) { }
   $("s-str").textContent = S.side.strength.toFixed(1) + " 千";
@@ -1726,15 +1791,42 @@ async function loadModules() {
     const list = j.modules || [];
     MODS = list;
     paintTop(list.find((m) => m.current) || list[0]);
+    // 抽屉里那份"换模块"下拉（手机专用）跟着同一份列表走
+    const ops = $("ops-mod-sel");
+    if (ops) ops.innerHTML = "";
     for (const m of list) {
       const o = document.createElement("option");
       o.value = m.path;
       o.textContent = m.name + (m.scale ? "（" + m.scale + "）" : "");
       if (m.current) o.selected = true;
       sel.appendChild(o);
+      if (ops) ops.appendChild(o.cloneNode(true));
     }
   } catch (e) { /* 服务还没起来，boot 会重试 */ }
 }
+
+// 手机抽屉里那份模块下拉：改它等于改底栏那个（逻辑只有一份，在 #mod-sel 上）。
+bind("ops-mod-sel", "change", () => {
+  const ops = $("ops-mod-sel");
+  const sel = $("mod-sel");
+  if (!ops || !sel) return;
+  if (sel.value === ops.value) return;
+  sel.value = ops.value;
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+});
+
+// 抽屉里的"操作"按钮：全是转发，点的是底栏上那些真按钮。
+document.querySelectorAll("#ops-sec [data-op]").forEach((b) => {
+  b.addEventListener("click", () => {
+    const target = document.getElementById(b.dataset.op);
+    // 推进/存档这类动作做完该看地图了：顺手把抽屉收起来
+    const keepOpen = b.dataset.op === "btn-save" || b.dataset.op === "btn-load"
+      || b.dataset.op === "btn-home" || b.dataset.op === "open-mail"
+      || b.dataset.op === "btn-morning";
+    if (window.__sheetSetOpen && !keepOpen) window.__sheetSetOpen(false);
+    if (target) target.click();
+  });
+});
 
 bind("mod-sel", "change", async () => {
   const path = $("mod-sel").value;
