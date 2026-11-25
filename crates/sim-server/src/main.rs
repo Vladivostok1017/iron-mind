@@ -733,19 +733,57 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 }
                 let root = import_root();
                 let target = root.join(format!("{dir}.imod"));
+                // 同名模块已存在：多半是玩家在装更新。按版本判断，别默默覆盖。
+                let force = v.get("force").and_then(|x| x.as_bool()).unwrap_or(false);
+                let (old_id, old_ver) = module_identity_at(&target);
+                let incoming_ver = module.meta.version.clone();
+                let mut updated_from: Option<String> = None;
                 if target.exists() {
-                    let msg = json!({ "ok": false, "error": format!("已经有一个同名模块：{dir}") });
-                    return respond(&mut stream, 409, "application/json", &msg.to_string());
+                    match import_verdict(&old_id, &old_ver, &module.meta.id, &incoming_ver, force) {
+                        Verdict::Go => updated_from = Some(old_ver.clone()),
+                        Verdict::Ask(kind) => {
+                            let msg = json!({
+                                "ok": false,
+                                "conflict": true,
+                                "kind": kind,
+                                "error": conflict_text(kind, &dir, &old_ver, &incoming_ver),
+                                "name": dir,
+                                "existing_version": old_ver,
+                                "incoming_version": incoming_ver,
+                            });
+                            return respond(&mut stream, 409, "application/json", &msg.to_string());
+                        }
+                    }
                 }
-                if let Err(e) = std::fs::write(&target, &bytes) {
+                // 先落到暂存文件，验过再换上去（旧的模块在换之前一直是完整的）。
+                let staged = staging_path(&target);
+                if let Err(e) = std::fs::write(&staged, &bytes) {
+                    let _ = std::fs::remove_file(&staged);
                     let msg = json!({ "ok": false, "error": format!("写入失败：{e}") });
                     return respond(&mut stream, 500, "application/json", &msg.to_string());
                 }
+                if let Err(e) = swap_into_place(&staged, &target) {
+                    let _ = std::fs::remove_file(&staged);
+                    let msg = json!({ "ok": false, "error": format!("安装失败：{e}") });
+                    return respond(&mut stream, 500, "application/json", &msg.to_string());
+                }
                 trace(format!(
-                    "   导入模块包 {name} → {}（{} KB）",
+                    "   {}模块包 {name} → {}（{} KB）{}",
+                    if updated_from.is_some() { "更新" } else { "导入" },
                     target.display(),
-                    bytes.len() / 1024
+                    bytes.len() / 1024,
+                    updated_from
+                        .as_ref()
+                        .map(|v| format!("，{} → {}", v, incoming_ver))
+                        .unwrap_or_default()
                 ));
+                // 更新的正好是**当前在玩的那一局**：立刻用新数据重开，
+                // 否则玩家会以为更新没生效（界面上还是旧番号/旧地图）。
+                let path_str = target.to_string_lossy().replace('\\', "/");
+                let is_current = is_current_module(&state, &target);
+                if is_current {
+                    let _ = activate_module(state, &path_str);
+                }
                 return respond(
                     &mut stream,
                     200,
@@ -753,9 +791,13 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     &json!({
                         "ok": true,
                         "name": dir,
-                        "path": target.to_string_lossy().replace('\\', "/"),
+                        "path": path_str,
                         "files": 1,
                         "kind": "package",
+                        "updated": updated_from.is_some(),
+                        "from_version": updated_from,
+                        "version": incoming_ver,
+                        "reloaded": is_current,
                     })
                     .to_string(),
                 );
@@ -795,12 +837,31 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             // 落到哪个根：第一个"可写且不是引擎自带"的模块根
             let root = import_root();
             let target = root.join(format!("{dir}.imod"));
+            let incoming_ver = m.get("version").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let force = v.get("force").and_then(|x| x.as_bool()).unwrap_or(false);
+            let (old_id, old_ver) = module_identity_at(&target);
+            let mut updated_from: Option<String> = None;
             if target.exists() {
-                let msg = json!({ "ok": false, "error": format!("已经有一个同名模块：{}", dir) });
-                return respond(&mut stream, 409, "application/json", &msg.to_string());
+                match import_verdict(&old_id, &old_ver, id, &incoming_ver, force) {
+                    Verdict::Go => updated_from = Some(old_ver.clone()),
+                    Verdict::Ask(kind) => {
+                        let msg = json!({
+                            "ok": false,
+                            "conflict": true,
+                            "kind": kind,
+                            "error": conflict_text(kind, &dir, &old_ver, &incoming_ver),
+                            "name": dir,
+                            "existing_version": old_ver,
+                            "incoming_version": incoming_ver,
+                        });
+                        return respond(&mut stream, 409, "application/json", &msg.to_string());
+                    }
+                }
             }
-            if let Err(e) = std::fs::create_dir_all(&target) {
-                let msg = json!({ "ok": false, "error": format!("建目录失败：{e}") });
+            // 写到暂存目录、验过再换上去：写一半失败时旧模块仍然完好。
+            let staged = staging_path(&target);
+            if let Err(e) = std::fs::create_dir_all(&staged) {
+                let msg = json!({ "ok": false, "error": format!("建暂存目录失败：{e}") });
                 return respond(&mut stream, 500, "application/json", &msg.to_string());
             }
             let mut written = 0usize;
@@ -816,7 +877,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     continue;
                 }
                 let Some(text) = f.get("text").and_then(|t| t.as_str()) else { continue };
-                let dest = target.join(rel);
+                let dest = staged.join(rel);
                 if let Some(parent) = dest.parent() {
                     if std::fs::create_dir_all(parent).is_err() {
                         continue;
@@ -826,7 +887,31 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     written += 1;
                 }
             }
-            trace(format!("   导入模块 → {}（{written} 个文件）", target.display()));
+            // 落到盘上之前先加载一遍：一个 json 写坏的模块不该顶掉能用的那个。
+            if let Err(e) = sim_content::load_module(&staged) {
+                let _ = std::fs::remove_dir_all(&staged);
+                let msg = json!({ "ok": false, "error": format!("这不是一个可用的模块：{e}") });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            if let Err(e) = swap_into_place(&staged, &target) {
+                let _ = std::fs::remove_dir_all(&staged);
+                let msg = json!({ "ok": false, "error": format!("安装失败：{e}") });
+                return respond(&mut stream, 500, "application/json", &msg.to_string());
+            }
+            trace(format!(
+                "   {}模块 → {}（{written} 个文件）{}",
+                if updated_from.is_some() { "更新" } else { "导入" },
+                target.display(),
+                updated_from
+                    .as_ref()
+                    .map(|v| format!("，{} → {}", v, incoming_ver))
+                    .unwrap_or_default()
+            ));
+            let path_str = target.to_string_lossy().replace('\\', "/");
+            let is_current = is_current_module(&state, &target);
+            if is_current {
+                let _ = activate_module(state, &path_str);
+            }
             respond(
                 &mut stream,
                 200,
@@ -834,8 +919,12 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 &json!({
                     "ok": true,
                     "name": dir,
-                    "path": target.to_string_lossy().replace('\\', "/"),
+                    "path": path_str,
                     "files": written,
+                    "updated": updated_from.is_some(),
+                    "from_version": updated_from,
+                    "version": incoming_ver,
+                    "reloaded": is_current,
                 })
                 .to_string(),
             )
@@ -1659,6 +1748,137 @@ struct SaveFile {
     /// 玩家扮演哪一方（1.1）。老存档没有这一段 → 用模块默认方，行为不变。
     #[serde(default)]
     player: Option<String>,
+}
+
+/// 模块版本比较：只认数字段（`0.3.0` / `1.1` / `2`），非数字段当 0。
+///
+/// 为什么自己写：模块版本是内容作者填的字符串，不能要求他们装 semver 库；
+/// 但也绝不能只比字符串——`0.10.0` 会被判成"比 0.9.0 小"，于是更新装不上去。
+fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
+    fn parts(v: &str) -> Vec<u64> {
+        v.trim()
+            .trim_start_matches('v')
+            .split(['.', '-', '+'])
+            .map(|s| {
+                s.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse::<u64>()
+                    .unwrap_or(0)
+            })
+            .collect()
+    }
+    let (mut x, mut y) = (parts(a), parts(b));
+    let n = x.len().max(y.len());
+    x.resize(n, 0);
+    y.resize(n, 0);
+    x.cmp(&y)
+}
+
+/// 同名模块已存在时怎么办。
+///
+/// **更新是正常需求**：模块在另一个仓库里迭代，玩家装过 0.2 之后还会拿到 0.3。
+/// 但不该默默覆盖——一是可能盖掉玩家自己改过的数据，二是把新版本装回旧版本
+/// 通常是误操作。所以只有"版本确实变新"才自动装，其余一律把选择权交回给玩家。
+enum Verdict {
+    /// 直接装（新装，或覆盖成更新的版本）。
+    Go,
+    /// 需要玩家显式确认（同版本重装、降级、同名但 id 不同、版本号读不出来）。
+    Ask(&'static str),
+}
+
+fn import_verdict(
+    existing_id: &str,
+    existing_ver: &str,
+    incoming_id: &str,
+    incoming_ver: &str,
+    force: bool,
+) -> Verdict {
+    if force {
+        return Verdict::Go;
+    }
+    // 目录名一样但内部 id 不同 = 两个不同的模块撞了名，绝不能悄悄盖掉。
+    if !existing_id.is_empty() && !incoming_id.is_empty() && existing_id != incoming_id {
+        return Verdict::Ask("different_id");
+    }
+    if existing_ver.is_empty() || incoming_ver.is_empty() {
+        return Verdict::Ask("unknown_version");
+    }
+    match cmp_version(incoming_ver, existing_ver) {
+        std::cmp::Ordering::Greater => Verdict::Go,
+        std::cmp::Ordering::Equal => Verdict::Ask("same_version"),
+        std::cmp::Ordering::Less => Verdict::Ask("downgrade"),
+    }
+}
+
+/// 读出磁盘上那个模块的 (id, version)。读不出来就是空串。
+fn module_identity_at(p: &std::path::Path) -> (String, String) {
+    match sim_content::peek_meta_json(p) {
+        Some(m) => (
+            m.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            m.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        ),
+        None => (String::new(), String::new()),
+    }
+}
+
+/// 把暂存好的新版本换上，旧版本先删掉。
+///
+/// 必须等新版本**完全写好并验过**才动旧的：写一半断电/磁盘满的时候，
+/// 玩家的模块不该变成一堆残骸。
+fn swap_into_place(staged: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    if target.exists() {
+        if target.is_dir() {
+            std::fs::remove_dir_all(target)?;
+        } else {
+            std::fs::remove_file(target)?;
+        }
+    }
+    std::fs::rename(staged, target)
+}
+
+/// 导入时的暂存目录/文件（和目标的父目录同一层，`rename` 才是原子的）。
+fn staging_path(target: &std::path::Path) -> PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let name = format!(
+        "{}.new-{}-{}",
+        target.file_name().and_then(|x| x.to_str()).unwrap_or("module"),
+        std::process::id(),
+        stamp
+    );
+    target.with_file_name(name)
+}
+
+/// 冲突时给人看的话。界面会把这段直接显示给玩家，所以要说"怎么办"，
+/// 不能只说"已经存在了"。
+fn conflict_text(kind: &str, dir: &str, old_ver: &str, new_ver: &str) -> String {
+    match kind {
+        "different_id" => format!(
+            "本地已经有一个叫 {dir} 的模块，但它不是这同一个模块。覆盖会把原来那个删掉。"
+        ),
+        "same_version" => format!(
+            "本地已经是 {old_ver}，这个包也是 {new_ver}。重装会覆盖（自己改过的数据也会没）。"
+        ),
+        "downgrade" => format!(
+            "本地是 {old_ver}，这个包是更旧的 {new_ver}。装下去等于退回旧版。"
+        ),
+        _ => format!("本地已经有 {dir}（版本 {old_ver} 或读不出来），这个包是 {new_ver}。"),
+    }
+}
+
+/// 现在正在跑的是不是这个路径（两条路径写法可能不同：`\` vs `/`、相对 vs 绝对）。
+fn is_current_module(state: &Arc<ServerState>, path: &std::path::Path) -> bool {
+    let cur = state.module_path.lock().unwrap().clone();
+    let a = std::fs::canonicalize(&cur).ok();
+    let b = std::fs::canonicalize(path).ok();
+    match (a, b) {
+        (Some(a), Some(b)) => a == b,
+        // canonicalize 失败（路径已不存在）时退回字符串比，抹平分隔符
+        _ => cur.replace('\\', "/").eq_ignore_ascii_case(&path.to_string_lossy().replace('\\', "/")),
+    }
 }
 
 /// 首页的"战役卡"：一个模块在界面上的全部信息。
@@ -3144,6 +3364,9 @@ fn respond(
         200 => "200 OK",
         400 => "400 Bad Request",
         404 => "404 Not Found",
+        // 409 早就用上了（同名模块冲突），但这里一直没列，于是实际发出去的是
+        // 500——前端只看 body 所以没露馅，抓包/curl 看到的是"服务器内部错误"。
+        409 => "409 Conflict",
         _ => "500 Internal Server Error",
     };
     let head = format!(
@@ -3170,8 +3393,66 @@ const BASEMAP: &str = include_str!("../web/basemap.json");
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_slot, Sides, Side};
+    use super::{
+        cmp_version, conflict_text, import_verdict, sanitize_slot, Sides, Verdict, Side,
+    };
     use sim_content::model::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn versions_compare_numerically_not_lexically() {
+        // 最容易写错的一条：字符串比较会认为 "0.10.0" < "0.9.0"，于是更新装不上去。
+        assert_eq!(cmp_version("0.10.0", "0.9.0"), Ordering::Greater);
+        assert_eq!(cmp_version("0.3.0", "0.2.0"), Ordering::Greater);
+        assert_eq!(cmp_version("1.0.0", "1.0"), Ordering::Equal);
+        assert_eq!(cmp_version("v1.1.0", "1.0.9"), Ordering::Greater);
+        assert_eq!(cmp_version("2", "1.9.9"), Ordering::Greater);
+        // 带后缀的预发行号按数字部分比，不比字符串
+        assert_eq!(cmp_version("1.0.0-rc1", "1.0.0"), Ordering::Equal);
+    }
+
+    #[test]
+    fn newer_version_installs_without_asking() {
+        assert!(matches!(
+            import_verdict("org.x.mod", "0.2.0", "org.x.mod", "0.3.0", false),
+            Verdict::Go
+        ));
+    }
+
+    #[test]
+    fn same_newer_and_downgrade_need_a_yes() {
+        for (old, new, why) in [
+            ("0.3.0", "0.3.0", "same_version"),
+            ("0.3.0", "0.2.0", "downgrade"),
+            ("", "0.3.0", "unknown_version"),
+            ("0.3.0", "", "unknown_version"),
+        ] {
+            match import_verdict("org.x.mod", old, "org.x.mod", new, false) {
+                Verdict::Ask(kind) => assert_eq!(kind, why, "({old} → {new})"),
+                Verdict::Go => panic!("{old} → {new} 不该不问就装"),
+            }
+        }
+        // 目录名撞了但内部 id 不同：绝不是同一个模块，必须问
+        match import_verdict("org.a.x", "1.0.0", "org.b.x", "9.0.0", false) {
+            Verdict::Ask(kind) => assert_eq!(kind, "different_id"),
+            Verdict::Go => panic!("不同 id 不该自动覆盖"),
+        }
+    }
+
+    #[test]
+    fn force_overrides_every_conflict() {
+        assert!(matches!(
+            import_verdict("org.a.x", "9.0.0", "org.b.x", "1.0.0", true),
+            Verdict::Go
+        ));
+    }
+
+    #[test]
+    fn conflict_text_tells_the_player_what_happens() {
+        let s = conflict_text("downgrade", "nanxun_1938", "0.3.0", "0.2.0");
+        assert!(s.contains("0.3.0") && s.contains("0.2.0"), "{s}");
+        assert!(s.contains("退回旧版"), "要说清后果：{s}");
+    }
 
     fn meta_with_sides() -> ModuleMeta {
         ModuleMeta {

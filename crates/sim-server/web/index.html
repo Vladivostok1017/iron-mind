@@ -3087,19 +3087,46 @@ const Home = (() => {
       }
       const b64 = btoa(bin);
       try {
-        const r = await fetch("/api/modules/import", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file: f.name, base64: b64 }),
-        });
-        const j = await r.json();
-        if (!j.ok) { toast(j.error || "导入失败"); return; }
-        toast("已导入 " + j.name);
-        Dlg.close();
-        await loadModules();
-        await Home.newCampaign();
+        const j = await postImport({ file: f.name, base64: b64 });
+        if (!j) return;
+        finishImport(j);
       } catch (e) { toast("导入失败：连不上内核"); }
     });
     inp.click();
+  }
+
+  // 真正发导入请求，并处理"本地已经有这个模块"的情况。
+  //
+  // 模块在另一个仓库里迭代，玩家装过 0.2 之后还会拿到 0.3——所以同名不是错误，
+  // 是常态。服务端按版本判断：更新的自动装，其余情况（同版本重装 / 降级 /
+  // 只是目录名撞了）返回 409 + 冲突类型，这里问一句再决定。
+  async function postImport(payload, force) {
+    const body = Object.assign({}, payload, force ? { force: true } : {});
+    const r = await fetch("/api/modules/import", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (j.ok) return j;
+    if (!j.conflict) { toast(j.error || "导入失败"); return null; }
+    // 冲突：把服务端那句话原样摆出来，让玩家自己决定。
+    const yes = confirm(
+      (j.error || "本地已有同名模块。") +
+      "\n\n仍然要装这个包吗？" +
+      (j.incoming_version ? "\n（包里的版本：" + j.incoming_version + "）" : "")
+    );
+    if (!yes) { toast("已取消，本地模块没动"); return null; }
+    return postImport(payload, true);
+  }
+
+  function finishImport(j) {
+    toast(
+      (j.updated ? "已更新 " + j.name + "：v" + (j.from_version || "?") + " → v" + (j.version || "?")
+                 : "已导入 " + j.name) +
+      (j.reloaded ? "（正在玩的这一局已重开）" : "")
+    );
+    Dlg.close();
+    loadModules().then(() => Home.newCampaign());
   }
 
   // 从文件夹导入一个模块。浏览器只能"读"，所以把文件内容传给内核去写盘。
@@ -3129,16 +3156,9 @@ const Home = (() => {
       }
       toast("正在导入 " + out.length + " 个文件…");
       try {
-        const r = await fetch("/api/modules/import", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ files: out }),
-        });
-        const j = await r.json();
-        if (!j.ok) { toast(j.error || "导入失败"); return; }
-        toast("已导入 " + j.name + "（" + j.files + " 个文件）");
-        Dlg.close();
-        await loadModules();
-        await Home.newCampaign();
+        const j = await postImport({ files: out });
+        if (!j) return;
+        finishImport(j);
       } catch (e) { toast("导入失败：连不上内核"); }
     });
     inp.click();
