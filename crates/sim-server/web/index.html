@@ -2677,18 +2677,21 @@ let suppressClick = false;
       ev.preventDefault();
       const d = Math.max(1, dist2(ev.touches[0], ev.touches[1]));
       const rect = $("map").getBoundingClientRect();
-      const v = camView();
       // 以起始中点为不动点缩放（和滚轮那套是同一个公式）
       const fx = (pinchFrom.m.x - rect.left) / rect.width;
       const fy = (pinchFrom.m.y - rect.top) / rect.height;
       const z0 = pinchFrom.z;
       const nz = Math.min(CAM_MAX, Math.max(1, z0 * (d / pinchFrom.d)));
+      // 起始中点在世界坐标里的位置，必须用**起点**的视口宽高（W/z0、H/z0）来算。
+      //
+      // 原来这里写的是 `v.w * (z0 / cam.z)`——那等于缩放后的宽度，代回去后
+      // `cam.x = wx - fx * nv.w` 里两项正好抵消，相机一动不动；表现出来就是
+      // "绕视口中心缩放"：手指按在偏一点的位置捏合，手指下面那块地图会往边上滑
+      // （越偏、捏得越多，漂得越远）。滚轮那条没有这个抵消，所以鼠标缩放是准的。
+      const wx = pinchFrom.cx + fx * (W / z0);
+      const wy = pinchFrom.cy + fy * (H / z0);
       cam.z = nz;
       const nv = camView();
-      // 起始中点在世界坐标里的位置
-      const v0w = v.w * (z0 / cam.z);
-      const wx = pinchFrom.cx + fx * v0w;
-      const wy = pinchFrom.cy + fy * (v.h * (z0 / cam.z));
       cam.x = wx - fx * nv.w;
       cam.y = wy - fy * nv.h;
       clampCam();
