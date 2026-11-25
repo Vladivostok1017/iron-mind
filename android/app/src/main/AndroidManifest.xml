@@ -10,11 +10,13 @@
   configChanges 那一长串不是抄来的：旋转屏幕/切分屏时如果 Activity 被重建，
   内核（连同正在跑的战役）会被重启，玩家会看到"转个屏进度没了"。
 
-  为什么现在锁 portrait：`configChanges` 保住了内核，但**没人告诉 WebView 窗口变宽了**
-  ——横屏时 2400×1080 的屏幕上，页面仍按竖屏的 393 CSS px 排版，右半屏全空。
-  这不是 CSS 能修的（横屏样式已经写好了，见 index.html 末尾的 orientation 媒体查询），
-  是 tao/wry 在 Android 上没转发配置变化，得在 Kotlin 侧强制重排或升级外壳版本。
-  在修好之前锁竖屏：坏掉的横屏比不能横屏更糟。
+  为什么是**启动即横屏**（sensorLandscape）：横屏宽度够把地图和电报台并排放，
+  这是这个游戏最舒服的形态（看地图 → 发电报，不用来回开抽屉）。
+  更关键的是它能绕开一个坑：外壳声明了 configChanges 不重建 Activity，
+  但 tao/wry 这版**不会**在旋转后重新排版 WebView —— 竖屏启动再转横屏，
+  2400×1080 的屏幕上页面仍按竖屏 393 CSS px 渲染，右半屏全空。
+  一开始就用横屏创建窗口，WebView 首次布局就是 873×393，不需要重排。
+  （想支持"运行中旋转"，得在外壳里转发配置变化，那是有风险的独立任务。）
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -31,8 +33,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:screenOrientation="portrait"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation">
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation|screenLayout">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

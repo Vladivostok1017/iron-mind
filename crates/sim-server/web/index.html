@@ -724,6 +724,22 @@
     aside .sec { padding: 6px 10px; }
     aside .sec h3 { font-size: 11px; margin-bottom: 5px; }
     #dp-text { height: 54px; font-size: 14px; }
+    /* 首页在横屏下也用单列 + 滚动：高度只有三百多，桌面那套两栏装不下 */
+    #home.on { display: block; }
+    #home { overflow-y: auto; }
+    #home .h-top { padding: 10px 14px 4px; flex-wrap: wrap; }
+    #home .h-title { font-size: 16px; }
+    #home .h-title span { display: inline; margin-left: 8px; font-size: 10px; }
+    #home .h-sub { font-size: 10.5px; }
+    #home .h-ver { margin-left: auto; text-align: right; font-size: 10px; }
+    #home .h-mid { display: block; padding: 6px 14px 8px; min-height: 0; }
+    #home .h-menu { max-width: none; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+    .h-item { padding: 9px 10px; }
+    .h-item .i-t { font-size: 14px; }
+    .h-item .i-d { font-size: 10.5px; }
+    #home .h-card { margin-top: 10px; }
+    #home .h-bot { padding: 8px 14px calc(8px + env(safe-area-inset-bottom, 0px)); }
+
     #mail { inset: 0; border-radius: 0; border: none; z-index: 95; }
     #mail .m-head { position: sticky; top: 0; }
     #mail .m-body { flex-direction: row; }
@@ -3422,6 +3438,8 @@ const Home = (() => {
   }
   function show() {
     open = true;
+    // 玩家自己点"菜单"回首页：清掉"在局里"的标记，下次启动才正常显示首页
+    try { sessionStorage.removeItem("im_in_game"); } catch (e) { }
     $("home").classList.add("on");
     idx = 0;
     paintSel();
@@ -3430,6 +3448,11 @@ const Home = (() => {
   function hide() {
     open = false;
     $("home").classList.remove("on");
+    // 记一笔"我在局里"：手机转屏时外壳会 reload 一次页面
+    //（见 MainActivity.onConfigurationChanged——Android WebView 不会重新解析
+    // meta viewport，只能重载）。重载后 boot 靠这个标记直接回到这一局，
+    // 而不是把玩家丢回首页。sessionStorage 在进程内有效，正好。
+    try { sessionStorage.setItem("im_in_game", "1"); } catch (e) { }
     // 第一次真正进游戏时把引导跑一遍。跳过也算看过，之后不再打扰。
     if (!localStorage.getItem("im_onboarded") && !autoGuided) {
       autoGuided = true;
@@ -4053,7 +4076,10 @@ async function boot() {
   let first = true;
   let setupChecked = false;
   async function round() {
-    if (first) { Home.show(); first = false; }
+    // 转屏后外壳会 reload（Android WebView 不会重新解析 viewport）。
+    // 这时如果世界还在跑，就直接回到这一局，别把玩家丢回首页。
+    const resumed = (() => { try { return sessionStorage.getItem("im_in_game") === "1"; } catch (e) { return false; } })();
+    if (first) { if (!resumed) Home.show(); first = false; }
     await api("/api/state");
     loadModules();
     if (!BASEMAP) loadBasemap();
