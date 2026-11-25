@@ -795,7 +795,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                 "built": built,
                 // 这个引擎**会**哪些预览版机制。模块声明了但引擎不支持时，
                 // 前端要明说"你的引擎太旧"，而不是默默少几个面板。
-                "preview": ["ammo_fuel", "rail_damage", "politics", "replay"],
+                "preview": ["ammo_fuel", "rail_damage", "politics", "front_line", "replay", "arrivals"],
             })
             .to_string();
             respond(&mut stream, 200, "application/json", &body)
