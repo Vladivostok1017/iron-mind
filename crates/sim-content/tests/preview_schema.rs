@@ -14,7 +14,7 @@ fn scen(json: &str) -> ScenarioDef {
 fn no_preview_block_means_everything_on() {
     let s = scen(r#"{"id":"a","name":"b","days":30}"#);
     assert!(s.preview.is_none(), "不写 preview 段");
-    let fx = sim_content::features_from(s.preview.as_ref());
+    let fx = sim_content::features_from(s.preview.as_ref(), sim_content::model::ScaleDef::Front);
     assert!(fx.ammo_fuel && fx.rail_damage && fx.politics && fx.front_line);
     assert!(fx.disabled().is_empty(), "没有关掉的机制");
 }
@@ -22,7 +22,7 @@ fn no_preview_block_means_everything_on() {
 #[test]
 fn explicit_false_turns_one_mechanism_off() {
     let s = scen(r#"{"id":"a","name":"b","days":30,"preview":{"front_line":false}}"#);
-    let fx = sim_content::features_from(s.preview.as_ref());
+    let fx = sim_content::features_from(s.preview.as_ref(), sim_content::model::ScaleDef::Front);
     assert!(!fx.front_line, "显式关掉");
     assert!(fx.ammo_fuel, "没提到的保持默认开");
     assert_eq!(fx.disabled(), vec!["front_line"]);
@@ -31,7 +31,7 @@ fn explicit_false_turns_one_mechanism_off() {
 #[test]
 fn explicit_true_is_same_as_default() {
     let s = scen(r#"{"id":"a","name":"b","days":30,"preview":{"ammo_fuel":true}}"#);
-    let fx = sim_content::features_from(s.preview.as_ref());
+    let fx = sim_content::features_from(s.preview.as_ref(), sim_content::model::ScaleDef::Front);
     assert_eq!(fx, sim_core::Features::default());
 }
 
@@ -41,7 +41,7 @@ fn all_off_is_expressible_for_legacy_reproduction() {
         r#"{"id":"a","name":"b","days":30,
             "preview":{"ammo_fuel":false,"rail_damage":false,"politics":false,"front_line":false}}"#,
     );
-    let fx = sim_content::features_from(s.preview.as_ref());
+    let fx = sim_content::features_from(s.preview.as_ref(), sim_content::model::ScaleDef::Front);
     assert_eq!(fx, sim_core::Features::none(), "四个都关 = 0.12 的旧语义");
     assert_eq!(fx.disabled().len(), 4);
 }

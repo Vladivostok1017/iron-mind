@@ -382,7 +382,7 @@ pub fn build_world(module: &LoadedModule) -> World {
     apply_arrivals(&mut world, module);
     // 预览版开关：模块不声明 = 全关 = 第一版发行版的定稿行为。
     // 这一行是"定稿不被改"的总闸：下面所有新系统都先看这几个布尔值。
-    world.fx = features_from(module.scenario.preview.as_ref());
+    world.fx = features_from(module.scenario.preview.as_ref(), module.meta.scale);
     world.comms = comms_from(module.scenario.comms.as_ref());
     world.campaign_days = module.scenario.days;
     // 编制实体：按 parent 归组。
@@ -428,20 +428,42 @@ pub fn build_world(module: &LoadedModule) -> World {
     world
 }
 
-/// 把模块声明翻成引擎的 `Features`。
+/// 把模块声明 + **地图尺度**翻成引擎的 `Features`。
 ///
-/// **1.0 起默认全开**：这几个机制已经并回主线，成为正式基线。
-/// 字段写成 `Option<bool>` 是为了让"想退回旧行为"的模块能显式关掉：
-/// `"preview": { "front_line": false }`。漏写 / 拼错 / 旧引擎忽略 → 都是开，
-/// 也就是"所有人都用新基线"，这比"悄悄退回旧语义"更容易被作者发现。
-pub fn features_from(def: Option<&PreviewDef>) -> sim_core::Features {
+/// **1.0 起默认开启**：这几个机制已经并回主线，是正式基线。
+/// 但"默认"不等于"一刀切"——`front_line`（连续正面模型）的默认值**跟着尺度走**：
+///
+/// | scale | `front_line` 默认 | 为什么 |
+/// |---|---|---|
+/// | `theater`（≈35 km/省） | **关** | 一个省是一个"区"，侧翼和后方是真实存在的；占领要求清空邻省才符合这类地图的时空粒度 |
+/// | `naval` | 关 | 水区面积大，同理 |
+/// | `front` / `battle` / `siege`（5–15 km/省） | **开** | 一个省是一个"阵地"，把它清空就等于拿下了；四邻皆敌是常态，不是被围 |
+///
+/// 这不是"给作者添麻烦"，而是尺度决定语义：同样一条"邻接有敌不准占领"，
+/// 在 35 km 的战役图上是对的（防穿插），在 10 km 的正面图上会把战线冻住。
+///
+/// 想覆盖就显式写：`"preview": { "front_line": true/false }`（无论 scale 怎么写都听模块的）。
+pub fn features_from(
+    def: Option<&PreviewDef>,
+    scale: model::ScaleDef,
+) -> sim_core::Features {
+    use model::ScaleDef;
+    // 尺度决定的默认值（只有 front_line 分尺度；其余三项对所有尺度都该开）
+    let dense_by_scale = matches!(
+        scale,
+        ScaleDef::Front | ScaleDef::Battle | ScaleDef::Siege
+    );
+    let defaults = sim_core::Features {
+        front_line: dense_by_scale,
+        ..sim_core::Features::default()
+    };
     match def {
-        None => sim_core::Features::default(),
+        None => defaults,
         Some(d) => sim_core::Features {
             ammo_fuel: d.ammo_fuel.unwrap_or(true),
             rail_damage: d.rail_damage.unwrap_or(true),
             politics: d.politics.unwrap_or(true),
-            front_line: d.front_line.unwrap_or(true),
+            front_line: d.front_line.unwrap_or(defaults.front_line),
         },
     }
 }

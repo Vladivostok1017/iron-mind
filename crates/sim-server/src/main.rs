@@ -67,7 +67,7 @@ fn main() {
     }
     // 预览版开关：开着才打这一行。作者/玩家看到它就知道"现在的规则不是定稿那套"。
     {
-        let fx = sim_content::features_from(module.scenario.preview.as_ref());
+        let fx = sim_content::features_from(module.scenario.preview.as_ref(), module.meta.scale);
         if fx.any() {
             println!("  预览版：{}", fx.names().join("、"));
         }
