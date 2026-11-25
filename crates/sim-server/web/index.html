@@ -2,6 +2,13 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<!-- 没有这一行，安卓 WebView 会按 980px 的虚拟宽度渲染页面：
+     `@media (max-width: 820px)` 永远不命中，手机上看到的是一张缩小的桌面版
+     （字小到看不清、按钮点不准）。加上之后视口宽度 = 屏幕宽度（CSS px），
+     手机布局才生效。`viewport-fit=cover` 让内容铺到刘海/圆角下面。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e12">
+<meta name="color-scheme" content="dark">
 <title>钢心 · Iron Mind</title>
 <style>
   :root {
@@ -431,6 +438,127 @@
   .fr-bar { height: 4px; background: #1c242e; border-radius: 2px; margin: 3px 0 2px; overflow: hidden; }
   .fr-bar i { display: block; height: 100%; }
   .fr-who { font-size: 11px; color: #7f8a96; line-height: 1.5; }
+
+  /* 面板按钮：只在手机布局下出现（桌面侧栏一直在，不需要它） */
+  .fab {
+    display: none;
+    position: fixed; right: 14px; bottom: 78px; z-index: 70;
+    align-items: center; justify-content: center; gap: 6px;
+    padding: 11px 15px; border-radius: 24px;
+    background: #1d2733; color: #dbe3ec; border: 1px solid #33404f;
+    font-size: 13px; font-weight: 600;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+    cursor: pointer;
+  }
+  .fab .dot {
+    min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px;
+    background: #b6432f; color: #fff; font-size: 11px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .fab .dot:empty, .fab .dot[data-n="0"] { display: none; }
+  /* ───────────────── 手机布局 ─────────────────
+     桌面是"左地图 + 右 316px 侧栏"。手机上不做缩微版：地图占满屏幕，
+     侧栏变成**从底部拉起来的面板**（#app.sheet-open 时滑上来）。
+
+     为什么用抽屉而不是"上下分屏"：这个游戏在地图上的时间是"看"，
+     在侧栏里才是"操作"（发电报、批公文）。分屏会让两边都太小，
+     抽屉则各自都能用全套；而且关了抽屉，地图就是满屏的。
+
+     断点 820px：7 寸以下竖屏都走这套，横屏平板仍用桌面布局。 */
+  @media (max-width: 820px) {
+    /* 视口高度用动态单位：手机浏览器/WebView 的地址栏、手势条会伸缩，
+       100vh 会把底部工具栏挤到屏幕外。 */
+    #app { height: 100dvh; }
+    /* 全面屏的手势条：不留这条缝，底部按钮会被系统条盖住一半 */
+    #bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+    #top { padding-top: env(safe-area-inset-top, 0px); height: calc(46px + env(safe-area-inset-top, 0px)); }
+    /* 顶栏：只留番号与日期，三个统计挤不下就藏掉（详情在"态势"面板里） */
+    #top { padding: 0 10px; gap: 10px; }
+    #top .stat { display: none; }
+    #top .nation { font-size: 13px; }
+    #top .sub { font-size: 10px; }
+    #top .crest { width: 26px; height: 26px; font-size: 13px; }
+    #top .pend { padding: 2px 7px; font-size: 10.5px; }
+
+    /* 单列：地图铺满，侧栏脱离文档流变抽屉 */
+    #main { grid-template-columns: 1fr; }
+    aside {
+      position: fixed; left: 0; right: 0; bottom: 0; top: 96px;
+      z-index: 72;
+      border-left: none; border-top: 1px solid var(--line);
+      border-radius: 14px 14px 0 0;
+      box-shadow: 0 -12px 32px rgba(0, 0, 0, .55);
+      transform: translateY(100%);
+      transition: transform .22s ease;
+      overscroll-behavior: contain;
+    }
+    #app.sheet-open aside { transform: translateY(0); }
+    /* 抽屉打开时压一层背板：点它就收起，免得找不到"关" */
+    #sheet-backdrop {
+      position: fixed; inset: 0; z-index: 71; display: none;
+      background: rgba(0, 0, 0, .45);
+    }
+    #app.sheet-open #sheet-backdrop { display: block; }
+
+    /* 底部工具栏：横向滚动，否则一行塞不下会挤成两行小字 */
+    #bottom {
+      padding: 0 8px; gap: 6px; overflow-x: auto; overflow-y: hidden;
+      white-space: nowrap; scrollbar-width: none;
+    }
+    #bottom::-webkit-scrollbar { display: none; }
+    #bottom #hint { display: none; }
+    #bottom #plan { display: none; }
+    #bottom .btn { flex: 0 0 auto; padding: 7px 10px; font-size: 11.5px; }
+    #bottom #mod-sel { flex: 0 0 auto; max-width: 120px; }
+
+    /* 触屏上 44px 是最小可用点击面积，桌面那套 6px padding 点不准 */
+    .btn, .m-chip, .mode, .rp-btn { min-height: 34px; }
+    #dp-text { font-size: 16px; }  /* 16px 以下 iOS/Android 会自动放大页面 */
+    #dp-to { font-size: 16px; }
+
+    /* 战报信箱：手机上改成"列表在上、正文在下"，全屏 */
+    #mail { inset: 0; border-radius: 0; border: none; }
+    #mail .m-body { flex-direction: column; }
+    #mail .m-list { width: auto; max-height: 38%; border-right: none; border-bottom: 1px solid #1e2833; }
+
+    /* 弹窗：手机上没有 64px 边距可挥霍 */
+    .dg-wrap { padding: 0; align-items: flex-end; }
+    .dg { width: 100%; max-width: none; max-height: 88vh; border-radius: 14px 14px 0 0; }
+    .dg-row { flex-wrap: wrap; }
+    .dg-row .r-act { width: 100%; }
+
+    /* 地形色标贴在左下角，别压住底部工具栏 */
+    #hypso-leg { bottom: 8px; left: 8px; transform: scale(.86); transform-origin: left bottom; }
+    #replay-bar { bottom: 8px; }
+    /* 手机上没有滚轮，缩放靠双指；鼠标那套光标提示没意义 */
+    #stage { cursor: default; }
+    .fab { display: flex; }
+
+    /* ---- 首页 ---- */
+    /* 桌面是"左菜单 + 右战役卡"两栏，手机上必须单列。
+       而且手机上不该用固定的三段网格（auto 1fr auto）：战役卡会把
+       页脚顶掉、页脚压住卡片。改成一条可滚动的长页最稳。 */
+    #home.on { display: block; }
+    #home { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    #home .h-top { padding: 16px 16px 4px; gap: 10px; flex-wrap: wrap; }
+    #home .h-title { font-size: 17px; letter-spacing: .12em; }
+    #home .h-title span { display: block; margin: 3px 0 0; font-size: 10px; }
+    #home .h-sub { font-size: 11px; line-height: 1.6; }
+    #home .h-ver { width: 100%; text-align: left; margin-left: 0; padding-top: 2px; }
+    #home .h-mid { display: block; padding: 10px 14px 8px; min-height: 0; }
+    #home .h-menu { max-width: none; }
+    .h-item { padding: 14px 12px 14px 8px; }   /* 手指点得准 */
+    .h-item .i-t { font-size: 16px; }
+    .h-item .i-d { font-size: 12px; line-height: 1.5; }
+    /* 战役卡放在菜单**下面**：手机第一眼要看到"开始"，不是介绍 */
+    #home .h-card { margin-top: 14px; }
+    #home .h-bot {
+      padding: 12px 14px calc(16px + env(safe-area-inset-bottom, 0px));
+      gap: 10px; flex-wrap: wrap; line-height: 1.6;
+    }
+  }
+
+
 </style>
 </head>
 <body>
@@ -455,7 +583,16 @@
     <div class="clock" id="clock">第 0 日</div>
   </div>
 
+  <!-- 面板按钮：桌面隐藏，手机上打开/收起底部抽屉（CSS 里控制显隐）。
+       待办数（公文 + 新到战报）直接挂在按钮上——手机上如果只看地图，
+       最容易漏掉的就是"有人在等你批复"。 -->
+  <button class="fab" id="fab-sheet" title="电报 / 公文 / 部队 / 战报">
+    <span id="fab-label">面板</span><span class="dot" id="fab-dot" data-n="0"></span>
+  </button>
+
   <div id="main">
+    <!-- 抽屉背板：手机上面板滑起来时点这里收起 -->
+    <div id="sheet-backdrop"></div>
     <div id="stage">
       <svg id="map"></svg>
       <div id="toast"></div>
@@ -1168,6 +1305,8 @@ function renderTop() {
   const pe = $("pending");
   pe.textContent = pend > 0 ? "战报 " + pend + " 份在途" : "战报已清";
   pe.className = "pend" + (pend > 0 ? " hot" : "");
+  // 手机抽屉按钮上的小红点：每次状态刷新都跟着变（桌面布局下这个按钮是隐藏的）
+  paintBadge();
   // 经典模式角标：模块**关掉**了某些机制才亮。1.0 起这些是默认行为，
   // 只有显式关掉才需要提醒（否则玩家会以为"打不动/走不动"是 bug）。
   const off = S.features_off || [];
@@ -2267,7 +2406,147 @@ let suppressClick = false;
     applyCam();
     toast("视角复位");
   });
+
+  // ---- 触屏：单指拖动 = 平移，双指捏合 = 缩放，双指双击 = 复位 ----
+  //
+  // 手机上没有滚轮，也没有 hover。这里把上面那套 cam 逻辑原样复用，
+  // 只是把"鼠标事件"换成一到两个手指的位移。
+  let touchFrom = null;   // 单指拖动起点
+  let pinchFrom = null;   // 双指起始距离与中点
+  let touchMoved = false;
+
+  const dist2 = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const mid2 = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+
+  stage.addEventListener("touchstart", (ev) => {
+    if (ev.touches.length === 1) {
+      const t = ev.touches[0];
+      touchFrom = { x: t.clientX, y: t.clientY, cx: cam.x, cy: cam.y };
+      touchMoved = false;
+      pinchFrom = null;
+    } else if (ev.touches.length === 2) {
+      // 双指：以中点为锚，先记下距离与当时的视口
+      pinchFrom = {
+        d: Math.max(1, dist2(ev.touches[0], ev.touches[1])),
+        m: mid2(ev.touches[0], ev.touches[1]),
+        z: cam.z,
+        cx: cam.x,
+        cy: cam.y,
+      };
+      touchFrom = null;
+      touchMoved = true;   // 双指动作一律不当成点击
+    }
+  }, { passive: true });
+
+  stage.addEventListener("touchmove", (ev) => {
+    if (pinchFrom && ev.touches.length === 2) {
+      ev.preventDefault();
+      const d = Math.max(1, dist2(ev.touches[0], ev.touches[1]));
+      const rect = $("map").getBoundingClientRect();
+      const v = camView();
+      // 以起始中点为不动点缩放（和滚轮那套是同一个公式）
+      const fx = (pinchFrom.m.x - rect.left) / rect.width;
+      const fy = (pinchFrom.m.y - rect.top) / rect.height;
+      const z0 = pinchFrom.z;
+      const nz = Math.min(CAM_MAX, Math.max(1, z0 * (d / pinchFrom.d)));
+      cam.z = nz;
+      const nv = camView();
+      // 起始中点在世界坐标里的位置
+      const v0w = v.w * (z0 / cam.z);
+      const wx = pinchFrom.cx + fx * v0w;
+      const wy = pinchFrom.cy + fy * (v.h * (z0 / cam.z));
+      cam.x = wx - fx * nv.w;
+      cam.y = wy - fy * nv.h;
+      clampCam();
+      applyCam();
+      return;
+    }
+    if (touchFrom && ev.touches.length === 1) {
+      const t = ev.touches[0];
+      const dx = t.clientX - touchFrom.x;
+      const dy = t.clientY - touchFrom.y;
+      if (!touchMoved && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      touchMoved = true;
+      ev.preventDefault();
+      const rect = $("map").getBoundingClientRect();
+      const k = camView().w / rect.width;
+      cam.x = touchFrom.cx - dx * k;
+      cam.y = touchFrom.cy - dy * k;
+      clampCam();
+      applyCam();
+    }
+  }, { passive: false });
+
+  stage.addEventListener("touchend", (ev) => {
+    if (ev.touches.length === 0) {
+      // 拖过就别把这次当成点击 —— 和鼠标那套的 suppressClick 一个道理
+      if (touchMoved) {
+        suppressClick = true;
+        setTimeout(() => { suppressClick = false; }, 0);
+      }
+      touchFrom = null;
+      pinchFrom = null;
+    }
+  }, { passive: true });
+
+  // 双指双击（触屏版"复位"）：手机上双击容易误触，改用两指同时点
+  stage.addEventListener("touchstart", (ev) => {
+    if (ev.touches.length === 2) {
+      const now = Date.now();
+      if (stage._twoFingerAt && now - stage._twoFingerAt < 320) {
+        cam = { x: 0, y: 0, z: 1 };
+        applyCam();
+        toast("视角复位");
+      }
+      stage._twoFingerAt = now;
+    }
+  }, { passive: true });
+
+  // 手机上滚轮事件不会来，但压感笔/触摸板会；顺手也拦一下页面滚动
+  stage.addEventListener("touchstart", (ev) => {
+    if (ev.touches.length === 2) ev.preventDefault();
+  }, { passive: false });
 })();
+
+// ---- 底部抽屉（手机布局）----
+//
+// 桌面侧栏常驻，手机上它是一块从底部拉起来的板子。这里只管开合与那个
+// "有几件事等你"的小红点：待批公文 + 新到电报。手机上如果只盯着地图，
+// 最容易漏的就是"有人在等你回复"。
+(function wireSheet() {
+  const app = $("app");
+  const fab = $("fab-sheet");
+  if (!app || !fab) return;
+
+  const setOpen = (on) => {
+    app.classList.toggle("sheet-open", on);
+    if (on) paintBadge(true);
+  };
+  fab.addEventListener("click", () => setOpen(!app.classList.contains("sheet-open")));
+  const bd = $("sheet-backdrop");
+  if (bd) bd.addEventListener("click", () => setOpen(false));
+  // 抽屉里发完电报/批完公文就收起：手上一局操作完了，视线该回地图
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") setOpen(false);
+  });
+
+  window.__sheetSetOpen = setOpen;
+  window.__isSheetOpen = () => app.classList.contains("sheet-open");
+})();
+
+// 小红点：待批公文数 + 新到战报数。读的是每次轮询回来的 S，不额外发请求。
+function paintBadge(seen) {
+  const dot = $("fab-dot");
+  if (!dot) return;
+  const pend = (S && S.side && S.side.pending_reports) || 0;
+  if (seen) dot.dataset.seen = String(pend);
+  const seenN = Number(dot.dataset.seen || 0);
+  // "新"的定义：比上次打开面板时更多。玩家不点开就一直挂着。
+  const n = seen ? 0 : Math.max(0, pend - seenN);
+  dot.dataset.n = String(n);
+  dot.textContent = n > 0 ? String(n) : "";
+}
+
 
 
 bind("dp-send", "click", (ev) => { ev.stopPropagation(); sendTelegram(); });

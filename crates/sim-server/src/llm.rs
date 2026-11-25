@@ -32,42 +32,58 @@ pub fn load_env_files() {
 fn load_dotenv() {
     // 两个文件，同样的格式，都是"有就用、已有环境变量不覆盖"：
     //   .env          开发时用的（仓库根目录）
-    //   settings.env  装好之后用的（安装目录，玩家在游戏里填的东西写这里）
-    for name in [".env", "settings.env"] {
-        let Ok(text) = std::fs::read_to_string(name) else {
+    //   settings.env  装好之后用的（数据目录 / 安装目录，玩家在游戏里填的东西写这里）
+    //
+    // 数据目录那份也要读：安卓上没有"工作目录"这回事（进程 CWD 是 `/`）。
+    let data_settings = crate::data_dir().join("settings.env");
+    for name in [std::path::PathBuf::from(".env"), std::path::PathBuf::from("settings.env")] {
+        load_one(&name);
+    }
+    if data_settings.exists() && data_settings != std::path::PathBuf::from("settings.env") {
+        load_one(&data_settings);
+    }
+}
+
+fn load_one(path: &std::path::Path) {
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
             continue;
-        };
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some((k, v)) = line.split_once('=') {
-                let k = k.trim();
-                let v = v.trim().trim_matches('"').trim_matches('\'');
-                if !k.is_empty() && std::env::var(k).is_err() {
-                    std::env::set_var(k, v);
-                }
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            let k = k.trim();
+            let v = v.trim().trim_matches('"').trim_matches('\'');
+            if !k.is_empty() && std::env::var(k).is_err() {
+                std::env::set_var(k, v);
             }
         }
     }
 }
 
-/// 配置文件在哪：先看工作目录，再看 exe 旁边（桌面版从安装目录启动，两者相同）。
+/// 配置文件在哪：数据目录优先，再看工作目录，最后是 exe 旁边。
+///
+/// 顺序为什么是这样：安卓的 `current_exe()` 是 `/system/bin/app_process64`，
+/// 照着它拼路径会往系统分区写 `settings.env`（只读，写失败）。
+/// 数据目录（`IRONMIND_DATA`）是所有要落盘的东西的统一入口，配置文件也算。
 pub fn settings_path() -> std::path::PathBuf {
+    let in_data = crate::data_dir().join("settings.env");
+    if in_data.exists() {
+        return in_data;
+    }
     let cwd = std::path::PathBuf::from("settings.env");
     if cwd.exists() {
         return cwd;
+    }
+    // 都没有：返回数据目录那条（新文件就写在那儿）。
+    if crate::data_dir() != std::path::PathBuf::from(".") {
+        return in_data;
     }
     if let Some(dir) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
     {
-        let p = dir.join("settings.env");
-        if p.exists() {
-            return p;
-        }
-        return p;
+        return dir.join("settings.env");
     }
     cwd
 }

@@ -457,6 +457,47 @@ content/scenarios/
 
 ---
 
+## 14 安卓（1.2，2026-12）
+
+**同一个内核，换一层壳。** `sim-server` 早就是"HTTP 端点 + 一个进程内服务"，
+安卓只是在同一进程里调 `sim_server::start(module, 0)`，再让 WebView 指 `127.0.0.1:<port>`。
+
+```
+crates/sim-mobile/        安卓壳（cdylib → libsim_mobile.so，3.8 MB）
+  build.rs                把选定的战役模块打成 zip 塞进 .so
+  src/android.rs          tao 事件循环 + wry WebView + JNI 胶水
+android/                  Gradle 工程（只有壳，没有游戏逻辑）
+tools/build-android.ps1   NDK → .so → jniLibs → APK（一条命令）
+```
+
+### 踩过的坑（每条都花过一次时间）
+
+| 现象 | 根因 |
+|---|---|
+| 手机上看到一张**缩小的桌面版**，媒体查询不生效 | `index.html` 缺 `<meta name="viewport">`。安卓 WebView 默认按 980px 虚拟宽度渲染 |
+| `UnsatisfiedLinkError: No implementation found for Rust.onCreate` | `tao::android_binding!` 第三个参数是**声明 external fun 的那个类**。wry 0.57 把它们放在 `object Rust` 里，不是 `WryActivity` |
+| 设置面板报 `写 /system/bin/settings.env 失败` | 安卓的 `current_exe()` 是 `/system/bin/app_process64`。所有要落盘的东西（settings/saves/logs/模块）必须走 `IRONMIND_DATA`（app 的 `filesDir`） |
+| APK 装不上 / 更新被拒 | release 包未签名。已配一张自签钥匙（`android/app/iron-mind.jks`，口令 `ironmind`，**不是秘密**：它只用来证明"同一份 APK 的后续版本"） |
+| Gradle 报 `Minimum supported Gradle version is 8.9` | 挑 Gradle 时按**版本号**排，不能按路径字符串：`gradle-8.2` 字符串比 `gradle-8.12.1` 大，但 8.2 < 8.9 |
+| 白屏 | Android 9+ 默认禁明文 HTTP。清单里要 `usesCleartextTraffic="true"`（页面和内核对的是 `http://127.0.0.1`） |
+| 转屏/切分屏后进度没了 | Activity 重建会重启内核。清单里那一长串 `configChanges` 就是为这个 |
+| `.so` 61 MB | 编了 debug。release 带 LTO 只有 3.8 MB（差 16 倍） |
+
+### 手机布局的三条约束
+
+1. **不能缩微桌面**。地图铺满，侧栏变成从底部拉起的抽屉（`#app.sheet-open`）。
+2. **触屏要重做输入**：单指平移、双指捏合缩放、双指双击复位。
+   鼠标那套 `wheel`/`mousedown` 在手机上不触发，但两套共用同一份 `cam` 状态。
+3. **安全区**：`100dvh` + `env(safe-area-inset-*)`，否则底部按钮被手势条盖住。
+
+### 还没做的
+
+- **模块导入**走的是 `<input type=file webkitdirectory>`。手机上要选文件得给 WebView
+  实现 `onShowFileChooser`；目前换模块只能重新出包（`-Module` 指定，模块打在 .so 里）。
+- 只出 `arm64-v8a`。32 位 arm 跑这种规模不现实。
+- iOS 没碰：`wry` 有 iOS 后端，但要 Mac + Xcode，且 Apple 对"运行时装战役模块"可能挑刺。
+
+---
 ## 13 1.0 与 1.1（2026-12）
 
 | 版本 | 做了什么 |

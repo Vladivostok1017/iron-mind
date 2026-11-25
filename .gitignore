@@ -40,3 +40,24 @@ Thumbs.db
 # Release 打包产物（tools/package.ps1 生成，上传到 GitHub Release，不入库）
 /dist/
 
+
+# ---- 安卓构建产物 ----
+# .so 由 tools/build-android.ps1 从 Rust 编出来再拷进 jniLibs，不入库。
+/android/app/src/main/jniLibs/
+# wry 的 build.rs 生成的 Kotlin 胶水（WryActivity / RustWebView …），
+# 每次构建自动重写；只保留我们自己写的 MainActivity.kt。
+/android/app/src/main/kotlin/com/ironmind/steelheart/Ipc.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/Logger.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/PermissionHelper.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/Rust.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/RustWebChromeClient.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/RustWebView.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/RustWebViewClient.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/WryActivity.kt
+/android/app/src/main/kotlin/com/ironmind/steelheart/proguard-wry.pro
+/android/.gradle/
+/android/.idea/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/.cxx/

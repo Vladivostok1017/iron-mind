@@ -3,6 +3,11 @@ name = "sim-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "钢心 / Iron Mind —— 本地服务与 HTTP 接口（桌面外壳与安卓外壳共用）"
+
+[lib]
+name = "sim_server"
+path = "src/lib.rs"
 
 [dependencies]
 sim-core = { path = "../sim-core" }

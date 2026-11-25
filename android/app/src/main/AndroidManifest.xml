@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  钢心 / Iron Mind —— 安卓清单。
+
+  两件必须写对的事：
+  1. `usesCleartextTraffic=true`：页面和内核对的是 `http://127.0.0.1:<port>`。
+     Android 9+ 默认禁明文 HTTP，不开这个开关 WebView 会直接白屏。
+  2. `INTERNET` 权限：内核在**同一个进程**里调大模型 API，不是 WebView 调的。
+
+  configChanges 那一长串不是抄来的：旋转屏幕/切分屏时如果 Activity 被重建，
+  内核（连同正在跑的战役）会被重启，玩家会看到"转个屏进度没了"。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="@string/app_name"
+        android:allowBackup="true"
+        android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true"
+        android:theme="@style/Theme.AppCompat.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="fullSensor"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

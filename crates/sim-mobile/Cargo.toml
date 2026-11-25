@@ -1,0 +1,28 @@
+[package]
+name = "sim-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "钢心 / Iron Mind —— 安卓外壳：内核在同一个进程里跑，WebView 指 127.0.0.1"
+
+[lib]
+name = "sim_mobile"
+path = "src/lib.rs"
+# 安卓要的是 .so（libsim_mobile.so），由 Gradle 塞进 jniLibs。
+crate-type = ["cdylib"]
+
+[dependencies]
+sim-server = { path = "../sim-server" }
+
+# 只有安卓才需要窗口/WebView；在桌面仓库里编译它应当什么都不产出，
+# 这样 `cargo build` 在 Windows 上不会因为缺 Android 依赖而失败。
+[target.'cfg(target_os = "android")'.dependencies]
+tao = "0.37.3"
+wry = "0.57.3"
+# 版本必须和 tao/wry 内部用的那份一致，否则会链进两份 jni。
+jni = "0.21"
+ndk-context = "0.1"
+
+[build-dependencies]
+# 把选定的战役模块打成 zip 塞进 .so —— 手机上不依赖任何外部文件。
+zip = { version = "2", default-features = false, features = ["deflate"] }
