@@ -3595,7 +3595,13 @@ const Home = (() => {
   function importPackage() {
     const inp = document.createElement("input");
     inp.type = "file";
-    inp.accept = ".imod,application/zip";
+    // iOS 上 `accept=".imod"` 会把**所有**文件灰掉：.imod 不是系统认识的类型，
+    // WebKit 拿不到它的 UTI，于是"没有一个文件符合条件"。补两个 iOS 认的：
+    //   application/zip      —— .imod 本来就是 zip
+    //   application/octet-stream —— 系统给"未知扩展名"的兜底类型
+    // 真正的把关在内核里（导入前先用加载器验一遍，坏包进不了模块目录），
+    // 所以这里放宽没有安全代价。
+    inp.accept = ".imod,application/zip,application/octet-stream,application/x-ironmind-module";
     inp.addEventListener("change", async () => {
       const f = (inp.files || [])[0];
       if (!f) return;

@@ -101,6 +101,36 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>只有在你把模型地址填成本机或局域网里的服务时才需要联网。游戏本体完全离线。</string>
 
+	<!-- 注册 .imod 这个文件类型。
+	     不注册的后果：网页里 `<input accept=".imod">` 打开的文件选择器会
+	     把所有文件**灰掉**——系统不知道 .imod 是什么，就认为"没有文件符合条件"。
+	     注册之后「文件」App 也会把它当成一种文档类型来显示。 -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.ironmind.imod</string>
+			<key>UTTypeDescription</key>
+			<string>钢心战役模块</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>imod</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-ironmind-module</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
