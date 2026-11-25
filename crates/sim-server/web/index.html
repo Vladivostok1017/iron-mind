@@ -103,13 +103,29 @@
   .pend.hot { color: var(--gold); border-color: #4a3d24; background: #241e12; }
 
   svg { display: block; width: 100%; height: 100%; }
+  /* 关掉 WebView / Safari 的"点击高亮"。
+     手机上点一个省时，系统会给被点元素涂一块半透明色——而 SVG 元素没有盒模型，
+     它就按**外接矩形**涂，于是闪出一个包住整省的长方形（"先亮一个矩形"）。
+     PC 没有这套机制，所以只有手机看得出来。 */
+  #map, #map * { -webkit-tap-highlight-color: transparent; }
   .prov { cursor: pointer; }
   .prov path { transition: filter .1s; }
   .prov:hover path.land { filter: brightness(1.22); }
+  /* 手指按下的那一下 = 桌面的 hover（见 wireCamera 里的 press 逻辑）。
+     触屏没有 hover，但"按住时亮一下"是必要的反馈：手指盖住的地方看不见，
+     不亮就不知道自己按到了哪个省。 */
+  .prov.press path.land { filter: brightness(1.22); }
+  .prov.press path.water { filter: brightness(1.2); }
   .land { stroke: #0d1218; stroke-width: 1.1; stroke-linejoin: round; }
   .water { stroke: #12303f; stroke-width: .8; stroke-linejoin: round; }
   .prov.sel path.land, .prov.sel path.water {
     stroke: var(--gold); stroke-width: 2.2;
+  }
+  /* 触屏上把 hover 关掉：手指点过之后元素会**一直保持 :hover**（sticky hover），
+     看起来像"点了没反应但那个省永远亮着"。触屏一律走 .press。 */
+  @media (hover: none) {
+    .prov:hover path.land { filter: none; }
+    .btn:hover, .mode:hover, .h-item:hover, .ol:hover { background: inherit; }
   }
 
   .name {
@@ -2658,6 +2674,14 @@ let suppressClick = false;
   let touchFrom = null;   // 单指拖动起点
   let pinchFrom = null;   // 双指起始距离与中点
   let touchMoved = false;
+  let pressedProv = null; // 手指正按着的省（等价于桌面的 hover）
+
+  // 按下即高亮：手指盖住的地方看不见，不给反馈就不知道按到了哪个省。
+  // 抬起后由 .sel 的金边接管常亮，两者不冲突。
+  const clearPress = () => {
+    if (pressedProv) pressedProv.classList.remove("press");
+    pressedProv = null;
+  };
 
   const dist2 = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   const mid2 = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
@@ -2668,6 +2692,11 @@ let suppressClick = false;
       touchFrom = { x: t.clientX, y: t.clientY, cx: cam.x, cy: cam.y };
       touchMoved = false;
       pinchFrom = null;
+      // 按下就亮：等价桌面的 hover。手指遮住的地方看不见，
+      // 没有这个反馈就不知道按到了哪个省（拖地图时会被下面一步清掉）。
+      clearPress();
+      const g = ev.target && ev.target.closest ? ev.target.closest(".prov") : null;
+      if (g) { g.classList.add("press"); pressedProv = g; }
     } else if (ev.touches.length === 2) {
       // 双指：以中点为锚，先记下距离与当时的视口
       pinchFrom = {
@@ -2714,6 +2743,7 @@ let suppressClick = false;
       const dy = t.clientY - touchFrom.y;
       if (!touchMoved && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
       touchMoved = true;
+      clearPress();   // 一旦开始拖地图，就不再是"按住看这个省"
       ev.preventDefault();
       const rect = $("map").getBoundingClientRect();
       const k = camView().w / rect.width;
@@ -2725,6 +2755,7 @@ let suppressClick = false;
   }, { passive: false });
 
   stage.addEventListener("touchend", (ev) => {
+    clearPress();
     if (ev.touches.length === 0) {
       // 拖过就别把这次当成点击 —— 和鼠标那套的 suppressClick 一个道理
       if (touchMoved) {
@@ -2735,6 +2766,9 @@ let suppressClick = false;
       pinchFrom = null;
     }
   }, { passive: true });
+
+  // 来电/手势打断时也要收掉高亮，否则那个省会一直亮着
+  stage.addEventListener("touchcancel", () => { clearPress(); }, { passive: true });
 
   // 双指双击（触屏版"复位"）：手机上双击容易误触，改用两指同时点
   stage.addEventListener("touchstart", (ev) => {
