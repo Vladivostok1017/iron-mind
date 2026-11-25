@@ -4110,6 +4110,141 @@ async function saveGame() {
   });
 }
 
+// ── 存档的导出 / 导入 ──
+//
+// 为什么要做：存档在手机上是**拿不出来的**（app 私有目录，没 root 进不去），
+// 换机、重装、清数据就全没了。而存档只是命令流（几 KB 文本），
+// 拷出来就能在另一台机器上逐位重放这一局。
+//
+// 为什么用"复制文本"而不是文件下载：wry 的安卓外壳没实现 DownloadListener，
+// WebView 里的下载不会落盘；剪贴板是每个平台都有的能力。
+// 导入两个入口都给了：粘贴文本（一定能用）、选 .json 文件（顺手）。
+const MONO = "width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "font-size:11px;line-height:1.5;background:#0f151b;color:#cfd8e3;" +
+  "border:1px solid #2a3542;border-radius:5px;padding:8px;resize:vertical";
+
+async function copyText(s) {
+  try { await navigator.clipboard.writeText(s); return true; } catch (e) { /* 回退 */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = s;
+    ta.style.cssText = "position:fixed;left:-9999px;top:0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
+}
+
+async function exportSave(slot) {
+  let j;
+  try {
+    const r = await fetch("/api/save/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot }),
+    });
+    j = await r.json();
+  } catch (e) { showImportError("导出失败：连不上内核"); return; }
+  if (!j.ok) { showImportError(j.error || "导出失败"); return; }
+
+  const body = document.createElement("div");
+  Dlg.h("p", null, body,
+    "复制下面这段，粘到另一台机器的「读取存档 → 导入存档」里就行。" +
+    "（存档是命令流，不是世界快照——同一个模块 + 同一个种子，能逐位重放这一局。）");
+  const ta = Dlg.h("textarea", null, body, "");
+  ta.value = j.text;
+  ta.readOnly = true;
+  ta.rows = 9;
+  ta.style.cssText = MONO;
+  // 手机上点进文本框就是全选，省得用手指拖选择柄
+  ta.addEventListener("focus", () => ta.select());
+
+  Dlg.open({
+    title: "导出存档 · " + slotLabel(slot),
+    body,
+    actions: [
+      {
+        label: "复制全部", primary: true, keep: true,
+        async onClick() {
+          const ok = await copyText(j.text);
+          toast(ok ? "已复制 " + Math.round(j.text.length / 1024) + " KB" : "复制失败——请手动长按全选");
+          ta.focus(); ta.select();
+          return false;
+        },
+      },
+      { label: "关闭" },
+    ],
+  });
+}
+
+function importSaveDialog() {
+  const body = document.createElement("div");
+  Dlg.h("p", null, body, "把导出的存档文本粘进来；也可以直接选一个存档文件（.json）。");
+  const ta = Dlg.h("textarea", null, body, "");
+  ta.rows = 8;
+  ta.placeholder = "在这里粘贴存档内容…";
+  ta.style.cssText = MONO;
+
+  const pick = Dlg.h("button", "btn", body, "从文件选择…");
+  pick.style.marginTop = "8px";
+  pick.addEventListener("click", () => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".json,application/json,text/plain";
+    inp.addEventListener("change", async () => {
+      const f = (inp.files || [])[0];
+      if (!f) return;
+      ta.value = await f.text();
+      toast("已读入 " + f.name);
+    });
+    inp.click();
+  });
+
+  Dlg.open({
+    title: "导入存档",
+    body,
+    actions: [
+      { label: "取消" },
+      {
+        label: "导入", primary: true, keep: true,
+        async onClick() {
+          const text = ta.value.trim();
+          if (!text) { toast("先粘贴存档内容，或选一个文件"); return false; }
+          await doImportSave(text);
+          return false;
+        },
+      },
+    ],
+  });
+}
+
+async function doImportSave(text, slot, force) {
+  let j;
+  try {
+    const r = await fetch("/api/save/import", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, slot: slot || undefined, force: !!force }),
+    });
+    j = await r.json();
+  } catch (e) { showImportError("导入失败：连不上内核"); return; }
+
+  if (j.ok) {
+    Dlg.close();
+    toast(
+      "已导入到「" + slotLabel(j.slot) + "」：" + j.module_name + " 第 " + j.day + " 日" +
+      (j.hash_matched ? "（哈希一致）" : "（⚠ 哈希不一致：模块可能改过，这一局会和当时略有出入）")
+    );
+    return;
+  }
+  if (j.conflict) {
+    const yes = await askImport("覆盖存档", j.error, "槽位：" + j.slot);
+    if (yes) return doImportSave(text, j.slot, true);
+    return;
+  }
+  showImportError(j.error || "导入失败");
+}
+
 async function loadGame(slot) {
   if (slot) return applyLoad(slot);
   const saves = await listSaves();
@@ -4121,10 +4256,26 @@ async function loadGame(slot) {
     Dlg.h("span", "r-main", row, slotLabel(s.slot));
     Dlg.h("span", "r-dim", row,
       (s.module_name ? s.module_name + " · " : "") + "第 " + s.day + " 日 · " + s.commands + " 条命令");
-    Dlg.h("span", "r-act", row, fmtWhen(s.modified));
+    const act = Dlg.h("span", "r-act", row, "");
+    // 导出：一行一个按钮，导的是这一条存档
+    const ex = document.createElement("button");
+    ex.className = "btn";
+    ex.textContent = "导出";
+    ex.style.marginRight = "8px";
+    ex.addEventListener("click", (ev) => { ev.stopPropagation(); exportSave(s.slot); });
+    act.appendChild(ex);
+    act.appendChild(document.createTextNode(fmtWhen(s.modified)));
     row.addEventListener("click", () => applyLoad(s.slot));
   }
-  Dlg.open({ title: "读取存档", body, actions: [{ label: "取消" }] });
+  Dlg.open({
+    title: "读取存档",
+    body,
+    actions: [
+      // 导入放在读档入口里：玩家想"拿到别处的进度"时，第一反应是来这里
+      { label: "导入存档…", keep: true, onClick: () => { importSaveDialog(); return false; } },
+      { label: "取消" },
+    ],
+  });
 }
 
 async function applyLoad(slot) {

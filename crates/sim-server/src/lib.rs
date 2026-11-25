@@ -31,6 +31,11 @@ const DEFAULT_PORT: u16 = 8899;
 const AUTOSAVE_EVERY: u32 = 5;
 /// 自动存档的槽位名。固定一个，不挤占玩家手工存档。
 const AUTOSAVE_SLOT: &str = "auto";
+/// 存档文件格式版本（`SaveFile.v`）。
+///
+/// 只在**加字段**时不动它（老存档靠 serde default 兜底）；只有语义变了、
+/// 老存档读进来会算错时才加。导入功能要拿它拒掉"来自更新版本"的存档。
+const SAVE_FORMAT_VERSION: u32 = 1;
 
 /// 数据根目录：存档、日志、（手机上的）模块都落在它下面。
 ///
@@ -1422,6 +1427,162 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             };
             respond(&mut stream, 200, "application/json", &out.to_string())
         }
+        // 导出存档：把 `saves/<槽位>.json` 的原文吐出来。
+        //
+        // 为什么要有这条：存档在**手机上是拿不出来的**（app 私有目录，没 root
+        // 进不去），换机/重装/清数据即丢。而存档只是命令流（几 KB），
+        // 拷出来就能在另一台机器上逐位重放这一局。
+        //
+        // 只有槽位名，不接受路径：导出不该成为"读任意文件"的入口。
+        ("POST", "/api/save/export") => {
+            use serde_json::json;
+            let body: serde_json::Value =
+                serde_json::from_str(&body_str).unwrap_or_else(|_| json!({}));
+            let slot = sanitize_slot(
+                body.get("slot").and_then(|x| x.as_str()).unwrap_or(""),
+            );
+            if slot.is_empty() {
+                let msg = json!({ "ok": false, "error": "缺少存档槽位" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            let path = save_file(&slot);
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(_) => {
+                    let msg = json!({ "ok": false, "error": format!("没有这个存档：{slot}") });
+                    return respond(&mut stream, 404, "application/json", &msg.to_string());
+                }
+            };
+            // 确认它真是一份存档，别把别的东西导出去
+            if serde_json::from_str::<SaveFile>(&text).is_err() {
+                let msg = json!({ "ok": false, "error": "这个文件不是存档" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            trace(format!("   导出存档 {slot}（{} 字节）", text.len()));
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({ "ok": true, "slot": slot, "text": text }).to_string(),
+            )
+        }
+        // 导入存档：收一段 JSON 文本，验证后写进槽位。
+        //
+        // 校验顺序有意如此：
+        // 1. 结构（能不能解析成 SaveFile）
+        // 2. 存档格式版本（比本机新就拒）
+        // 3. 模块在不在（不在就明说"先装哪个模块"）
+        // 4. 哈希（对不上**只警告**——模块改过一版，命令流重放结果就会变，
+        //    这不是错误，玩家该知道的是"这一局可能和当时略有出入"）
+        ("POST", "/api/save/import") => {
+            use serde_json::json;
+            let body: serde_json::Value =
+                serde_json::from_str(&body_str).unwrap_or_else(|_| json!({}));
+            let text = body.get("text").and_then(|x| x.as_str()).unwrap_or("");
+            if text.trim().is_empty() {
+                let msg = json!({ "ok": false, "error": "粘贴的存档内容为空" });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            let sv: SaveFile = match serde_json::from_str(text) {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = json!({ "ok": false, "error": format!("这不是一份存档：{e}") });
+                    return respond(&mut stream, 400, "application/json", &msg.to_string());
+                }
+            };
+            // 存档格式版本：比本机新就不认（老版本缺字段有 serde default 兜底）
+            if sv.v > SAVE_FORMAT_VERSION {
+                let msg = json!({
+                    "ok": false,
+                    "error": format!(
+                        "这份存档的格式版本是 {}，本机最高支持 {}。先升级游戏再导入。",
+                        sv.v, SAVE_FORMAT_VERSION
+                    ),
+                });
+                return respond(&mut stream, 400, "application/json", &msg.to_string());
+            }
+            // 模块必须在。缺模块的提示要具体到"装哪个"。
+            let module = match find_module_by_id(&sv.module_id) {
+                Some(p) => match load_module(&p) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let msg = json!({
+                            "ok": false,
+                            "error": format!("这个存档属于「{}」，但那个模块加载失败：{e}", sv.module_id),
+                        });
+                        return respond(&mut stream, 400, "application/json", &msg.to_string());
+                    }
+                },
+                None => {
+                    let msg = json!({
+                        "ok": false,
+                        "missing_module": true,
+                        "error": format!(
+                            "这个存档属于「{}」，本机还没装那个模块。先把它导入（新的战役 → 导入 .imod），再导入存档。",
+                            sv.module_id
+                        ),
+                    });
+                    return respond(&mut stream, 400, "application/json", &msg.to_string());
+                }
+            };
+            // 哈希：重放一遍看看还是不是当时那一局
+            let hash_matched = {
+                let w = rebuild(&module, &sv.commands, sv.day);
+                w.state_hash() == u64::from_str_radix(sv.state_hash.trim(), 16).unwrap_or(0)
+            };
+            // 槽位：给了就用，没给按时间戳起一个（不覆盖任何既有存档）
+            let want = sanitize_slot(body.get("slot").and_then(|x| x.as_str()).unwrap_or(""));
+            let force = body.get("force").and_then(|x| x.as_bool()).unwrap_or(false);
+            let slot = if want.is_empty() {
+                format!(
+                    "imported-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                )
+            } else {
+                want
+            };
+            let target = save_file(&slot);
+            if target.exists() && !force {
+                let msg = json!({
+                    "ok": false,
+                    "conflict": true,
+                    "slot": slot,
+                    "error": format!("已经有一个叫 {slot} 的存档，覆盖会丢掉它里面的进度。"),
+                });
+                return respond(&mut stream, 409, "application/json", &msg.to_string());
+            }
+            let _ = std::fs::create_dir_all(saves_dir());
+            let pretty = serde_json::to_string_pretty(&sv).unwrap_or_else(|_| text.to_string());
+            if let Err(e) = std::fs::write(&target, pretty) {
+                let msg = json!({ "ok": false, "error": format!("写入失败：{e}") });
+                return respond(&mut stream, 500, "application/json", &msg.to_string());
+            }
+            trace(format!(
+                "   导入存档 → {slot}（{} · 第 {} 日 · {} 条命令{}）",
+                sv.module_id,
+                sv.day,
+                sv.commands.len(),
+                if hash_matched { "" } else { "，哈希不一致" }
+            ));
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({
+                    "ok": true,
+                    "slot": slot,
+                    "day": sv.day,
+                    "module_id": sv.module_id,
+                    "module_name": module.meta.name,
+                    "commands": sv.commands.len(),
+                    "hash_matched": hash_matched,
+                })
+                .to_string(),
+            )
+        }
         ("POST", "/api/load") => {
             use serde_json::json;
             // 三种写法：`slot`（槽位名）、`path`（完整路径）、都不给（载入最新）
@@ -2158,7 +2319,7 @@ fn write_save(
         (m.meta.id.clone(), m.meta.version.clone())
     };
     let payload = SaveFile {
-        v: 1,
+        v: SAVE_FORMAT_VERSION,
         module_id: mid,
         module_version: mver,
         seed: w.seed,
@@ -3806,6 +3967,23 @@ fn import_root() -> std::path::PathBuf {
     let m = std::path::PathBuf::from("modules");
     let _ = std::fs::create_dir_all(&m);
     m
+}
+
+/// 按 `module.json` 里的 id 找一个已安装的模块。
+///
+/// 读档与导入存档都要做这件事：存档记的是模块 id，不是路径——
+/// 换个机器、换个安装位置，id 不变。找不到就返回 None，由调用方
+/// 给一句"先装哪个模块"的具体提示。
+fn find_module_by_id(id: &str) -> Option<std::path::PathBuf> {
+    if id.is_empty() {
+        return None;
+    }
+    discover_modules().into_iter().find(|p| {
+        sim_content::peek_meta_json(p)
+            .and_then(|m| m.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .as_deref()
+            == Some(id)
+    })
 }
 
 /// 扫出所有模块目录（`*.imod`），按根目录顺序、路径排序，保证确定性。
