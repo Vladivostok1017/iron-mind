@@ -574,7 +574,7 @@ iOS 上必须合并了——不是洁癖，是因为**没有 curl**：iOS 既没
 | 模拟器里几百行 `found architecture 'arm64', required architecture 'x86_64'` | Intel Mac 的模拟器是 x86_64；`generic/platform=iOS Simulator` 还要**两种切片**。脚本现在按 `ARCHS` 逐个编 + `lipo` |
 | 改完代码重新装，截图还是旧界面 | `simctl install` 只换 bundle，**不重启**已在跑的进程。先 `simctl terminate` |
 | 「钢」字徽记被灵动岛压住 | 页面按 `env(safe-area-inset-*)` 写的，但 WKWebView 里它返回 **0**。改成 WebView 贴 `safeAreaLayoutGuide` |
-| 横屏底栏比安卓高一截（长标签换两行） | 贴安全区之后横屏可用宽度只剩 ~756px，而底栏是**定宽**的（208 + 5×54），三个推进按钮挤到 60–75px 就换行。改成比例分配 + `nowrap` + 隐藏键盘符号（`docs/25` 4.10） |
+| 横屏底栏比安卓高一截（长标签换两行） | 贴安全区之后横屏可用宽度只剩 ~756px，而底栏是**定宽**的（208 + 5×54），三个推进按钮挤到 60–75px 就换行。改成比例分配 + `nowrap` + 隐藏键盘符号（`docs/25` 4.10）。**安卓不受影响**：它锁横屏且 WebView 全宽，放得下 |
 
 ### 验到了什么程度
 
