@@ -1012,6 +1012,20 @@ fn enemy_adjacent(world: &World, province: u32, enemy: Side) -> bool {
 
 // ---------------------------------------------------------------- 战斗
 
+/// 有异议但**照令执行**的部队，打得不够狠：逐次投入、留着预备队。
+///
+/// 这是战场尺度上"不听话"的正确形态。以前这里没有这一层，
+/// 将领要么完全服从、要么直接按兵不动（那是全国政治层面的保存实力，
+/// 需要一个怕被吞并的动机才成立，而我们这一仗没有那个层面）。
+const DISSENT_POWER: Fixed = Fixed::ratio_const(85, 100);
+
+fn dissent_factor(u: &crate::world::Unit) -> Fixed {
+    if u.disobeyed {
+        DISSENT_POWER
+    } else {
+        Fixed::ONE
+    }
+}
 fn run_combat(world: &mut World, seed: u64, now: u32) {
     let n = world.provinces.len();
 
@@ -1042,12 +1056,12 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
         let mut cn_power = Fixed::ZERO;
         for &i in &cn {
             let u = &world.units[i as usize];
-            cn_power += u.combat_power() * world.ammo_factor(u);
+            cn_power += u.combat_power() * world.ammo_factor(u) * dissent_factor(u);
         }
         let mut jp_power = Fixed::ZERO;
         for &i in &jp {
             let u = &world.units[i as usize];
-            jp_power += u.combat_power() * world.ammo_factor(u);
+            jp_power += u.combat_power() * world.ammo_factor(u) * dissent_factor(u);
         }
 
         let def_mult = world.provinces[p].node_defense(node);
@@ -1605,12 +1619,12 @@ fn run_naval(world: &mut World, seed: u64, now: u32) {
         let mut cn_power = Fixed::ZERO;
         for &i in &cn {
             let u = &world.units[i];
-            cn_power += u.combat_power() * world.ammo_factor(u);
+            cn_power += u.combat_power() * world.ammo_factor(u) * dissent_factor(u);
         }
         let mut jp_power = Fixed::ZERO;
         for &i in &jp {
             let u = &world.units[i];
-            jp_power += u.combat_power() * world.ammo_factor(u);
+            jp_power += u.combat_power() * world.ammo_factor(u) * dissent_factor(u);
         }
         let total = cn_power + jp_power;
         if total.is_zero() {

@@ -152,24 +152,41 @@ fn interpret(
             let dissent = (Fixed::ONE - cmd.obedience) * cmd.initiative * ORDER_AUTHORITY;
             if roll < dissent {
                 let reason = match own {
+                    // 他判断该打而上级要守：会主动出击（这是主动，不是抗命）
                     Order::Attack(_) => "战机可乘，职部拟即行出击，请核备",
-                    Order::Hold => "职部伤亡过重，恳请准予固守整理",
+                    // 他判断该守而上级要打：**仍按令打**，只是打得保守
+                    //（战场尺度上不存在"为了保存部队而不打"，见上面的说明）
+                    Order::Hold => "按令进攻，惟职部以为当面之敌不宜硬攻，请准相机行事",
                     _ => "职部另有计较，请上峰裁示",
                 };
-                return (own, Some(reason));
+                // 只有"该打而命令要守"的主动出击会改命令；其余保持原令
+                if matches!(own, Order::Attack(_)) {
+                    return (own, Some(reason));
+                }
+                return (intended, Some(reason));
             }
             // 顺从了上级，但记录下一次"想抗命"的摩擦
         }
     }
 
     match intended {
-        // 劣势强攻：谨慎的将领倾向按下不动，等增援。
+        // 劣势强攻：谨慎的将领不会"抗命不打"，但他会**打得保留**——
+        // 逐次投入、不一次压上、留着预备队。这在战场尺度上是常态，
+        // 也是玩家该感到的那点拧巴：命令执行了，力度不够。
+        //
+        // 注意这里**不改命令**。以前这个分支返回 `Order::Hold`，等于将领
+        // 顶回上级、自己按兵不动——那是全国政治层面的"保存实力"，
+        // 需要一个军阀怕被中央吞并的动机才成立。我们这一仗是正面战场，
+        // 军令压着，他不会不打。打折扣由 `disobeyed` 在战斗结算里扣战力。
         Order::Attack(_) if ctx.outmatched => {
             let resist = ((Fixed::ONE - cmd.obedience) * cmd.caution * Fixed::ratio(15, 10)
                 + cmd.initiative * Fixed::ratio(3, 10))
                 * ORDER_AUTHORITY;
             if roll < resist {
-                return (Order::Hold, Some("职部兵力不足，恳请准予整理后再攻"));
+                return (
+                    intended,
+                    Some("按令进攻，惟兵力不足，只能逐次投入，请后续增援"),
+                );
             }
         }
         // 固守时看到战机：好战的将领可能主动出击。
@@ -187,6 +204,8 @@ fn interpret(
             }
         }
         // 撤退命令：好战又不服的将领可能抗命死守。
+        // 这一条是**真的顶回命令**（不是打折扣），而且动机是勇猛而非避战——
+        // 所以它是唯一还会开"抗命公文"的情形。
         Order::Retreat(_) => {
             if cmd.aggression > Fixed::ratio(6, 10) {
                 let refuse = (Fixed::ONE - cmd.obedience)
@@ -194,7 +213,7 @@ fn interpret(
                     * Fixed::ratio(4, 10)
                     * ORDER_AUTHORITY;
                 if roll < refuse {
-                    return (Order::Hold, Some("职部未敢弃守，恳请准予死守此地"));
+                    return (Order::Hold, Some("未敢弃守，职部就地死守，请准予抗敌"));
                 }
             }
         }
@@ -682,23 +701,33 @@ mod tests {
     }
 
     #[test]
-    fn cautious_commander_refuses_bad_attack() {
-        // 谨慎且不服的将领，面对"劣势强攻"应当有一定概率按下不动
+    fn cautious_commander_executes_bad_attack_reluctantly() {
+        // 谨慎且不服的将领，面对"劣势强攻"：**照令进攻，但打得保留**。
+        //
+        // 这条断言换过一次，是本项目最重要的一次设计纠正：
+        // 旧版本要求"应当经常拒绝进攻"——那是全国政治层面的"保存实力"，
+        // 需要一个军阀怕被中央吞并的动机。而这一仗是正面战场，军令压着，
+        // 他不会不打；他只会逐次投入、留着预备队（`disobeyed` 让战力打 85 折）。
         let cmd = Commander::new("谨慎者", 0.2, 0.9, 0.4, 0.9);
         let ctx = CommandContext {
             outmatched: true,
             has_weak_enemy: false,
             weakest_neighbor: None,
         };
+        let mut reluctant = 0;
         let mut refused = 0;
         for seed in 0..200u64 {
             let mut rng = Rng::from_seed(seed);
             let (o, reason) = interpret(&cmd, Order::Attack(1), &ctx, &mut rng);
-            if matches!(o, Order::Hold) && reason.is_some() {
+            if matches!(o, Order::Hold) {
                 refused += 1;
             }
+            if reason.is_some() && matches!(o, Order::Attack(_)) {
+                reluctant += 1;
+            }
         }
-        assert!(refused > 40, "应当经常抗命，实际 {refused}/200");
+        assert_eq!(refused, 0, "劣势强攻不该变成按兵不动（那是保存实力，不是战场行为）");
+        assert!(reluctant > 40, "应当经常打得保留，实际 {reluctant}/200");
     }
 
     #[test]
@@ -800,8 +829,12 @@ mod tests {
     }
 
     #[test]
-    fn cautious_commander_holds_instead_of_dying() {
-        // 同一场景，换一个谨慎且不服的将领：他会拒绝这次进攻。
+    fn cautious_commander_attacks_but_sluggishly() {
+        // 同一场景，换一个谨慎且不服的将领：他不拒绝这次进攻，
+        // 但会**打得不利索**——`disobeyed` 记上，战力在结算里打 85 折。
+        //
+        // （旧版本的断言是"他会拒绝这次进攻 / 至少按兵不动一次"，
+        //   那属于全国政治层面的避战逻辑，见上面那条测试的说明。）
         let mut base = line();
         base.comms = crate::world::CommsConfig::instant();
         base.units[1].strength = Fixed::from_int(60);
@@ -811,16 +844,20 @@ mod tests {
         // 先获得情报，否则 AI 会把敌省当成空的
         crate::intel::run_intel(&mut base);
 
-        let mut held = 0;
+        let mut reluctant = 0;
+        let mut refused = 0;
         for _ in 0..40 {
             let mut w = base.clone();
             w.units[0].order = Order::Hold;
             run_ai(&mut w);
             if matches!(w.units[0].order, Order::Hold) {
-                held += 1;
+                refused += 1;
+            } else if w.units[0].disobeyed {
+                reluctant += 1;
             }
         }
-        assert!(held > 0, "谨慎的将领应当至少拒绝一次进攻");
+        assert_eq!(refused, 0, "战场尺度上不该出现有敌不打：实际 {refused}/40");
+        assert!(reluctant > 0, "谨慎的将领至少该有一次打得保留");
     }
 }
 
