@@ -29,6 +29,11 @@
     background: var(--panel); border-bottom: 1px solid var(--line);
   }
   #main { display: grid; grid-template-columns: 1fr 316px; overflow: hidden; }
+  /* 抽屉背板：**桌面上必须是 display:none**，而且这条基础规则不能只写在手机媒体查询里。
+     踩过的坑：它只在 `@media (max-width:820px)` 里被隐藏，于是桌面端这个 div
+     作为 `#main` 的第三个网格项参与排布 —— 地图被挤进 316px 那一列、跑到右上角，
+     侧栏占满左下半屏。手机上因为抽屉本来就是自动布局，看不出问题。 */
+  #sheet-backdrop { display: none; }
   #stage { position: relative; background: var(--sea); overflow: hidden; }
   aside { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; overflow-y: auto; }
   /* 战报信箱 */
