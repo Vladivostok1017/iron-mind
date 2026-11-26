@@ -397,6 +397,9 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         w.report_for(sim_core::world::EventKind::Command, text, side);
                     }
                     sim_core::systems::tick(w);
+                    // tick 里将领可能抗命。抗命不能就此成为定局——
+                    // 把它翻成请示公文，玩家可以驳回并勒令他照原令执行。
+                    collect_dissents(&state, w, w.tick);
                     for (dissent, text, side) in notes {
                         let kind = if dissent {
                             sim_core::world::EventKind::Dissent
@@ -1893,15 +1896,20 @@ struct CmdRecord {
 /// 为什么不能只调 `apply_typed`：LLM 命令除了写 order，还会改动
 /// `manual / disobeyed / dissent_count`，而这些都进状态哈希。
 /// 两条路径只要有一处不一致，回放校验就会挂——这正是在替我抓这类不一致。
-fn apply_record(w: &mut World, c: &CmdRecord) {
+/// 返回值：这条命令**是否真的落到了世界上**。
+///
+/// 为什么需要它：玩家驳回抗命公文时要说"已勒令照原令执行"，可原令的目标省
+/// 可能已经不邻接、已经失守——命令会被拒。这里以前返回 `()`，于是界面报
+/// "已勒令"，而部队纹丝不动。假成功比失败更难查。
+fn apply_record(w: &mut World, c: &CmdRecord) -> bool {
     // 预览版人事：撤换不是"命令"，但它同样改变状态，所以必须走命令流，
     // 否则回放算出来的世界和实时世界对不上（回放校验会当场抓住）。
     if c.kind == "relieve" {
         let _ = sim_core::politics::relieve(w, c.unit);
-        return;
+        return true;
     }
     if apply_typed(w, c.unit, &c.kind, c.target).is_some() {
-        return; // 被拒的命令不产生状态变化
+        return false; // 被拒的命令不产生状态变化
     }
     if c.source == "llm" {
         if let Some(u) = w.units.get_mut(c.unit) {
@@ -1913,6 +1921,7 @@ fn apply_record(w: &mut World, c: &CmdRecord) {
             }
         }
     }
+    true
 }
 
 /// 用命令流重建世界（回放、读档共用同一段代码）。
@@ -2429,6 +2438,141 @@ struct Report {
     /// 这件公文是不是由某封电报引出来的。没有原令时界面措辞要换（准许执行/不许），
     /// 不能叫"准他改令"——玩家根本没下过令。
     from_telegram: bool,
+    /// 「抗命」类公文里的**上级原令**。玩家驳斥时要勒令他执行的就是它。
+    ///
+    /// 只有 `kind == "dissent"` 才有值。抗命不能是既成事实：
+    /// 将领可以说"职部伤亡过重，恳请准予固守"，玩家也得能说"不准，照原令打"。
+    intended: Option<(String, Option<u32>)>,
+}
+
+/// 命令 → (中文动作, 目标省)。公文和战报都按这个口径说话。
+fn order_to_cmd(o: &Order) -> (&'static str, Option<u32>) {
+    match o {
+        Order::Attack(t) => ("attack", Some(*t)),
+        Order::Move(t) => ("move", Some(*t)),
+        Order::Retreat(t) => ("retreat", Some(*t)),
+        Order::Shift(_) => ("shift", None),
+        Order::Fortify => ("fortify", None),
+        Order::Rest => ("rest", None),
+        Order::BombRail(t) => ("bomb_rail", Some(*t)),
+        Order::RepairRail(t) => ("repair_rail", Some(*t)),
+        Order::Hold => ("hold", None),
+    }
+}
+
+/// 命令 → 中文说法（公文与战报里给人看的）。
+fn kind_cn(k: &str) -> &'static str {
+    match k {
+        "attack" => "进攻",
+        "move" => "转进",
+        "retreat" => "撤退",
+        "shift" => "调兵",
+        "fortify" => "筑工事",
+        "rest" => "整补",
+        "hold" => "固守",
+        "bomb_rail" => "炸路",
+        "repair_rail" => "抢修",
+        _ => "执行",
+    }
+}
+
+/// 判断一条抗命理由是不是**真抗命**（`interpret` 那一层），而不是将领的自己微调。
+///
+/// 为什么要区分：将领"自己微调目标"（比如闲着去挖工事）是设计里允许的，
+/// 一律直接执行、进战报就好；只有**顶着上级命令不动或反着来**才该开公文
+/// 让玩家裁示。不区分的话，玩家一天能收到十几份公文——公文堆会变成噪音。
+///
+/// 判据是 `interpret` 里那几个固定的请示句（都带"恳请/请核备/请上峰裁示"）。
+/// 文案和判定绑在一起不好看，但这比给 World 加一个只为 UI 服务的布尔字段更划算
+/// ——后者要动序列化与状态哈希。
+fn is_hard_dissent(reason: &str) -> bool {
+    reason.contains("恳请") || reason.contains("请核备") || reason.contains("请上峰裁示")
+}
+
+/// 把"将领抗命"翻成一条请示公文。
+///
+/// 这个机制要表达的是一件很具体的事：**将领算的是自己这支部队的死活，
+/// 玩家算的是整条战线**。有时候战局要求某个军拿命去填，这对那个军是亏的
+/// ——他当然想保存实力，回头就说"职部伤亡过重，恳请准予整理"。
+///
+/// 这不该是既成事实。抗战里军令是有分量的，玩家得能说"不准，照原令打"。
+/// 没有这一步，玩家发十封电报被顶回八封，剩下的两封还得看运气——
+/// 那不是在指挥，是在看戏。
+///
+/// 只在"玩家亲自下过令"的番号上开请示：AI 给的令不归玩家管。
+fn collect_dissents(state: &Arc<ServerState>, w: &World, day: u32) {
+    let me = player(state);
+    // 同一个番号一天只敲一次门；一天最多三份，多了就是噪音
+    let (mut pending_units, mut today_count) = {
+        let list = state.reports.lock().unwrap();
+        let p: Vec<usize> = list
+            .iter()
+            .filter(|r| r.kind == "dissent" && r.status == "pending")
+            .filter_map(|r| r.unit)
+            .collect();
+        let n = list
+            .iter()
+            .filter(|r| r.kind == "dissent" && r.day == day)
+            .count();
+        (p, n)
+    };
+    if today_count >= 3 {
+        return;
+    }
+    let cmds = state.commands.lock().unwrap().clone();
+    for (i, u) in w.units.iter().enumerate() {
+        if today_count >= 3 {
+            break;
+        }
+        if u.side != me || !u.is_alive() || !u.disobeyed || pending_units.contains(&i) {
+            continue;
+        }
+        let why = u.dissent_reason.clone().unwrap_or_default();
+        if !is_hard_dissent(&why) {
+            continue;   // 自己微调，不算抗命
+        }
+        // 玩家给这个番号下的最后一道令，就是"原令"
+        let Some(rec) = cmds
+            .iter()
+            .rev()
+            .find(|c| c.unit == i && c.day <= day && c.reject.is_none())
+        else {
+            continue;
+        };
+        let (intended_kind, intended_target) = (rec.kind.clone(), rec.target);
+        let (actual_kind, actual_target) = order_to_cmd(&u.order);
+        let rid = push_report(
+            state,
+            Report {
+                id: 0,
+                day,
+                kind: "dissent",
+                unit: Some(i),
+                unit_name: u.name.clone(),
+                general: u.commander.name.clone(),
+                title: format!("抗命：{}", why),
+                text: format!(
+                    "上峰电令：{}。职部复电：{}\n\
+                     职部现按「{}」行事。若上峰认为此举有碍全局，请即电示，职部遵办。",
+                    kind_cn(&rec.kind),
+                    why,
+                    kind_cn(actual_kind)
+                ),
+                proposed: Some((actual_kind.to_string(), actual_target)),
+                options: vec!["准他自行处置".into(), "不准，勒令照原令执行".into()],
+                deadline: day + 2,
+                status: "pending",
+                from_telegram: true,
+                intended: Some((intended_kind, intended_target)),
+            },
+        );
+        pending_units.push(i);
+        today_count += 1;
+        trace(format!(
+            "   抗命请示 #{rid}：{}（{}）→ {why}",
+            u.name, u.commander.name
+        ));
+    }
 }
 
 /// 追加一条公文，返回 id。
@@ -3059,19 +3203,34 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
 
         // 中方的将领要向上报：抗命不是立刻执行，而是**请你点头**。
         // 日方由 AI 全权指挥，没有上级可问，直接执行。
-        // 什么才值得"请示"？
         //
-        // 只有两种情况要玩家点头：
-        //   · 他在回应你**明确下过的令**（电报）——他要么照办，要么请你改；
-        //   · 改动代价很大：撤退，或者放弃工事/驻地开拔。
+        // 这段判据改过两次，值得写清楚为什么最后是这样：
         //
-        // 其余（自己微调目标、闲着去挖工事、换个方向推进）一律**直接执行**
-        // 并进战报。以前只要"和他的现行命令不一致"就开请示，于是玩家
-        // 每三天被敲一次门，而请示本来该是"这事要你担责任"。
+        // 1. 最早是 `ready.telegram.is_some() || high_cost` —— 只要他在回你电报
+        //    就请示。玩家发一道令，回来一摞"请示"，读起来像"这群人全在跟我讨价还价"。
+        // 2. 改成"方向翻转才请示"。也不行：玩家说"进攻"，将领判断也该进攻，
+        //    但因为他的**上一条**命令是固守，方向照样算翻转——于是你还是收到
+        //    一份"请示：进攻 隘口"，而你要的就是进攻。
+        //
+        // 想明白一件事：**玩家发电报就是在下命令**，将领该做的是执行或抗命，
+        // 不是再问他一遍。执行有偏差由 `interpret` 层判（顶回方向 = 抗命，
+        // 会被翻成抗命公文让你勒令）；解释层的微调（换个目标、顺手挖工事）
+        // 本来就该由他做主。
+        //
+        // 所以解释层只在**代价大的改动**上请示：撤退、放弃工事/驻地开拔。
+        // 一天最多三份，再多就不是"要你担责任"，是噪音。
+        // 只有真正的"代价"才请示：撤退，以及放弃工事开拔。
+        //
+        // 注意**进攻不算**。以前把"从固守转为进攻"也列进来，于是玩家说"进攻"、
+        // 将领也判断该进攻、结果还是收到一份"请示：进攻 隘口"——纯噪音。
+        // 进攻是玩家最常要的东西，不该问第二遍。
         let high_cost = matches!(kind, "retreat")
-            || (matches!(cur, Order::Fortify | Order::Hold)
-                && matches!(kind, "move" | "attack"));
-        let needs_blessing = ready.telegram.is_some() || high_cost;
+            || (matches!(cur, Order::Fortify) && matches!(kind, "move"));
+        let today_requests = {
+            let list = state.reports.lock().unwrap();
+            list.iter().filter(|r| r.kind == "request" && r.day == day).count()
+        };
+        let needs_blessing = high_cost && today_requests < 3;
         if w.units[idx].side == player(state) && needs_blessing {
             // 公文标题用中文命令名。以前这里直接拼 `kind`（引擎内部代号），
             // 公文堆里于是出现"请示：attack 万家岭 准不准？"——半句英文。
@@ -3096,6 +3255,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
                     deadline: day + 2,
                     status: "pending",
                     from_telegram: ready.telegram.is_some(),
+                    intended: None,
                 },
             );
             notes.push((
@@ -3130,16 +3290,112 @@ fn answer_report(state: &Arc<ServerState>, w: &mut World, id: u32, approve: bool
         let list = state.reports.lock().unwrap();
         list.iter()
             .find(|r| r.id == id)
-            .map(|r| (r.status.to_string(), r.proposed.clone(), r.unit_name.clone(), r.general.clone()))
+            .map(|r| {
+                (
+                    r.status.to_string(),
+                    r.proposed.clone(),
+                    r.unit_name.clone(),
+                    r.general.clone(),
+                    r.kind,
+                    r.intended.clone(),
+                    r.unit,
+                )
+            })
     };
-    let Some((status, proposed, unit_name, general)) = target else {
+    let Some((status, proposed, unit_name, general, kind, intended, unit_idx)) = target else {
         return format!("找不到公文 #{id}");
     };
     if status != "pending" {
         return format!("这份公文已经处理过了（{status}）");
     }
 
+    // ── 抗命请示：驳回 = 勒令他拿命去填 ──
+    //
+    // 这是"局部利害 vs 全局"唯一能落地的地方：
+    // 将领想保住自己这支部队，玩家可能必须让他去顶住整条战线。
+    // 驳回不只是改个状态码——要真的把原令压回去，并且**让 AI 不再覆盖它**
+    // （`manual = true`），否则他下一天又按自己的算盘走了。
+    if kind == "dissent" {
+        let Some(unit) = unit_idx else { return "公文里没有对应单位".into() };
+        if approve {
+            let mut list = state.reports.lock().unwrap();
+            if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+                r.status = "approved";
+            }
+            return format!("已准 {unit_name}（{general}）自行处置");
+        }
+        let Some((ik, it)) = intended else {
+            return "这份抗命公文里没有原令，无法勒令".into();
+        };
+        let rec = CmdRecord {
+            day: w.tick,
+            unit,
+            kind: ik.clone(),
+            target: it,
+            reject: None,
+            source: "player".into(),
+            reason: "上峰不准，勒令照原令执行".into(),
+        };
+        state.commands.lock().unwrap().push(rec.clone());
+        let applied = apply_record(w, &rec);
+        if !applied {
+            // 原令现在执行不了（目标省已不邻接/已失守）。如实说，别报假成功。
+            {
+                let mut list = state.reports.lock().unwrap();
+                if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+                    r.status = "denied";
+                }
+            }
+            return format!(
+                "已驳回 {unit_name}（{general}）的请示，但原令「{}」现在执行不了\
+                 ——目标省可能已不邻接或已失守。请重新下令。",
+                kind_cn(&ik)
+            );
+        }
+        if let Some(u) = w.units.get_mut(unit) {
+            // AI 不许再按自己的判断覆盖这道令
+            u.manual = true;
+            u.disobeyed = false;
+            u.dissent_reason = None;
+            // 被强压一次，会记住：服从度打折，下一次更容易讨价还价
+            u.commander.obedience =
+                (u.commander.obedience - sim_core::Fixed::ratio(5, 100)).max(sim_core::Fixed::ZERO);
+        }
+        {
+            let mut list = state.reports.lock().unwrap();
+            if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+                r.status = "denied";
+            }
+        }
+        trace(format!("   勒令 {unit_name}（{general}）执行原令 {ik}"));
+        // 应用后按**实际**落到世界上的命令说话，别复述原令。
+        // 例：原令是"进攻 沙河"，可沙河已经被我们打下来了——此时"进攻"会被
+        // 语义校正成固守。报"已勒令进攻"就是假话，玩家一看部队在原地会更火。
+        let now_label = w
+            .units
+            .get(unit)
+            .map(|u| u.order.label().to_string())
+            .unwrap_or_default();
+        if now_label.contains(kind_cn(&ik)) {
+            return format!("已勒令 {unit_name}（{general}）照原令执行（{}）", kind_cn(&ik));
+        }
+        return format!(
+            "已驳回 {unit_name}（{general}）的请示。原令「{}」的目标现在已不适用\
+             （多半已被我方控制），该部改按「{now_label}」执行。",
+            kind_cn(&ik)
+        );
+    }
+
     if !approve {
+        // 驳回 = 维持原令。但只改状态码是不够的：AI 下一次还会按自己的判断改。
+        // 所以要把他钉在原令上（`manual`），否则玩家的"不准"第二天就失效。
+        if let Some(unit) = unit_idx {
+            if let Some(u) = w.units.get_mut(unit) {
+                u.manual = true;
+                u.disobeyed = false;
+                u.dissent_reason = None;
+            }
+        }
         let mut list = state.reports.lock().unwrap();
         if let Some(r) = list.iter_mut().find(|r| r.id == id) {
             r.status = "denied";

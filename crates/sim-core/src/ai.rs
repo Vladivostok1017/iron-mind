@@ -112,6 +112,17 @@ fn own_judgment(cmd: &Commander, ctx: &CommandContext) -> Option<Order> {
     None
 }
 
+/// 军令的硬权重：所有"抗命/打折扣"的概率都乘它。
+///
+/// 为什么需要它：这一仗是**对外抗战**，不是军阀内战里的保存实力。
+/// 抗命可以发生（将领确实会为部队存续打算），但不能成为常态——
+/// 原来的公式让"劣势强攻"有 35% 概率直接不动，玩家发十封电报有八封被顶回来，
+/// 那不是在指挥，是在看戏。
+///
+/// 0.6 的含义：同样的性格与处境，抗命概率降到原来的六成。
+/// 剩下那部分留白是刻意的——将领仍然可能不听，只是不再随手不听。
+const ORDER_AUTHORITY: Fixed = Fixed::ratio_const(6, 10);
+
 /// 将领对命令的解释。
 ///
 /// 这是"意图式指挥"的核心机制：上级下达 `intended`，将领结合自己的性格
@@ -120,7 +131,11 @@ fn own_judgment(cmd: &Commander, ctx: &CommandContext) -> Option<Order> {
 /// 三条约束，保证"将在外"不至于离谱：
 /// 1. 将领只能改方向，不能改阵营（永远不会投敌）。
 /// 2. 抗命只会朝"更保守"或"更激进"两个方向偏，不会产生无意义动作。
-/// 3. 抗命概率受 `obedience` 硬约束，服从度高的将领基本不会抗命。
+/// 3. 抗命概率受 `obedience` 硬约束，服从度高的将领基本不会抗命；
+///    再乘一层 `ORDER_AUTHORITY`——抗战里军令是有分量的。
+///
+/// 抗命**不是既成事实**：服务端会把每一次抗命变成一条请示公文，
+/// 玩家可以驳回并勒令他照原令执行（见 `sim-server` 的 dissent 公文）。
 fn interpret(
     cmd: &Commander,
     intended: Order,
@@ -134,12 +149,12 @@ fn interpret(
     // 就会按自己的想法来。这是"将在外"的主动形态，而不是被动抗命。
     if let Some(own) = own_judgment(cmd, ctx) {
         if own != intended {
-            let dissent = (Fixed::ONE - cmd.obedience) * cmd.initiative;
+            let dissent = (Fixed::ONE - cmd.obedience) * cmd.initiative * ORDER_AUTHORITY;
             if roll < dissent {
                 let reason = match own {
-                    Order::Attack(_) => "战机可乘，本官自作主张",
-                    Order::Hold => "势不可为，按兵不动",
-                    _ => "本官另有计较",
+                    Order::Attack(_) => "战机可乘，职部拟即行出击，请核备",
+                    Order::Hold => "职部伤亡过重，恳请准予固守整理",
+                    _ => "职部另有计较，请上峰裁示",
                 };
                 return (own, Some(reason));
             }
@@ -150,10 +165,11 @@ fn interpret(
     match intended {
         // 劣势强攻：谨慎的将领倾向按下不动，等增援。
         Order::Attack(_) if ctx.outmatched => {
-            let resist = (Fixed::ONE - cmd.obedience) * cmd.caution * Fixed::ratio(15, 10)
-                + cmd.initiative * Fixed::ratio(3, 10);
+            let resist = ((Fixed::ONE - cmd.obedience) * cmd.caution * Fixed::ratio(15, 10)
+                + cmd.initiative * Fixed::ratio(3, 10))
+                * ORDER_AUTHORITY;
             if roll < resist {
-                return (Order::Hold, Some("兵力不足，未敢强攻"));
+                return (Order::Hold, Some("职部兵力不足，恳请准予整理后再攻"));
             }
         }
         // 固守时看到战机：好战的将领可能主动出击。
@@ -161,10 +177,11 @@ fn interpret(
             if cmd.aggression > Fixed::ratio(7, 10) {
                 let eager = (cmd.aggression - Fixed::ratio(7, 10))
                     * (Fixed::ONE - cmd.obedience)
-                    * Fixed::ratio(6, 10);
+                    * Fixed::ratio(6, 10)
+                    * ORDER_AUTHORITY;
                 if roll < eager {
                     if let Some(target) = ctx.weakest_neighbor {
-                        return (Order::Attack(target), Some("战机难得，主动出击"));
+                        return (Order::Attack(target), Some("战机难得，职部拟主动出击，请核备"));
                     }
                 }
             }
@@ -172,9 +189,12 @@ fn interpret(
         // 撤退命令：好战又不服的将领可能抗命死守。
         Order::Retreat(_) => {
             if cmd.aggression > Fixed::ratio(6, 10) {
-                let refuse = (Fixed::ONE - cmd.obedience) * cmd.aggression * Fixed::ratio(4, 10);
+                let refuse = (Fixed::ONE - cmd.obedience)
+                    * cmd.aggression
+                    * Fixed::ratio(4, 10)
+                    * ORDER_AUTHORITY;
                 if roll < refuse {
-                    return (Order::Hold, Some("未奉撤退之命，死守此地"));
+                    return (Order::Hold, Some("职部未敢弃守，恳请准予死守此地"));
                 }
             }
         }
