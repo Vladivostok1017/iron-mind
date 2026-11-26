@@ -37,6 +37,13 @@ const evalFile = arg("eval-file", null);
 const evalJs = evalFile ? fs.readFileSync(evalFile, "utf8").trim() : arg("eval", null);
 const waitMs = Number(arg("wait", 900));
 const size = arg("size", "1600,1000").split(",").map(Number);
+// `--metrics 904x407` 或 `--metrics 904x407@3`：用 CDP 覆盖**页面视口**。
+//
+// 为什么需要它：`--size` 只改浏览器窗口，页面 CSS 视口不一定跟着变
+// （实测传 900x420，页面里 innerWidth 只有 500）。而手机横屏的布局
+// 是靠 @media (max-width:820px) / (max-height:560px) 判的，视口不对就验了个假的。
+// 真机 Redmi 24117RK2CC：物理 1220x2712、DPR≈3 → 横屏 CSS 视口 904x407。
+const metrics = arg("metrics", null);
 const port = Number(arg("port", 9333));
 
 const CANDIDATES = [
@@ -114,6 +121,17 @@ async function main() {
   await send("Page.enable");
   await send("Network.enable");
   await send("Network.setCacheDisabled", { cacheDisabled: true });
+  if (metrics) {
+    const [wh, dpr] = metrics.split("@");
+    const [mw, mh] = wh.split("x").map(Number);
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: mw,
+      height: mh,
+      deviceScaleFactor: Number(dpr || 1),
+      mobile: true,
+    });
+    await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+  }
   await send("Page.navigate", { url });
   // 等 load；不等也会被下面的 sleep 兜住
   for (let i = 0; i < 100; i++) {

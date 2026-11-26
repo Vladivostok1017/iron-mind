@@ -828,7 +828,9 @@
   /* 手机横屏：命令条缩成两行、贴左，别挡住右侧部队面板 */
   @media (orientation: landscape) and (max-height: 560px) {
     #orderbar { left: 8px; right: auto; width: 300px; bottom: 48px; padding: 5px 6px 6px; }
-    #orderbar .ob-row button { padding: 6px 2px; font-size: 11px; min-width: 44px; }
+    /* min-height 是拇指的事：30px 高的按钮能点中，但要瞄。
+       实测视口 904x407（Redmi 24117RK2CC）下原来只有 30px。 */
+    #orderbar .ob-row button { padding: 6px 2px; font-size: 11px; min-width: 44px; min-height: 38px; }
     #orderbar .ob-top { margin-bottom: 4px; }
   }
 </style>
@@ -2646,13 +2648,24 @@ let pendingVerb = null;   // 已点开的动词（需要指定目标的那种）
 let curCommit = null;     // 投入率（百分比）。null = 让将领按性格定
 
 // 「调兵」不在这里：它要选的是省内阵地，不是省份，走侧栏的阵地按钮。
+//
+// 动词只剩四个，因为引擎里本来就只有四种「要它干什么」：
+//
+// - 固守   = 留在原地，能挖就挖（引擎的 Fortify）。**和"工事"是同一件事**：
+//            原地不动的时候为什么不挖？拆成两个按钮，玩家要猜"我今天该点哪个"。
+// - 整补   = 停下来补兵、回气、回粮。
+// - 推进   = 去某个省。**进攻、推进、撤退三者是同一件事**：
+//            目标省里有敌人就是打，没有就是进去占领，退到自己的省就是撤退——
+//            这个判断由目标省的实际情况决定，不该玩家先选一次。
+//            `Order::Retreat` 在引擎里没有独立的移动语义（systems.rs 一处都不看它），
+//            所以"撤退"只是"推进到一个我方省"，没有单列的必要。
+//            （引擎里那个枚举留着：委诸将领模式下 AI 会用它表达"主动后撤"，
+//             而勇将可能抗命死守。玩家界面不需要。）
+// - 并编   = 残部并入同省友军。
 const VERBS = [
-  ["hold", "固守", false],
-  ["fortify", "工事", false],
+  ["hold", "固守", false],   // 落地时按兵种换成 fortify/hold，见 fireVerb
   ["rest", "整补", false],
-  ["attack", "进攻", true],
-  ["move", "推进", true],
-  ["retreat", "撤退", true],
+  ["advance", "推进", true],
   ["merge", "并编", true],
 ];
 const TEMPOS = [[null, "按将领"], [60, "六成"], [80, "八成"], [100, "全压"]];
@@ -2719,7 +2732,11 @@ function fireVerb(u, kind, needTarget) {
   const c = curCommit == null ? undefined : curCommit;
   if (!needTarget) {
     pendingVerb = null;
-    api("/api/order", { unit: u.index, kind: kind, commit: c });
+    // 「固守」对地面部队就是引擎的 fortify：原地不动的时候顺手挖工事。
+    // 空军/海军没有工事可挖，给它们 hold 就行。
+    const ground = u.kind_code === 0 || u.kind_code === 1;
+    const k = (kind === "hold" && ground) ? "fortify" : kind;
+    api("/api/order", { unit: u.index, kind: k, commit: c });
     toast("已下令：" + verbLabel(kind) + " " + u.name);
     closeOrderBar();
     return;
@@ -2727,7 +2744,7 @@ function fireVerb(u, kind, needTarget) {
   pendingVerb = (pendingVerb === kind) ? null : kind;
   $("hint").textContent = pendingVerb
     ? "点地图选目标：" + verbLabel(kind) + " " + u.name +
-      (kind === "merge" ? "（点同省的友军）" : "（点相邻省）")
+      (kind === "merge" ? "（点同省的友军）" : "（可点远处，部队会走过去）")
     : "已取消";
   openOrderBar(u);
   render();
@@ -2749,19 +2766,17 @@ function onProvince(p) {
 
 function issueTargeted(p) {
   if (selUnit === null) return;
-  const cp = S.provinces.find((x) => x.id === curProv);
-  if (cp && p.id !== curProv && cp.neighbors.indexOf(p.id) < 0) {
-    toast("只能对相邻省份下令");
-    return;
-  }
-  let kind = pendingVerb;
-  // 目标归属校正：自己的省只能是移防；敌方空省是推进，敌方有兵才是进攻。
-  // 服务端会做同样的校正，这里只是让提示文字说实话。
-  const enemyHere = (p.units || []).some((u) => !u.mine);
-  if (kind === "attack" && (p.mine || !enemyHere)) kind = "move";
-  if (kind === "retreat" && !p.mine) { toast("撤退只能退到我方控制的省"); return; }
+  const kind = pendingVerb;
+  // 不再限制"只能点相邻省"，也不再区分"进攻/推进/撤退"。
+  //
+  // 引擎本来就支持千里奔袭（`hops_to` 逐省寻路，`march_hops` 报还有几天），
+  // 是我在界面上多拦了一道。真正走不通的（要跨水、没有陆路）由服务端
+  // 用一句人话拒绝，比前端猜得准。
   const c = curCommit == null ? undefined : curCommit;
-  api("/api/order", { unit: selUnit, kind: kind, target: p.id, commit: c });
+  // 统一发 attack：目标省有敌人就是打，没有就是进去占领，是我方省就是移防/后撤，
+  // 服务端 apply_typed 会做同样的校正（"attack" 落到自己省/敌空省 → "move"）。
+  const wire = kind === "advance" ? "attack" : kind;
+  api("/api/order", { unit: selUnit, kind: wire, target: p.id, commit: c });
   toast("已下令：" + verbLabel(kind) + " " + p.name);
   closeOrderBar();
   selUnit = null; curProv = null;
