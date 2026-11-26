@@ -867,6 +867,12 @@ fn run_movement(world: &mut World) {
     }
 }
 
+/// 打残到什么程度才允许被并编。
+///
+/// 0.5 = 剩不到一半编制。设成 0.8 会让玩家天天重排序列把部队"洗"成满编，
+/// 设成 0.2 就只有几乎全灭的才算数、等于没有这个机制。
+pub const MERGE_MAX_RATIO: Fixed = Fixed::ratio_const(5, 10);
+
 /// 原地命令：省内调兵、筑工事、整补。
 ///
 /// 这三条都不需要"走一格"，所以不进移动流程。调兵只有几公里，
@@ -928,6 +934,81 @@ fn apply_stationary_orders(world: &mut World) {
                     let room = u.max_strength - u.strength;
                     let add = if add > room { room } else { add };
                     world.units[i].strength += add;
+                }
+            }
+            // 并编：残部并入同省友军，本番号撤销。
+            //
+            // 这是"打残了"唯一的出路，而且**必须是人做的决定**：
+            // 部队不会因为打不动就自己停手（正面战场上全连殉国是常态），
+            // 也不会自己找兄弟部队合编。所以它只是一条能下、但不会自动
+            // 发生的命令——不发，那支部队就一直打到光。
+            Order::Merge(t) => {
+                let ti = t as usize;
+                let usable = ti < world.units.len()
+                    && ti != i
+                    && world.units[ti].is_alive()
+                    && world.units[ti].side == side
+                    && world.units[ti].position == pos;
+                // 打残了才谈得上被拆散：还剩一半以上编制的师不拆。
+                let mauled =
+                    world.units[i].strength <= world.units[i].max_strength * MERGE_MAX_RATIO;
+                if usable && mauled {
+                    let moved = world.units[i].strength;
+                    let room = {
+                        let tu = &world.units[ti];
+                        if tu.max_strength > tu.strength {
+                            tu.max_strength - tu.strength
+                        } else {
+                            Fixed::ZERO
+                        }
+                    };
+                    let add = if moved > room { room } else { moved };
+                    let spill = moved - add;
+                    if !add.is_zero() {
+                        // 并入的是老兵，不是新兵：士气按人数加权。
+                        let tmorale = world.units[ti].morale;
+                        let smorale = world.units[i].morale;
+                        let after = world.units[ti].strength + add;
+                        if !after.is_zero() {
+                            let blended =
+                                (tmorale * (after - add) + smorale * add) / after;
+                            world.units[ti].morale =
+                                blended.clamp(Fixed::ratio(15, 100), Fixed::ONE);
+                        }
+                        world.units[ti].strength = after;
+                    }
+
+                    let src = world.units[i].name.clone();
+                    let cmd = world.units[i].commander.name.clone();
+                    let tgt = world.units[ti].name.clone();
+                    {
+                        let u = &mut world.units[i];
+                        u.strength = Fixed::ZERO;
+                        u.ended_day = Some(tick);
+                        // 番号划掉了就没有二次整编——人还在，编制没了。
+                        u.reform_day = None;
+                        u.order = Order::Hold;
+                        u.manual = false;
+                        u.disobeyed = false;
+                        u.dissent_reason = None;
+                        u.commander.fate = crate::world::Fate::Relieved;
+                    }
+                    world.report_for(
+                        crate::world::EventKind::Oob,
+                        format!(
+                            "{src} 番号撤销，残部 {:.1} 千并入 {tgt}{}；{cmd} 去职",
+                            add.to_display_f64(),
+                            if spill.raw() > 0 {
+                                format!(
+                                    "（另有 {:.1} 千无处容纳，就地遣散）",
+                                    spill.to_display_f64()
+                                )
+                            } else {
+                                String::new()
+                            }
+                        ),
+                        side,
+                    );
                 }
             }
             _ => {}
@@ -1158,19 +1239,25 @@ fn run_combat(world: &mut World, seed: u64, now: u32) {
         let mut jp_lost = Fixed::ZERO;
         for &i in &cn {
             let u = &mut world.units[i as usize];
-            let delta = u.strength * cn_loss;
+            // 投入率同时压伤亡：**没摆上阵的人不会死**。
+            // 少投 = 打得慢 + 流血少，这是一笔交易而不是惩罚；
+            // 添油战术在史料里就是这个形状（"逐次投入"的代价是推不动，
+            // 好处是打光了还剩骨架）。
+            let eff_loss = cn_loss * u.committed;
+            let delta = u.strength * eff_loss;
             u.strength -= delta;
             u.losses += delta;
-            u.morale -= cn_loss * Fixed::ratio(5, 10) + cn_shock;
+            u.morale -= eff_loss * Fixed::ratio(5, 10) + cn_shock;
             u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
             cn_lost += delta;
         }
         for &i in &jp {
             let u = &mut world.units[i as usize];
-            let delta = u.strength * jp_loss;
+            let eff_loss = jp_loss * u.committed;
+            let delta = u.strength * eff_loss;
             u.strength -= delta;
             u.losses += delta;
-            u.morale -= jp_loss * Fixed::ratio(5, 10) + jp_shock;
+            u.morale -= eff_loss * Fixed::ratio(5, 10) + jp_shock;
             u.morale = u.morale.clamp(Fixed::ratio(15, 100), Fixed::ONE);
             jp_lost += delta;
         }

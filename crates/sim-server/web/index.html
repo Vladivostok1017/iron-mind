@@ -230,7 +230,14 @@
   .br-row.k-dissent .br-v { color: var(--gold); }
   .br-row.k-retreat .br-v { color: #a98b7a; }
   .br-row.k-supply .br-v { color: #9aa6b3; }
-  /* 晨报：一页读完全局的"今天" */
+  /* 军情：将领报上来的话。用情报的绿，和硬事件（战斗/易手）区分开——
+     这一类是"人说的话"，可能错，玩家该带着怀疑读。 */
+  .br-row.k-intel .br-v { color: #7f9a86; font-style: normal; }
+  /* 先处理：不是事件，是当前状态。用告警色，一眼能挑出来。 */
+  .br-row.k-warn .br-v { color: #d0a46a; }
+  .br-sec { font-size: 10.5px; letter-spacing: .14em; color: #79828e; margin: 12px 0 4px;
+    padding-bottom: 3px; border-bottom: 1px solid #1e2833; }
+  /* 态势：一页读完此刻的全局（手动打开，不拦推进） */
   .mr-sec { font-size: 10.5px; letter-spacing: .16em; color: #79828e; margin: 14px 0 6px;
     padding-bottom: 4px; border-bottom: 1px solid #1e2833; }
   .mr-row { display: flex; gap: 12px; padding: 4px 0; font-size: 12.5px; line-height: 1.65; }
@@ -550,7 +557,7 @@
        grid 认 order，所以这里直接重排，不去动 HTML 结构（桌面顺序不变）。 */
     #bottom #modes { order: 0; }
     #bottom #btn-1, #bottom #btn-next, #bottom #btn-3 { order: 1; }
-    #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
+    #bottom #btn-sit, #bottom #btn-home, #bottom #btn-save,
     #bottom #btn-load, #bottom #btn-reset { order: 2; }
 
     /* 行 1：视图切换（四段等宽，占满 10 栏） */
@@ -575,12 +582,12 @@
     #bottom #btn-3 { grid-column: span 3; min-height: 40px; font-size: 11.5px; padding: 6px 4px; }
 
     /* 行 3：管理动作，五个各占两栏（≈79px，放两个字够） */
-    #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
+    #bottom #btn-sit, #bottom #btn-home, #bottom #btn-save,
     #bottom #btn-load, #bottom #btn-reset {
       grid-column: span 2;
       min-height: 34px; padding: 6px 2px; font-size: 11.5px;
     }
-    /* 「晨报/菜单…」这些是文字按钮，桌面那套 padding 在手机上会把字挤掉 */
+    /* 「态势/菜单…」这些是文字按钮，桌面那套 padding 在手机上会把字挤掉 */
     #bottom .btn { letter-spacing: 0; }
     /* 触屏上「⏎ / ␣」这两个键盘提示没有意义，只占宽度 */
     #bottom .kbd { display: none; }
@@ -740,17 +747,17 @@
     /* 管理动作：按内容宽度，但给一个下限 —— 安卓那边是 54px，这里 50。
        5 × 50 = 250，加上视图 144 和间隙 40，剩给三个推进按钮约 306，
        和安卓的 335 很接近（差的 30px 就是安全区吃掉的宽度）。 */
-    #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
+    #bottom #btn-sit, #bottom #btn-home, #bottom #btn-save,
     #bottom #btn-load, #bottom #btn-reset {
       flex: 0 0 auto; min-width: 50px; min-height: 34px; padding: 4px 4px; font-size: 10.5px;
     }
     /* 顺序：视图 → 管理 → 推进。
        为什么这么排：右手握机时**右下角是拇指热区**，"推进"是每分钟都要按的，
-       "晨报/菜单/存档/读档/重开"一天用不了几次。原来 DOM 顺序让推进卡在
+       "态势/菜单/存档/读档/重开"一天用不了几次。原来 DOM 顺序让推进卡在
        屏幕中间、最右边反而是"重开"——常用动作费劲，危险动作顺手。
        flex 认 order，所以这里只调顺序，不动 HTML（桌面顺序保持原样）。 */
     #bottom #modes { order: 0; }
-    #bottom #btn-morning, #bottom #btn-home, #bottom #btn-save,
+    #bottom #btn-sit, #bottom #btn-home, #bottom #btn-save,
     #bottom #btn-load, #bottom #btn-reset { order: 1; }
     #bottom #btn-3, #bottom #btn-next, #bottom #btn-1 { order: 2; }
 
@@ -791,6 +798,38 @@
     #mail .m-head { position: sticky; top: 0; }
     #mail .m-body { flex-direction: row; }
     #mail .m-list { width: 280px; max-height: none; }
+  }
+
+  /* ---- 亲自指挥：命令条 ---- */
+  #orderbar {
+    position: absolute; left: 10px; right: 10px; bottom: 56px; z-index: 40;
+    background: rgba(14,20,27,.96); border: 1px solid #2d3947; border-radius: 8px;
+    padding: 7px 9px 8px; backdrop-filter: blur(6px);
+    box-shadow: 0 6px 24px rgba(0,0,0,.45);
+  }
+  #orderbar.hidden { display: none; }
+  #orderbar .ob-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  #orderbar .ob-top b { font-size: 12.5px; color: #e6edf3; }
+  #orderbar #ob-meta { flex: 1; font-size: 11px; color: #8b95a1; }
+  #orderbar .ob-x {
+    width: 30px; height: 24px; border-radius: 4px; border: 1px solid #2d3947;
+    background: #161e28; color: #c3ccd6; font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  #orderbar .ob-row { display: flex; gap: 5px; flex-wrap: wrap; }
+  #orderbar .ob-row + .ob-row { margin-top: 5px; }
+  #orderbar .ob-row button {
+    flex: 1 1 0; min-width: 54px; padding: 7px 4px; font-size: 12px;
+    border-radius: 5px; border: 1px solid #2d3947; background: #18222d;
+    color: #c3ccd6; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  #orderbar .ob-row button.on { background: #2a6fbe; border-color: #3d86d6; color: #fff; }
+  #orderbar .ob-row button.armed { background: #9a5b12; border-color: #c47a1c; color: #fff; }
+  #orderbar .ob-row button:disabled { opacity: .35; cursor: default; }
+  /* 手机横屏：命令条缩成两行、贴左，别挡住右侧部队面板 */
+  @media (orientation: landscape) and (max-height: 560px) {
+    #orderbar { left: 8px; right: auto; width: 300px; bottom: 48px; padding: 5px 6px 6px; }
+    #orderbar .ob-row button { padding: 6px 2px; font-size: 11px; min-width: 44px; }
+    #orderbar .ob-top { margin-bottom: 4px; }
   }
 </style>
 </head>
@@ -913,6 +952,20 @@
     </div>
   </div>
 
+  <!-- 亲自指挥：命令条。
+       浮在地图下沿、底栏之上。原地命令（固守/工事/整补）点一下就落地；
+       要指目标的，先点动词再点省份，两下。全程不弹窗——手机上每次弹窗
+       都是多三次点击，而这条路径要用的次数最多。 -->
+  <div id="orderbar" class="hidden">
+    <div class="ob-top">
+      <b id="ob-name"></b>
+      <span id="ob-meta"></span>
+      <button class="ob-x" id="ob-close" title="收走">×</button>
+    </div>
+    <div class="ob-row" id="ob-tempo"></div>
+    <div class="ob-row" id="ob-verbs"></div>
+  </div>
+
   <div id="bottom">
 
     <div class="modes" id="modes">
@@ -928,7 +981,9 @@
     <div id="plan" title="本方司令部的作战方针（方向，不是命令）"></div>
     <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
     <!-- 有了首页之后，必须有一条路回到首页：桌面软件没有"地址栏"可以刷新 -->
-    <button class="btn" id="btn-morning" title="晨报：今天该看的三件事（晨报会自己在你推进前弹一次）">晨报</button>
+    <!-- 指挥模式：委诸将领 / 亲自指挥。点一下切换，状态写在按钮上。 -->
+    <button class="btn" id="btn-mode" title="指挥模式：委诸将领＝发电报让将领自己决定；亲自指挥＝直接点部队下令">委诸将领</button>
+    <button class="btn" id="btn-sit" title="态势：此刻的全局面——兵力、敌情、在途命令、补给、交战、行军（随时可开，不拦推进）">态势</button>
     <button class="btn" id="btn-home" title="回到首页（存档/读档/换战役都在这儿）">菜单</button>
     <button class="btn" id="btn-save">存档</button>
     <button class="btn" id="btn-load">读档</button>
@@ -1835,11 +1890,29 @@ function renderMap() {
       ug.addEventListener("click", (ev) => {
         ev.stopPropagation();
         if (!u.mine) return;
+        // 「并编」要选的是**同省友军**，不是省份：这一下就是选目标。
+        if (typeof pendingVerb !== "undefined" && pendingVerb === "merge" && selUnit !== null) {
+          const from = selUnit;
+          pendingVerb = null;
+          api("/api/order", {
+            unit: from,
+            kind: "merge",
+            target: u.index,
+            commit: curCommit == null ? undefined : curCommit,
+          });
+          toast("已下令：并编入 " + u.name);
+          closeOrderBar();
+          return;
+        }
         selUnit = u.index;
         curProv = p.id;
         nodeProv = null; // 侧栏跟回"我的部队所在省"
-        $("hint").textContent = "已选 " + u.name + "·" + u.commander + "（" +
-          u.strength.toFixed(1) + " 千）——指挥请发电报；右键任意省看阵地";
+        if (S && S.direct) {
+          openOrderBar(u);
+        } else {
+          $("hint").textContent = "已选 " + u.name + "·" + u.commander + "（" +
+            u.strength.toFixed(1) + " 千）——指挥请发电报；右键任意省看阵地";
+        }
         render();
       });
     });
@@ -1848,7 +1921,10 @@ function renderMap() {
   svg.addEventListener("click", () => {
     if (selUnit !== null) {
       selUnit = null; curProv = null;
-      $("hint").textContent = "地图只作查看：点单位看详情；下命令请用右侧电报台";
+      try { closeOrderBar(); } catch (e) {}
+      $("hint").textContent = S && S.direct
+        ? "点我方部队开始下令"
+        : "地图只作查看：点单位看详情；下命令请用右侧电报台";
       render();
     }
   });
@@ -2041,6 +2117,7 @@ async function api(path, body) {
     const j = await r.json();
     if (j.error) toast(j.error);
     S = j.state || j;
+    syncModeBtn();
     if (selUnit !== null && !allUnits().find((u) => u.index === selUnit)) { selUnit = null; curProv = null; }
     render();
     showOutcome();
@@ -2162,7 +2239,7 @@ async function sendTelegram() {
 // 现在：侧栏只显示最新一条，点「打开战报信箱」进入全屏列表，一封一封看。
 const KIND_CN = { combat: "战斗", occupy: "易手", dissent: "抗命", cmd: "将领", rule: "规则", intel: "情报", supply: "后勤", retreat: "撤退", oob: "编制" };
 // 默认只看"重要"：规则类（山地行军减员）每 tick 每个单位一条，会把真正的战况埋掉
-const MAIL_KEY = ["combat", "occupy", "dissent", "cmd", "oob"];
+const MAIL_KEY = ["combat", "occupy", "dissent", "cmd", "oob", "intel"];
 let mailFilter = "key";
 let mailSel = 0;
 
@@ -2195,7 +2272,7 @@ function renderMail() {
   $("mail-count").textContent = "共 " + items.length + " 条";
 
   // 分类筛选
-  const kinds = ["key", "all", "combat", "occupy", "oob", "dissent", "cmd", "rule"];
+  const kinds = ["key", "all", "combat", "intel", "occupy", "oob", "dissent", "cmd", "rule"];
   chips.innerHTML = "";
   for (const k of kinds) {
     const b = document.createElement("button");
@@ -2561,39 +2638,154 @@ function moveTip(ev) {
 }
 function hideTip() { $("tip").style.display = "none"; }
 
+// ---- 亲自指挥：点单位 → 命令条 → 点目标 ----
+//
+// 为什么不用弹窗：这条路径一天要用十几次，手机上每次弹窗都是多三次点击。
+// 所以命令条钉在地图下沿——原地命令一下点完，指目标的先点动词再点省。
+let pendingVerb = null;   // 已点开的动词（需要指定目标的那种）
+let curCommit = null;     // 投入率（百分比）。null = 让将领按性格定
+
+// 「调兵」不在这里：它要选的是省内阵地，不是省份，走侧栏的阵地按钮。
+const VERBS = [
+  ["hold", "固守", false],
+  ["fortify", "工事", false],
+  ["rest", "整补", false],
+  ["attack", "进攻", true],
+  ["move", "推进", true],
+  ["retreat", "撤退", true],
+  ["merge", "并编", true],
+];
+const TEMPOS = [[null, "按将领"], [60, "六成"], [80, "八成"], [100, "全压"]];
+
+function verbLabel(k) {
+  const v = VERBS.find((x) => x[0] === k);
+  return v ? v[1] : k;
+}
+
+function syncModeBtn() {
+  const b = $("btn-mode");
+  if (!b || !S) return;
+  b.textContent = S.direct ? "亲自指挥" : "委诸将领";
+  b.style.borderColor = S.direct ? "#3d86d6" : "";
+  b.style.color = S.direct ? "#7fb3ee" : "";
+  // 底栏那句提示必须跟着模式改。
+  // 亲自指挥下还写着"下命令请用右侧电报台"，是在告诉玩家一条已经不对的规矩。
+  // 只在没有选中部队、也没有待选目标时才覆盖——别把"点地图选目标"冲掉。
+  const hint = $("hint");
+  if (hint && selUnit === null && !pendingVerb) {
+    hint.textContent = S.direct
+      ? "亲自指挥：点部队 → 选动词 → 点目标省"
+      : "地图只作查看：点单位看详情；下命令请用右侧电报台";
+  }
+}
+
+function openOrderBar(u) {
+  if (!S || !S.direct || !u) return;
+  $("ob-name").textContent = u.name + " · " + (u.commander || "");
+  const pct = u.commit_pct;
+  $("ob-meta").textContent =
+    u.strength.toFixed(1) + " 千 · 气 " + u.morale.toFixed(2) +
+    " · 粮 " + u.supply.toFixed(2) +
+    " · 投入 " + (pct == null ? "—" : pct + "%") +
+    (u.march_hops > 0 ? " · 行军 " + u.march_hops + " 日" : "");
+  const tp = $("ob-tempo");
+  tp.innerHTML = "";
+  for (const [v, label] of TEMPOS) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (v === curCommit) b.className = "on";
+    b.onclick = () => { curCommit = v; openOrderBar(u); };
+    tp.appendChild(b);
+  }
+  const vb = $("ob-verbs");
+  vb.innerHTML = "";
+  for (const [k, label, needTarget] of VERBS) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (pendingVerb === k) b.className = "armed";
+    b.onclick = () => fireVerb(u, k, needTarget);
+    vb.appendChild(b);
+  }
+  $("orderbar").classList.remove("hidden");
+}
+
+function closeOrderBar() {
+  pendingVerb = null;
+  const bar = $("orderbar");
+  if (bar) bar.classList.add("hidden");
+}
+
+function fireVerb(u, kind, needTarget) {
+  const c = curCommit == null ? undefined : curCommit;
+  if (!needTarget) {
+    pendingVerb = null;
+    api("/api/order", { unit: u.index, kind: kind, commit: c });
+    toast("已下令：" + verbLabel(kind) + " " + u.name);
+    closeOrderBar();
+    return;
+  }
+  pendingVerb = (pendingVerb === kind) ? null : kind;
+  $("hint").textContent = pendingVerb
+    ? "点地图选目标：" + verbLabel(kind) + " " + u.name +
+      (kind === "merge" ? "（点同省的友军）" : "（点相邻省）")
+    : "已取消";
+  openOrderBar(u);
+  render();
+}
+
 function onProvince(p) {
   if (suppressClick) return; // 刚拖过地图，这一下不算点击
-  // 地图只用来查看。任何命令都必须变成文字发给将领，由他决定怎么做。
+  if (S && S.direct && selUnit !== null) {
+    if (pendingVerb) { issueTargeted(p); return; }
+    toast(p.name + "：先在上面的命令条点一个动词，再点这里");
+    return;
+  }
+  // 委诸将领：地图只用来查看。任何命令都必须变成文字发给将领。
   const hasMine = (p.units || []).some((u) => u.mine);
   toast(hasMine
     ? p.name + "：要看部队点单位标记；要指挥请写电报"
     : p.name + "：地图只作查看，指挥走右侧电报台");
 }
-function onProvinceDisabled(p) {
+
+function issueTargeted(p) {
+  if (selUnit === null) return;
   const cp = S.provinces.find((x) => x.id === curProv);
-  if (!cp) return;
-  if (p.id === curProv) {
-    api("/api/order", { unit: selUnit, kind: "hold" });
-    toast("已下令固守 " + p.name);
+  if (cp && p.id !== curProv && cp.neighbors.indexOf(p.id) < 0) {
+    toast("只能对相邻省份下令");
     return;
   }
-  if (cp.neighbors.indexOf(p.id) < 0) { toast("只能对相邻省份下令"); return; }
-  const e = lastEv || {};
-  // 目标归属决定命令类别：自己的省只能移防，敌方空省是推进，敌方有兵才是进攻。
+  let kind = pendingVerb;
+  // 目标归属校正：自己的省只能是移防；敌方空省是推进，敌方有兵才是进攻。
   // 服务端会做同样的校正，这里只是让提示文字说实话。
   const enemyHere = (p.units || []).some((u) => !u.mine);
-  let kind = e.altKey ? "retreat" : "attack";
-  if (e.shiftKey) kind = "move";
   if (kind === "attack" && (p.mine || !enemyHere)) kind = "move";
-  const verb = kind === "retreat" ? "撤退" : (p.mine ? "增援" : (enemyHere ? "进攻" : "推进"));
-  api("/api/order", { unit: selUnit, kind: kind, target: p.id });
-  toast("已下令：" + verb + " " + p.name);
+  if (kind === "retreat" && !p.mine) { toast("撤退只能退到我方控制的省"); return; }
+  const c = curCommit == null ? undefined : curCommit;
+  api("/api/order", { unit: selUnit, kind: kind, target: p.id, commit: c });
+  toast("已下令：" + verbLabel(kind) + " " + p.name);
+  closeOrderBar();
+  selUnit = null; curProv = null;
 }
 
 
 
-bind("modes", "click", (e) => {
-  const b = e.target.closest(".mode");
+// 指挥模式切换。它进命令流，所以读档/回放都会跟着走。
+bind("btn-mode", "click", async () => {
+  const next = S && S.direct ? "delegated" : "direct";
+  await api("/api/command_mode", { mode: next });
+  closeOrderBar();
+  selUnit = null; curProv = null;
+  toast(next === "direct"
+    ? "已切到「亲自指挥」：点我方部队下令"
+    : "已切回「委诸将领」：发电报，由将领决定怎么执行");
+  render();
+});
+bind("ob-close", "click", () => {
+  closeOrderBar();
+  render();
+});
+
+bind("modes", "click", (e) => {  const b = e.target.closest(".mode");
   if (!b) return;
   view = b.dataset.view;
   document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("on", x === b));
@@ -3271,6 +3463,19 @@ const Briefing = (() => {
   // 只报"要紧的"：规则类的非战斗减员（山地行军掉几十人）每 tick 每个单位一条，
   // 全弹出来会把真正的事淹掉。
   const IMPORTANT = new Set(["combat", "occupy", "retreat", "supply", "oob", "dissent", "cmd"]);
+  // 将领报来的军情单独一组。
+  //
+  // 它必须进要闻——玩家要拿它做决定，不该埋在战报信箱里翻。
+  // 但不能和硬事件混在一张单子上：一边是"第8军损失 0.3 千"（客观事实），
+  // 一边是"当面之敌约千余，看着比昨天还少"（一个人的判断）——
+  // 混在一起，玩家会把后者也当成事实读。
+  // 而且它们长短差太多，掺着排会把战斗日志挤掉。所以分节、限量。
+  const INTEL = "intel";
+  const INTEL_SHOWN = 3;
+  // 只在真弹出来之后调用；不弹就不该更新。
+  let lastAlarmKey = "";
+  const alarmKey = (list) => list.map((a) => a.title).join("|");
+
   function popup() {
     if (!S || !S.log || !S.log.length) return;
     const maxTick = S.log.reduce((m, e) => Math.max(m, e.tick), 0);
@@ -3281,9 +3486,25 @@ const Briefing = (() => {
     // 取"上次之后的所有要闻"，不是"最新那一天的要闻"。
     // 踩过的坑：山地行军每个单位每 tick 打一条 rule，最新一天往往只有 rule，
     // 按天过滤就会把前一天的战斗/易手全漏掉，而且 lastSeen 已经推过去了。
-    const lines = S.log.filter((e) => e.tick > lastSeen && IMPORTANT.has(e.kind));
-    const day = lines.length ? lines[0].tick : maxTick;
-    if (!lines.length) { lastSeen = maxTick; return; } // 这天没有要紧的事，不打扰
+    const fresh = S.log.filter((e) => e.tick > lastSeen);
+    const lines = fresh.filter((e) => IMPORTANT.has(e.kind));
+    const intel = fresh.filter((e) => e.kind === INTEL);
+
+    // 「先处理」告警只在这里显示；态势页只留一行指路，不重复内容。
+    //
+    // 为什么搬家：原来它在**推进之前**拦一下，可玩家按了推进就说明他已经
+    // 看过局面、准备付这一天了——在他已经决定之后才开始教他做决定，
+    // 只会让人无脑点关闭。放到推进之后，是"这一天打完了，这里有三件事要你看"。
+    const alarms = (() => {
+      try { return Situation.alarms(); } catch (e) { return []; }
+    })();
+    const akey = alarmKey(alarms);
+    // 告警是**状态**不是事件（断粮会一直断），所以只在它变化时才算"有事"，
+    // 否则每推一天都要为同一支缺粮部队弹一次窗。
+    const alarmNew = alarms.length > 0 && akey !== lastAlarmKey;
+
+    const day = (lines[0] || intel[0] || { tick: maxTick }).tick;
+    if (!lines.length && !intel.length && !alarmNew) { lastSeen = maxTick; return; } // 什么都没有，不打扰
     // 已经开着别的窗（请示/设置/引导/首次设置）就先排队。
     //
     // 这里**不能推进基线**：以前推进了，于是"请示弹出来的那一 tick 的要闻"
@@ -3291,28 +3512,46 @@ const Briefing = (() => {
     // 现在留着基线，等窗一关（Dlg.close / 引导结束）再补弹。
     if ($("dlg").classList.contains("on") || Setup.isOpen() || Guide.isOn()) return;
     lastSeen = maxTick;
+    lastAlarmKey = akey;
 
     const body = document.createElement("div");
-    Dlg.h("p", "dg-note", body, "第 " + day + " 日起 · " + lines.length + " 条要闻");
-    for (const e of lines.slice(0, 12)) {
+    const total = lines.length + intel.length;
+    Dlg.h("p", "dg-note", body, "第 " + day + " 日起 · " + total + " 条要闻");
+    if (alarms.length) {
+      Dlg.h("div", "br-sec", body, "先处理");
+      for (const a of alarms) {
+        const row = Dlg.h("div", "br-row k-warn", body);
+        Dlg.h("span", "br-k", row, a.tone === "bad" ? "急" : "注意");
+        Dlg.h("span", "br-v", row, a.title + " —— " + a.text);
+      }
+    }
+    for (const e of lines.slice(0, 8)) {
       const row = Dlg.h("div", "br-row k-" + e.kind, body);
       Dlg.h("span", "br-k", row, KIND_CN[e.kind] || e.kind);
       Dlg.h("span", "br-v", row, e.text);
     }
-    if (lines.length > 12) {
-      Dlg.h("p", "dg-note", body, "另有 " + (lines.length - 12) + " 条，在「战报信箱」里。");
+    if (intel.length) {
+      Dlg.h("div", "br-sec", body, "军情 · 将领报来的，未必准");
+      for (const e of intel.slice(0, INTEL_SHOWN)) {
+        const row = Dlg.h("div", "br-row k-intel", body);
+        Dlg.h("span", "br-k", row, KIND_CN[INTEL] || INTEL);
+        Dlg.h("span", "br-v", row, e.text);
+      }
+    }
+    const more = Math.max(0, lines.length - 8) + Math.max(0, intel.length - INTEL_SHOWN);
+    if (more > 0) {
+      Dlg.h("p", "dg-note", body, "另有 " + more + " 条，在「战报信箱」里。");
     }
     Dlg.open({ title: "要闻", body, actions: [{ label: "已阅", primary: true }] });
   }
   return { popup };
 })();
 
-// ── 晨报：推进之前该看的那一页 ──
-// 要闻解决"事后知道"，晨报解决"事前判断"。
+// ── 态势：此刻手里是什么牌（手动打开）──
+// 要闻解决"事后知道"（自动弹），态势解决"现在手里是什么牌"（手动开）。
 // 它不产生新数据——全是从快照里算得出来的：谁断粮、谁在打、命令卡在哪。
 // 只是把玩家本来要自己在侧栏拼起来的东西，摆成一页。
-const Morning = (() => {
-  let shownDay = -1;
+const Situation = (() => {
 
   function myUnits() {
     return allUnits().filter((u) => u.mine);
@@ -3370,10 +3609,6 @@ const Morning = (() => {
     return o;
   }
 
-  function hasAlarms(o) {
-    return o.starving.length > 0 || o.contested.length > 0 || o.lowMorale.length > 0;
-  }
-
   async function open(manual) {
     if (!S) return;
     const o = collect();
@@ -3388,7 +3623,7 @@ const Morning = (() => {
       enroute = ts.filter((t) => t.status === "enroute").length;
       awaiting = ts.filter((t) => t.status === "delivered" && !(t.traces || []).length).length;
     } catch (e) {}
-    if (!manual) shownDay = S.tick;
+    // 手动打开就不需要在推进路径上记录"今天看过了"——那套只在有弹窗拦截时才有意义。
 
     const body = document.createElement("div");
     const sec = (title) => Dlg.h("div", "mr-sec", body, title);
@@ -3404,23 +3639,31 @@ const Morning = (() => {
       ? "约 " + S.enemy.estimated_strength.toFixed(1) + " 千（已查明 " + (S.enemy.known_provinces || 0) + " 处）"
       : "未查明", "");
 
-    // 一、先处理
+    // 「先处理」不在这里画。
+    //
+    // 告警只在一个地方：**推进之后自动弹的那一页要闻**。理由是这个信息跟
+    // "这一天打完了"绑在一起才会被看见；放在这一页就变成"你得主动翻才
+    // 发现某个军断粮了"。同一批文字两处都有，玩家会以为这两页是同一回事。
+    //
+    // 这里只留一行指路——不重复内容，但不让玩家以为天下太平。
     if (o.alarms.length) {
-      sec("先处理");
-      for (const a of o.alarms) {
-        const card = Dlg.h("div", "mr-alarm " + a.tone, body);
-        Dlg.h("div", "mr-alarm-t", card, a.title);
-        Dlg.h("div", "mr-alarm-x", card, a.text);
-      }
+      const tip = Dlg.h("div", "mr-alarm warn", body);
+      Dlg.h("div", "mr-alarm-t", tip, "另有 " + o.alarms.length + " 件要先处理");
+      Dlg.h(
+        "div",
+        "mr-alarm-x",
+        tip,
+        o.alarms.map((a) => a.title).join("；") + "。详见「要闻」。"
+      );
     }
 
-    // 二、命令卡在哪
+    // 一、命令卡在哪
     sec("命令");
     line("在途电报", enroute ? enroute + " 封还在路上" : "没有", enroute ? "warn" : "");
     line("等回电", awaiting ? awaiting + " 封送到了、将领还没交判断" : "没有", awaiting ? "warn" : "");
     line("待批请示", pendingReports ? pendingReports + " 件" : "没有", pendingReports ? "warn" : "");
 
-    // 三、要救的部队
+    // 二、要救的部队
     if (o.starving.length || o.hungry.length) {
       sec("补给");
       for (const s of o.starving) {
@@ -3437,7 +3680,7 @@ const Morning = (() => {
       }
     }
 
-    // 四、在打的
+    // 三、在打的
     if (o.contested.length) {
       sec("交战");
       for (const c of o.contested) {
@@ -3445,7 +3688,7 @@ const Morning = (() => {
       }
     }
 
-    // 五、在路上的
+    // 四、在路上的
     if (o.marching.length) {
       sec("行军");
       for (const m of o.marching.slice(0, 6)) {
@@ -3458,7 +3701,7 @@ const Morning = (() => {
     }
 
     Dlg.open({
-      title: "晨报 · 第 " + S.tick + " 日", body,
+      title: "态势 · 第 " + S.tick + " 日", body,
       actions: [
         { label: "推进到有事", keep: true, onClick: () => { Dlg.close(); api("/api/advance", {}); } },
         { label: "推进 1 日", primary: true, keep: true, onClick: () => { Dlg.close(); api("/api/tick", { days: 1 }); } },
@@ -3467,22 +3710,18 @@ const Morning = (() => {
     });
   }
 
-  // 只在"今天还没看过 + 确实有要紧事"时拦一下推进。
-  // 每天都拦就成了填表，玩家会开始无脑点关闭——那等于没有。
-  function gate() {
-    if (!S) return true;
-    if (shownDay === S.tick) return true;
-    if (!hasAlarms(collect())) return true;
-    open(false);
-    return false;
-  }
-
-  return { open, gate };
+  // 只暴露"读"：态势是随时能开的一页，不再有"拦"。
+  return { open, alarms: () => collect().alarms };
 })();
 
-// 所有"推进一天"的入口都走这里：晨报该拦就拦
+// 所有"推进一天"的入口都走这里。
+//
+// 这里以前会先查一次告警：有就拦住推进、弹一页给你看。
+// 那是个错误——玩家按下推进，就说明他已经看过局面、准备付这一天了。
+// 在**他已经决定之后**才开始教他做决定，只会让他无脑点关闭。
+// 告警因此搬到推进之后的「要闻」里（这一天打完了，这里有三件事要你看），
+// 推进路径上现在一个弹窗都没有。
 function pushOn(kind, days) {
-  try { if (!Morning.gate()) return; } catch (e) {}
   api(kind === "advance" ? "/api/advance" : "/api/tick", kind === "advance" ? {} : { days });
 }
 
@@ -4044,7 +4283,7 @@ window.addEventListener("resize", () => {
 });
 
 // ── 首页菜单 ──
-bind("btn-morning", "click", () => Morning.open(true));
+bind("btn-sit", "click", () => Situation.open(true));
 bind("btn-home", "click", () => Home.show());
 bind("hm-continue", "click", async () => {
   const saves = await listSaves();

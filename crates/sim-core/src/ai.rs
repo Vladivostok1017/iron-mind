@@ -17,7 +17,7 @@ use std::collections::BinaryHeap;
 
 use crate::fixed::Fixed;
 use crate::rng::{stream, Rng};
-use crate::world::{Commander, Order, Side, Stance, Terrain, UnitKind, World};
+use crate::world::{Commander, Order, Side, Stance, Terrain, UnitKind, World, COMMIT_MAX, COMMIT_MIN};
 
 /// 进入敌方控制省的额外代价。
 ///
@@ -354,8 +354,126 @@ pub fn run_ai(world: &mut World) {
     let seed = world.seed;
     let tick = world.tick;
     for side in [Side::A, Side::B] {
+        // 亲自指挥模式下，玩家那一方**不由 AI 插手**。
+        //
+        // 没下命令的部队就按当前命令待着（默认固守），不会自己去找仗打。
+        // 这是与"委诸将领"最本质的差别：那边每 tick 都有人替你决定，
+        // 这边没有——战线不动就是不动，等你发话。
+        if world.command_mode.is_direct() && world.player_side == Some(side) {
+            continue;
+        }
         decide_side(world, side, seed, tick);
     }
+}
+
+/// 玩家直令：直接给单位下 [`Order`]，**不经过 `interpret`**。
+///
+/// 这是 [`crate::world::CommandMode::Direct`] 的唯一入口。将领在这里不做
+/// 任何决定。他之后只做两件事：
+///
+/// 1. 把 `Unit::committed` 按自己的性格定下来（玩家没显式指定强度时）；
+/// 2. 把战况报上来——可以偏、可以虚，但不再有"我不干"这一项。
+///
+/// 为什么必须先过一遍校验再把命令写进去：命令流是存档与回放的唯一载体，
+/// 一条不可能执行的命令写进流里，回放时会以完全相同的方式失败，
+/// 但玩家在界面上看不到任何反馈。宁可在这里直接报错。
+pub fn issue_order(
+    world: &mut World,
+    unit: usize,
+    order: Order,
+    tempo: Option<Fixed>,
+) -> Result<(), String> {
+    if unit >= world.units.len() {
+        return Err(format!("没有第 {unit} 支部队"));
+    }
+    let (side, pos, kind, name, alive, gone) = {
+        let u = &world.units[unit];
+        (
+            u.side,
+            u.position,
+            u.kind,
+            u.name.clone(),
+            u.is_alive(),
+            u.ended_day.is_some(),
+        )
+    };
+    if !alive || gone {
+        return Err(format!("{name} 已不在编成内"));
+    }
+    if let Some(ps) = world.player_side {
+        if side != ps {
+            return Err(format!("{name} 不归你指挥"));
+        }
+    }
+
+    // ---- 目标校验 ----
+    if let Some(t) = order.place() {
+        if t as usize >= world.provinces.len() {
+            return Err(format!("没有第 {t} 个省"));
+        }
+        let terr = world.provinces[t as usize].terrain;
+        // 炸路/抢修带省号但不是"走过去"，所以只看移动类命令能不能进
+        if order.target().is_some() && !crate::systems::can_enter(kind, terr) {
+            return Err(format!("{name} 进不了{}", world.provinces[t as usize].name));
+        }
+        if matches!(order, Order::Retreat(_)) {
+            if !world.provinces[pos as usize].neighbors.contains(&t) {
+                return Err("撤退只能退到相邻省".into());
+            }
+            if world.provinces[t as usize].owner != side {
+                return Err(format!(
+                    "{} 不在我方手里，退不过去",
+                    world.provinces[t as usize].name
+                ));
+            }
+        }
+    }
+    if let Order::Shift(k) = order {
+        let cnt = world.provinces[pos as usize].node_count();
+        if k >= cnt {
+            return Err(format!(
+                "{} 只有 {cnt} 个阵地",
+                world.provinces[pos as usize].name
+            ));
+        }
+    }
+    // 并编：引擎自己也要守住"只有打残的才拆"。
+    // 内容层与界面层都会各自挡一次，但引擎这一层是最后一道——
+    // 它挡不住的话，回放里会静默什么都不发生。
+    if let Order::Merge(t) = order {
+        let u = &world.units[unit];
+        if u.strength > u.max_strength * crate::systems::MERGE_MAX_RATIO {
+            return Err(format!(
+                "{} 还有 {:.1} 千（满编 {:.1} 千），是支能打的部队，不必并编",
+                u.name,
+                u.strength.to_display_f64(),
+                u.max_strength.to_display_f64()
+            ));
+        }
+        let ti = t as usize;
+        let same_place = world
+            .units
+            .get(ti)
+            .map(|x| x.side == side && x.position == pos && x.is_alive())
+            .unwrap_or(false);
+        if !same_place {
+            return Err("并编对象要同省、同阵营，而且还在编成内".into());
+        }
+    }
+
+    let committed = match tempo {
+        Some(v) => v.clamp(COMMIT_MIN, COMMIT_MAX),
+        None => world.units[unit].default_commit(),
+    };
+    let u = &mut world.units[unit];
+    u.order = order;
+    u.manual = true;
+    // 亲自指挥下不存在抗命：把上一 tick 的残留清干净，
+    // 否则 ×0.85 的战力惩罚会跟着一条新命令继续生效。
+    u.disobeyed = false;
+    u.dissent_reason = None;
+    u.committed = committed;
+    Ok(())
 }
 
 fn decide_side(world: &mut World, side: Side, seed: u64, tick: u32) {

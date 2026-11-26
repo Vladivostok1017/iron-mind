@@ -193,6 +193,9 @@ pub struct Judgement {
 #[derive(Clone)]
 pub struct Ask {
     pub day: u32,
+    /// true = 这一次要的是**战况报告**，不是命令（亲自指挥）。
+    /// 见 [`SYSTEM_SITREP`]。
+    pub sitrep: bool,
     pub general: String,
     pub unit: String,
     pub side: String,
@@ -268,6 +271,85 @@ const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。�
 好战高 = 你愿意用损失换时间与战果；谨慎高 = 你先把退路和阵地算清楚再动手。
 
 只输出一个 JSON 对象，不要代码围栏，不要多余解释。"#;
+
+/// 亲自指挥下的**战况报告**提示词。
+///
+/// 这是"将领换岗"的另一半：他不再决定打不打，他决定**你怎么知道战场**。
+/// 所以这里要的不是请示、不是建议采纳与否，而是一份带立场的目击叙述。
+///
+/// 关键设计：偏差写在提示词里，不写进模拟。上面对敌情的估计是引擎给的真值，
+/// 但要求模型按性格去"报"——谨慎的人报大、好战的人报小。玩家必须学会
+/// 从两份互相矛盾的报告里判断谁在虚报。这是**信息**的多义，不是数据的造假：
+/// 真值一直都在（情报视图），多的是一个人怎么转述它。
+const SYSTEM_SITREP: &str = r#"你是一名正在前线指挥部队的将领，现在要向上面发一份战况报告。
+
+你不是助手，不在回答"用户"的提问。你在报告你自己看到的东西。
+
+【报告什么】
+1. 你在哪、部队什么状态（兵、气、粮），三句话内说完；
+2. 当面是什么敌人、你判断他有多少、他想干什么；
+3. 你打算怎么办——这一条是**你自己的打算**，不是请示。
+
+【必须带上的偏差】
+人对敌情的判断永远带着自己的性格，你要照着你的性格写：
+- 好战的人倾向**低估**当面之敌，语气急，催着打；
+- 谨慎的人倾向**高估**，语气缓，先说要准备什么；
+- 主动性低的人**报得旧**：把前两天的印象当成现在的，或者压根还没派人去摸；
+- 主动性高的人会说清自己私下已经动了什么手脚。
+不许报精确数字。用"约""至少""不下""看着比昨天多"这类说法。
+**你可以判断错**，这是真实的；但你不能编造你没看见的东西。
+
+【不要写的】
+不要写"职部兵力不足，恳请体恤"，不要拿本部损失当作不行动的理由。
+正面战场上敌人强就打硬仗，这不是可以用来讨价还价的东西。
+不要恭维，不要套话，不要自称AI。
+
+只输出你要发的那份电报正文：第一人称、口语、不超过 120 字。
+不要 JSON，不要标题，不要代码围栏。"#;
+
+/// 报告用的人话输入。和 [`build_user`] 的区别：**不给命令、不给选项**。
+///
+/// 给了选项，模型就会去挑选项，报告立刻退化成请示——那是委诸将领那一局的事。
+fn build_sitrep_user(a: &Ask) -> String {
+    let mut s = String::new();
+    if !a.title.is_empty() || !a.persona.is_empty() {
+        s.push_str(&format!("你是谁：{}{}\n", a.title, a.persona));
+    }
+    if !a.agenda.is_empty() {
+        s.push_str(&format!("你在意什么：{}\n", a.agenda));
+    }
+    if !a.memory.is_empty() {
+        s.push_str("你自己近来的事：\n");
+        for m in a.memory.iter().take(4) {
+            s.push_str(&format!("- {m}\n"));
+        }
+    }
+    s.push_str(&format!("\n第 {} 日。\n", a.day));
+    s.push_str(&format!(
+        "你：{}，{}。兵力 {:.1} 千（满编 {:.1}），士气 {:.2}，补给 {:.2}。\n",
+        a.general, a.side, a.strength, a.max_strength, a.morale, a.supply
+    ));
+    s.push_str(&format!(
+        "你在：{}·{}（{}，控制方 {}，阵地工事 {}，展开宽度 {:.0}%）。\n",
+        a.province, a.node, a.terrain, a.owner, a.node_fort, a.width * 100.0
+    ));
+    s.push_str(&format!("你现在受领的命令：{}（来自{}）。\n", a.order_label, a.order_from));
+    if !a.nodes.is_empty() {
+        s.push_str(&format!("本省阵地：{}\n", a.nodes.join(" / ")));
+    }
+    s.push_str("你打听到的邻省情况（**打听来的，未必准**）：\n");
+    for (name, owner, est, terr) in &a.neighbors {
+        s.push_str(&format!(
+            "- {}（{}，{}，你估的敌军约 {:.1} 千）\n",
+            name, owner, terr, est
+        ));
+    }
+    s.push_str(&format!(
+        "\n性格数字（不要复述，体现在语气和判断里）：效忠 {:.2}、主动 {:.2}、好战 {:.2}、谨慎 {:.2}\n",
+        a.obedience, a.initiative, a.aggression, a.caution
+    ));
+    s
+}
 
 fn build_user(a: &Ask) -> String {
     let mut s = String::new();
@@ -477,17 +559,26 @@ pub fn ask(cfg: &Config, a: &Ask) -> Result<Judgement, String> {
     // 不联网时用本地规则判断，而不是报错。
     // 报错等于"将领沉默"——玩家看到的是一封电报发出去、石沉大海。
     if !cfg.uses_model() {
-        return Ok(mock_judgement(a));
+        return Ok(if a.sitrep {
+            mock_sitrep(a)
+        } else {
+            mock_judgement(a)
+        });
     }
 
+    let (sys, user, max_tokens) = if a.sitrep {
+        (SYSTEM_SITREP, build_sitrep_user(a), 400)
+    } else {
+        (SYSTEM, build_user(a), 800)
+    };
     let body = serde_json::json!({
         "model": cfg.model,
         "temperature": 0.9,
         // 给足长度：截断的 JSON 会白白浪费一次调用
-        "max_tokens": 800,
+        "max_tokens": max_tokens,
         "messages": [
-            { "role": "system", "content": SYSTEM },
-            { "role": "user", "content": build_user(a) }
+            { "role": "system", "content": sys },
+            { "role": "user", "content": user }
         ]
     })
     .to_string();
@@ -506,7 +597,60 @@ pub fn ask(cfg: &Config, a: &Ask) -> Result<Judgement, String> {
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .ok_or_else(|| format!("响应里没有 content：{:.160}", text))?;
+    if a.sitrep {
+        // 报告是**散文**，不是 JSON。硬要模型套 JSON 会让它把话写干。
+        let t = content.trim().trim_matches('"').trim().to_string();
+        return Ok(Judgement {
+            order: "hold".into(),
+            target: None,
+            dissent: false,
+            confidence: 1.0,
+            reason: t.clone(),
+            cost: String::new(),
+            reply: t,
+        });
+    }
     parse_judgement(content)
+}
+
+/// 不联网时的战况报告：按性格给敌情估计加偏差。
+///
+/// 这是"情报滤镜"在最朴素形式下的落点：同一个数字，谨慎的人报得大，
+/// 好战的人报得小。它只影响**玩家看到的话**，不影响模拟——报告不进状态哈希。
+fn mock_sitrep(a: &Ask) -> Judgement {
+    // 不写自己的名字：调用方那行已经写成「第25军（王敬久）：」，这里再来一次就重了。
+    let mut t = format!(
+        "我部在{}，兵 {:.1} 千，气 {:.2}，粮 {:.2}。",
+        a.province, a.strength, a.morale, a.supply
+    );
+    let enemy = a.neighbors.iter().find(|n| n.1 == "敌方控制");
+    match enemy {
+        Some((name, _, est, _)) if *est > 0.0 => {
+            let bias = if a.aggression > 0.7 {
+                0.8
+            } else if a.caution > 0.6 {
+                1.25
+            } else {
+                1.0
+            };
+            t.push_str(&format!(
+                "当面{}之敌约 {:.1} 千（职部估的，未必准）。",
+                name,
+                est * bias
+            ));
+        }
+        _ => t.push_str("当面未见大股敌军。"),
+    }
+    t.push_str(&format!("现受令{}。", a.order_label));
+    Judgement {
+        order: "hold".into(),
+        target: None,
+        dissent: false,
+        confidence: 1.0,
+        reason: t.clone(),
+        cost: String::new(),
+        reply: t,
+    }
 }
 
 /// 假模型：不联网，按提示词内容确定性地编一个"像样"的判断。
@@ -658,6 +802,21 @@ pub struct Broker {
     pub asked: Arc<Mutex<HashMap<usize, u32>>>,
     pub calls: Arc<Mutex<u32>>,
     pub errors: Arc<Mutex<Vec<String>>>,
+    /// 战况报告（亲自指挥）。**不进 `ready`**：
+    ///
+    /// `ready` 是按单位索引存的"待落地的命令"，而报告不是命令。
+    /// 混在一个池子里的话，同一支部队的报告会把还没落地的命令顶掉，
+    /// 表现是"回电说照办，部队却不动"——这正是 `telegram_pending` 那条
+    /// 注释在防的同一类 bug。报告是一次性的，用队列就好。
+    pub sitreps: Arc<Mutex<Vec<Sitrep>>>,
+}
+
+/// 一份战况报告：只进战报，不产生任何命令。
+#[derive(Clone)]
+pub struct Sitrep {
+    pub day: u32,
+    pub unit: usize,
+    pub text: String,
 }
 
 pub struct Job {
@@ -667,6 +826,8 @@ pub struct Job {
     /// 这封判断是被哪封电报问出来的（None = 例行问询）。
     /// 带上它，回电才能准确挂到"那封"电报上，而不是挂到最近一封。
     pub telegram: Option<u32>,
+    /// true = 这份回答是**战况报告**，不是命令。见 [`Broker::sitreps`]。
+    pub sitrep: bool,
 }
 
 pub struct Ready {
@@ -684,8 +845,10 @@ impl Broker {
         let asked = Arc::new(Mutex::new(HashMap::new()));
         let calls = Arc::new(Mutex::new(0u32));
         let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sitreps: Arc<Mutex<Vec<Sitrep>>> = Arc::new(Mutex::new(Vec::new()));
 
         let r2 = Arc::clone(&ready);
+        let s0 = Arc::clone(&sitreps);
         let c2 = Arc::clone(&calls);
         let e2 = Arc::clone(&errors);
         // 并发度：同时最多几个问询在飞。
@@ -716,12 +879,28 @@ impl Broker {
                 let r2 = Arc::clone(&r2);
                 let c2 = Arc::clone(&c2);
                 let e2 = Arc::clone(&e2);
+                let s2 = Arc::clone(&s0);
                 std::thread::spawn(move || {
                     // 先把配置拷出来，别握着锁去等网络
                     let cfg = cfg.lock().unwrap().clone();
                     match ask(&cfg, &job.ask) {
                         Ok(j) => {
                             *c2.lock().unwrap() += 1;
+                            // 报告是队列里的东西，不和"待落地的命令"抢位置
+                            if job.sitrep {
+                                let mut q = s2.lock().unwrap();
+                                if q.len() < 16 {
+                                    q.push(Sitrep {
+                                        day: job.day,
+                                        unit: job.unit,
+                                        text: j.reply,
+                                    });
+                                }
+                                let (lock, cv) = &*slot;
+                                *lock.lock().unwrap() -= 1;
+                                cv.notify_one();
+                                return;
+                            }
                             let mut g = r2.lock().unwrap();
                             // 一份已经躺在池子里的**电报判断**不能被例行问询盖掉。
                             //
@@ -754,7 +933,7 @@ impl Broker {
             }
         });
 
-        Self { jobs: tx, ready, asked, calls, errors }
+        Self { jobs: tx, ready, asked, calls, errors, sitreps }
     }
 
     pub fn submit(&self, job: Job) {

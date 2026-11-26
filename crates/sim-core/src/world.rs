@@ -838,6 +838,15 @@ pub enum Order {
     BombRail(u32),
     /// 抢修铁路（预览版）。工兵/就地部队在**当前省**修复一级。
     RepairRail(u32),
+    /// 并编：把本支残部并入同省的友军，番号撤销。
+    ///
+    /// 这是"打残了怎么办"唯一的正面答案。抗战里全连殉国是常态，
+    /// 所以部队默认**不会**因为打不动就自己停手——它一直打到光。
+    /// 唯一的例外就是人做的这个决定：把架子拆了，老兵补进别的师，
+    /// 番号从序列里划掉。历史上这就是"某师残部编入某师"。
+    ///
+    /// 参数是**目标单位下标**（同省、同阵营）。
+    Merge(u32),
 }
 
 impl Order {
@@ -854,6 +863,8 @@ impl Order {
             // 在中间插一个会让所有旧回放的命令流对不上。
             Order::BombRail(p) => (7, *p),
             Order::RepairRail(p) => (8, *p),
+            // 并编：参数是单位下标。同样只能**追加**在末尾。
+            Order::Merge(u) => (9, *u),
         }
     }
 
@@ -865,7 +876,7 @@ impl Order {
         match self {
             Order::Hold | Order::Shift(_) | Order::Fortify | Order::Rest => None,
             Order::Attack(p) | Order::Move(p) | Order::Retreat(p) => Some(*p),
-            Order::BombRail(_) | Order::RepairRail(_) => None,
+            Order::BombRail(_) | Order::RepairRail(_) | Order::Merge(_) => None,
         }
     }
 
@@ -877,15 +888,19 @@ impl Order {
             | Order::Retreat(p)
             | Order::BombRail(p)
             | Order::RepairRail(p) => Some(*p),
-            Order::Hold | Order::Shift(_) | Order::Fortify | Order::Rest => None,
+            Order::Hold | Order::Shift(_) | Order::Fortify | Order::Rest | Order::Merge(_) => None,
         }
     }
 
-    /// 这条命令要不要动身子。筑工事、整补、省内调兵都不动（调兵另算）。
+    /// 这条命令要不要动身子。筑工事、整补、省内调兵、并编都不动。
     pub fn is_stationary(&self) -> bool {
         matches!(
             self,
-            Order::Hold | Order::Fortify | Order::Rest | Order::RepairRail(_)
+            Order::Hold
+                | Order::Fortify
+                | Order::Rest
+                | Order::RepairRail(_)
+                | Order::Merge(_)
         )
     }
 
@@ -900,6 +915,7 @@ impl Order {
             Order::Rest => "整补",
             Order::BombRail(_) => "炸路",
             Order::RepairRail(_) => "抢修",
+            Order::Merge(_) => "并编",
         }
     }
 }
@@ -1060,7 +1076,23 @@ pub struct Unit {
     pub recon_radius: u32,
     /// 空军的轰炸强度（0 表示只侦察）。
     pub strike_power: Fixed,
+    /// 投入率：这支部队**实际摆上阵的兵力比例**（0.4 ~ 1.0）。
+    ///
+    /// 这是"留预备队"在模拟层的唯一落点，也是"将领打折扣"唯一
+    /// 玩家看得见的形式。它同时乘两处：
+    ///
+    /// 1. 战斗时的战力贡献——留四成预备队，火力就只有六成；
+    /// 2. **伤亡**——没摆上去的人不会死。少投不是纯惩罚，是一笔交易：
+    ///    打得慢，但流血少。添油战术在史料里就长这个样子。
+    ///
+    /// 为什么不许降到 0：部队只要接战就必须摆开一部分。
+    /// 允许归零等于允许"派三个连去意思一下"，那是军阀保存实力，
+    /// 不是正面战场。下限见 [`COMMIT_MIN`]。
+    pub committed: Fixed,
     /// 上一 tick 是否发生了抗命/改令，供战报使用。
+    ///
+    /// **直接指挥模式下恒为 false**——那种模式里将领不做决定，
+    /// 只决定投入率（`committed`）和怎么报告。
     pub disobeyed: bool,
     /// 命令来源：玩家亲自下的就是 true，AI 下的是 false。
     /// 没有这一位，AI 每 tick 都会覆盖玩家刚下的命令——玩家等于没在指挥。
@@ -1103,6 +1135,14 @@ pub struct Unit {
     pub arrived: bool,
 }
 
+/// 投入率下限：接战就必须摆开一部分兵力。
+///
+/// 0.4 的含义是"最保守的打法也把四成兵压上去"。留七成预备队不是谨慎，
+/// 是不打——而这里设的是正面战场，不打仗的理由不能来自"我怕损失"。
+pub const COMMIT_MIN: Fixed = Fixed::ratio_const(4, 10);
+/// 投入率上限（全师压上）。
+pub const COMMIT_MAX: Fixed = Fixed::ONE;
+
 impl Unit {
     /// 还在编成内：兵没打光，也没被判定覆灭。
     pub fn in_being(&self) -> bool {
@@ -1132,6 +1172,7 @@ impl Unit {
             stance: Stance::Attack,
             recon_radius: 0,
             strike_power: Fixed::ZERO,
+            committed: Fixed::ONE,
             disobeyed: false,
             dissent_reason: None,
             manual: false,
@@ -1179,9 +1220,64 @@ impl Unit {
         self.arrived && self.strength.raw() > 0
     }
 
-    /// 战斗力 = 兵力 × 士气 × 补给 × 战斗力系数。
+    /// 战斗力 = 兵力 × 士气 × 补给 × 战斗力系数 × 投入率。
+    ///
+    /// 投入率放在这里而不是战斗结算里，是为了让**所有**战力比较
+    /// （AI 选目标、结算、界面估算）看到同一个数：只剩四成摆在阵上的
+    /// 师团，在任何地方都不该被当成满编师团。
     pub fn combat_power(&self) -> Fixed {
-        self.strength * self.morale * self.supply * self.effectiveness
+        self.strength * self.morale * self.supply * self.effectiveness * self.committed
+    }
+
+    /// 设置投入率，钳在 [`COMMIT_MIN`, `COMMIT_MAX`]。
+    pub fn set_commit(&mut self, v: Fixed) {
+        self.committed = v.clamp(COMMIT_MIN, COMMIT_MAX);
+    }
+
+    /// 将领性格推出的默认投入率。
+    ///
+    /// 好战的人压得多，谨慎的人留预备队。**这是"执行风格"，
+    /// 不是"要不要打"**——它只在这支部队已经在进攻时起作用。
+    pub fn default_commit(&self) -> Fixed {
+        // aggression 0.0 → 0.6，1.0 → 1.0
+        (Fixed::ratio(6, 10) + self.commander.aggression * Fixed::ratio(4, 10))
+            .clamp(COMMIT_MIN, COMMIT_MAX)
+    }
+}
+
+/// 谁来下命令。
+///
+/// 这是**尺度问题的开关**，不是难度选项：
+///
+/// - `Delegated`（默认）：玩家发电报，`ai::interpret` 把上级意图结合将领
+///   性格换算成实际执行。这是 1.4.0 及以前的行为，黄金回放跑的就是它。
+/// - `Direct`：玩家直接对单位下 [`Order`]，**不经过 `interpret`**。
+///   将领不再决定打不打、打哪儿——他只决定投入率（`Unit::committed`）
+///   和怎么把战况报上来。
+///
+/// 为什么要有 `Direct`：在战役尺度上，`(动词, 省份)` 本身就已经是一次
+/// 完整的决定，`interpret` 对它只可能做两件事——改掉它（偷走玩家的决定）
+/// 或者描述它（纯文本）。第三种不存在。所以"将领作决策"在这一层已经
+/// 没有诚实的落点，他必须换岗。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CommandMode {
+    /// 委诸将领：意图经将领解释后执行。
+    #[default]
+    Delegated,
+    /// 亲自指挥：玩家直令，将领只影响执行质量与情报。
+    Direct,
+}
+
+impl CommandMode {
+    pub fn code(self) -> u32 {
+        match self {
+            CommandMode::Delegated => 0,
+            CommandMode::Direct => 1,
+        }
+    }
+
+    pub fn is_direct(self) -> bool {
+        matches!(self, CommandMode::Direct)
     }
 }
 
@@ -1210,6 +1306,13 @@ pub struct World {
     pub formations: Vec<Formation>,
     /// 预览版功能开关。全部关闭 = 第一版发行版的定稿行为。
     pub fx: Features,
+    /// 谁来下命令。见 [`CommandMode`]。
+    pub command_mode: CommandMode,
+    /// 玩家指挥的是哪一方。只有 `CommandMode::Direct` 下才起作用：
+    /// 那一方的部队归玩家，另一方仍由规则 AI 驱动。
+    ///
+    /// 引擎不知道"中国/日本"，只知道 A/B——阵营名字全在模块里。
+    pub player_side: Option<Side>,
     /// 有没有"迟到番号"。没有时一切照旧（也不进哈希）。
     pub has_arrivals: bool,
     /// 派系（预览版）。模块不声明就永远是空的，也不进哈希。
@@ -1251,6 +1354,8 @@ impl World {
             in_transit: Vec::new(),
             formations: Vec::new(),
             fx: Features::default(),
+            command_mode: CommandMode::default(),
+            player_side: None,
             has_arrivals: false,
             factions: Vec::new(),
             dismissed: Vec::new(),
@@ -1472,12 +1577,29 @@ impl World {
             // 不进哈希的话两个不同状态会算出同一个哈希，回放校验就形同虚设。
             h.write_u32(u.node as u32);
             h.write_u32(u.manual as u32);
+            // 投入率：**只有真被调过才写**。
+            // 恒为 1.0 的部队一个字节都不写，所以定稿模块、南浔线、
+            // 黄金回放的哈希字节流与 1.4.0 逐位一致——加字段不改写历史。
+            if u.committed != Fixed::ONE {
+                h.write_i32(u.committed.raw());
+            }
             // 编制变动也要进哈希：覆灭日决定"还能不能被问策、能不能整编"，
             // 将领结局决定"这支部队还重建得起来吗"。不同结局必须算出不同哈希。
             h.write_u32(u.ended_day.map(|d| d + 1).unwrap_or(0));
             h.write_u32(u.reform_day.map(|d| d + 1).unwrap_or(0));
             h.write_i32(u.reform_ratio.raw());
             h.write_u32(u.commander.fate.code());
+        }
+
+        // 指挥模式改变整条演化路径，必须进哈希。
+        // 委诸将领（默认）一个字节都不写——旧存档、旧回放的字节流不变。
+        if self.command_mode != CommandMode::Delegated {
+            h.write_u32(self.command_mode.code());
+            h.write_u32(match self.player_side {
+                None => 0,
+                Some(Side::A) => 1,
+                Some(Side::B) => 2,
+            });
         }
 
         // 情报也该进哈希：它会影响 AI 决策，不哈希就抓不到确定性漂移。

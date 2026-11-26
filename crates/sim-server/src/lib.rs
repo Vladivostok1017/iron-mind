@@ -345,8 +345,18 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
         ("GET", "/api/state") => {
             let sides = Sides::of(&state);
             let json = {
-                let w = state.world.lock().unwrap();
-                snapshot(w.as_ref().unwrap(), player(&state), &sides)
+                let mut guard = state.world.lock().unwrap();
+                let w = guard.as_mut().unwrap();
+                // 读状态时顺手把后台回来的战况报告落库。
+                //
+                // 报告只在 tick 边界落的话，会漏掉最常见的那一种用法：
+                // 玩家推几天 → 停下来看 → 这时候模型才刚答完，报告卡在队列里，
+                // 界面上"军情一直不出现"，非得再推一天才冒出来。
+                // 报告只进 `w.log`（不进状态哈希、不参与模拟），所以在读接口
+                // 里落库不会造成任何确定性问题。
+                let day = w.tick;
+                flush_sitreps(&state, w, day);
+                snapshot(w, player(&state), &sides)
             };
             respond(&mut stream, 200, "application/json", &json)
         }
@@ -370,11 +380,15 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     }
                     let day = w.tick;
                     // 只数"要紧的"战报：规则类（山地行军减员）每 tick 每个单位一条，
-                    // 把它也算成"有事发生"，advance 就等于逐日推进了。
+                    // 情报类（将领的战况报告）每天都有。
+                    // 把这两类也算成"有事发生"，advance 就等于逐日推进了。
                     let key_before = w
                         .log
                         .iter()
-                        .filter(|e| e.kind != sim_core::world::EventKind::Rule)
+                        .filter(|e| {
+                            e.kind != sim_core::world::EventKind::Rule
+                                && e.kind != sim_core::world::EventKind::Intel
+                        })
                         .count();
                     let dossiers_before = w
                         .units
@@ -389,17 +403,37 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     for n in deliver_telegrams(&state, w, day) {
                         w.report(sim_core::world::EventKind::Command, n);
                     }
-                    request_due(&state, w);
+                    // 问策只在「委诸将领」里有意义：那边每 tick 都要问一次
+                    // "你听不听"。亲自指挥下没人被问，也就没有答案可收。
+                    if w.command_mode.is_direct() {
+                        // 亲自指挥：没有人被问"听不听"，但有人在报"看见什么"。
+                        request_sitrep(&state, w, day);
+                    } else {
+                        request_due(&state, w);
+                    }
                     // 敌方统帅部：收电报、开会。放在 tick 之前，
                     // 这样他这一天的判断当天就能落到师团长头上。
+                    //
+                    // 亲自指挥下我方统帅部就是玩家本人，那一方不再有 AI 会议。
                     let hq_notes = run_hq(&state, w, day);
                     for (_dissent, text, side) in hq_notes {
                         w.report_for(sim_core::world::EventKind::Command, text, side);
                     }
+                    // 亲自指挥下"我是哪一方"必须跟着实际选边同步：
+                    // 它决定 `run_ai` 不替哪一方做决定。回放靠存档里的 player
+                    // 重建，实时靠这一行，两边必须对得上。
+                    if w.command_mode.is_direct() {
+                        w.player_side = Some(player(&state));
+                    }
                     sim_core::systems::tick(w);
                     // tick 里将领可能抗命。抗命不能就此成为定局——
                     // 把它翻成请示公文，玩家可以驳回并勒令他照原令执行。
-                    collect_dissents(&state, w, w.tick);
+                    //
+                    // 亲自指挥下这一整套不存在：命令是玩家下的，没人有资格
+                    // 顶着不动。将领要表态，也只能在报告里说。
+                    if !w.command_mode.is_direct() {
+                        collect_dissents(&state, w, w.tick);
+                    }
                     for (dissent, text, side) in notes {
                         let kind = if dissent {
                             sim_core::world::EventKind::Dissent
@@ -425,12 +459,16 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     // 有事发生就停：新战报到、番号有增减、战役判出结局。
                     // "没事"的日子（只有山地行军减员那种）继续跳过去。
                     if advance {
-                        let new_reports = w
-                            .log
-                            .iter()
-                            .filter(|e| e.kind != sim_core::world::EventKind::Rule)
-                            .count()
-                            > key_before;
+                        // 情报报告不算"有事"。
+                        //
+                        // 亲自指挥下每天都有将领报战况，把它算进去的话，
+                        // "推进到有事"就退化成"推进 1 日"——按钮就废了。
+                        // 报告是背景音，不是事件。
+                        let is_event = |e: &sim_core::world::Event| {
+                            e.kind != sim_core::world::EventKind::Rule
+                                && e.kind != sim_core::world::EventKind::Intel
+                        };
+                        let new_reports = w.log.iter().filter(|e| is_event(e)).count() > key_before;
                         let oob_changed = w
                             .units
                             .iter()
@@ -457,15 +495,62 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             respond(&mut stream, 200, "application/json", &json)
         }
         ("POST", "/api/order") => {
-            // 玩家不再能直接调兵。指挥只有一个入口：发电报（/api/dispatch）。
-            // 直接改 order 等于绕过指挥链——那是棋子游戏，不是这个。
+            // 这条路通不通，取决于**指挥模式**。
+            //
+            // 委诸将领（默认）：玩家不能直接调兵。唯一入口是发电报，
+            //   由将领决定怎么执行——这是 1.4.0 及以前的规则，黄金回放跑的也是它。
+            // 亲自指挥：直接下令。命令照样落进命令流，所以存档与回放不受影响。
             let sides = Sides::of(&state);
             let json = {
-                let guard = state.world.lock().unwrap();
-                let snap = snapshot(guard.as_ref().unwrap(), player(&state), &sides);
-                format!(
-                    "{{\"error\":\"不能直接调兵。请向将领发电报，由他决定怎么执行\",\"state\":{snap}}}"
-                )
+                let mut guard = state.world.lock().unwrap();
+                let w = guard.as_mut().unwrap();
+                if !w.command_mode.is_direct() {
+                    let snap = snapshot(w, player(&state), &sides);
+                    format!(
+                        "{{\"error\":\"这一局是「委诸将领」：请发电报，由将领决定怎么执行。\
+                         要亲自调兵，先在设置里切到「亲自指挥」\",\"state\":{snap}}}"
+                    )
+                } else {
+                    let day = w.tick;
+                    let parsed = serde_json::from_str::<serde_json::Value>(&body_str).ok();
+                    let unit = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("unit").and_then(|x| x.as_u64()))
+                        .unwrap_or(0) as usize;
+                    let kind = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("kind").and_then(|x| x.as_str()))
+                        .unwrap_or("hold")
+                        .to_string();
+                    let target = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("target").and_then(|x| x.as_u64()))
+                        .map(|x| x as u32);
+                    let commit = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("commit").and_then(|x| x.as_u64()))
+                        .map(|x| x.min(100) as u32);
+                    let result = apply_order(w, &body_str);
+                    state.commands.lock().unwrap().push(CmdRecord {
+                        day,
+                        unit,
+                        kind,
+                        target,
+                        commit,
+                        reject: result.clone(),
+                        source: "player".into(),
+                        reason: String::new(),
+                    });
+                    match &result {
+                        Some(err) => trace(format!("   指令被拒：{err}")),
+                        None => trace("   指令已写入".to_string()),
+                    }
+                    let mut v = snapshot(w, player(&state), &sides);
+                    if let Some(err) = result {
+                        v = format!("{{\"error\":\"{err}\",\"state\":{v}}}");
+                    }
+                    v
+                }
             };
             respond(&mut stream, 200, "application/json", &json)
         }
@@ -490,6 +575,10 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     .as_ref()
                     .and_then(|v| v.get("target").and_then(|x| x.as_u64()))
                     .map(|x| x as u32);
+                let commit = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("commit").and_then(|x| x.as_u64()))
+                    .map(|x| x.min(100) as u32);
 
                 let result = apply_order(w, &body_str);
                 state.commands.lock().unwrap().push(CmdRecord {
@@ -497,6 +586,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                     unit,
                     kind,
                     target,
+                    commit,
                     reject: result.clone(),
                     source: "player".into(),
                     reason: String::new(),
@@ -542,6 +632,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                         unit,
                         kind: "relieve".into(),
                         target: None,
+                        commit: None,
                         reject: None,
                         source: "player".into(),
                         reason: String::new(),
@@ -568,9 +659,12 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
         ("POST", "/api/replay") => {
             use serde_json::json;
             let v: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!({}));
-            let live_day = {
+            let (live_day, live_mode, live_pside) = {
                 let g = state.world.lock().unwrap();
-                g.as_ref().map(|w| w.tick).unwrap_or(0)
+                match g.as_ref() {
+                    Some(w) => (w.tick, w.command_mode, w.player_side),
+                    None => (0, sim_core::world::CommandMode::Delegated, None),
+                }
             };
             let day = v
                 .get("day")
@@ -580,7 +674,7 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let cmds = state.commands.lock().unwrap().clone();
             let module = state.module.lock().unwrap().clone();
             let sides = Sides::from_meta(&module.meta);
-            let w = rebuild(&module, &cmds, day);
+            let w = rebuild(&module, &cmds, day, live_mode, live_pside);
             // 回放里的"今天发生了什么"：只给这一天的战报，否则右栏会被整局刷屏。
             let events: Vec<serde_json::Value> = w
                 .log
@@ -608,13 +702,20 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             respond(&mut stream, 200, "application/json", &body)
         }
         ("GET", "/api/replay-check") => {
-            let (live_hash, live_tick) = {
+            let (live_hash, live_tick, live_mode, live_pside) = {
                 let g = state.world.lock().unwrap();
                 let w = g.as_ref().unwrap();
-                (w.state_hash(), w.tick)
+                (w.state_hash(), w.tick, w.command_mode, w.player_side)
             };
             let cmds = state.commands.lock().unwrap().clone();
-            let json = replay_check(&state.module.lock().unwrap(), live_hash, live_tick, &cmds);
+            let json = replay_check(
+                &state.module.lock().unwrap(),
+                live_hash,
+                live_tick,
+                &cmds,
+                live_mode,
+                live_pside,
+            );
             respond(&mut stream, 200, "application/json", &json)
         }
         // 模块列表：`content/scenarios/*.imod`，读每个的 module.json 取名字。
@@ -697,8 +798,65 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             let snap = snapshot(state.world.lock().unwrap().as_ref().unwrap(), want, &sides);
             respond(&mut stream, 200, "application/json", &snap)
         }
-        ("GET", "/api/modules") => {
-            use serde_json::json;
+        // 指挥模式：亲自指挥 / 委诸将领。
+        //
+        // 这是**结构性的选择**，不是难度档：它决定命令从哪条路走。
+        // 切换本身要记进命令流，理由见 `apply_record` 里的 `mode` 分支。
+        ("POST", "/api/command_mode") => {
+            let want = serde_json::from_str::<serde_json::Value>(&body_str)
+                .ok()
+                .and_then(|v| v.get("mode").and_then(|x| x.as_str()).map(String::from))
+                .unwrap_or_else(|| "delegated".into());
+            let sides = Sides::of(&state);
+            let pside = player(&state);
+            let mode = parse_mode(Some(want.as_str()));
+            let snapshot_json = {
+                let mut guard = state.world.lock().unwrap();
+                match guard.as_mut() {
+                    None => None,
+                    Some(w) => {
+                        let day = w.tick;
+                        w.command_mode = mode;
+                        if mode.is_direct() {
+                            w.player_side = Some(pside);
+                            // 切过来时把"听不听令"的残留清干净：这一边已经
+                            // 没有人被问过，留着 `disobeyed` 就是白扣 15% 战力。
+                            for u in w.units.iter_mut() {
+                                u.disobeyed = false;
+                                u.dissent_reason = None;
+                            }
+                        }
+                        Some((snapshot(w, pside, &sides), day))
+                    }
+                }
+            };
+            let json = match snapshot_json {
+                None => "{\"error\":\"还没有开局\"}".to_string(),
+                Some((snap, day)) => {
+                    state.commands.lock().unwrap().push(CmdRecord {
+                        day,
+                        unit: 0,
+                        kind: "mode".into(),
+                        target: Some(if mode.is_direct() { 1 } else { 0 }),
+                        commit: None,
+                        reject: None,
+                        source: "player".into(),
+                        reason: String::new(),
+                    });
+                    trace(format!(
+                        "   指挥模式 → {}",
+                        if mode.is_direct() {
+                            "亲自指挥"
+                        } else {
+                            "委诸将领"
+                        }
+                    ));
+                    format!("{{\"mode\":\"{}\",\"state\":{snap}}}", mode_str(mode))
+                }
+            };
+            respond(&mut stream, 200, "application/json", &json)
+        }
+        ("GET", "/api/modules") => {            use serde_json::json;
             // 路径比较要抹平分隔符：命令行给的是 `/`，read_dir 在 Windows 上给的是 `\`
             let cur_path = state.module_path.lock().unwrap().clone();
             let cur = cur_path.replace('\\', "/");
@@ -1530,7 +1688,15 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
             };
             // 哈希：重放一遍看看还是不是当时那一局
             let hash_matched = {
-                let w = rebuild(&module, &sv.commands, sv.day);
+                let w = rebuild(
+                    &module,
+                    &sv.commands,
+                    sv.day,
+                    parse_mode(sv.command_mode.as_deref()),
+                    sv.player
+                        .as_deref()
+                        .and_then(|p| Sides::from_meta(&module.meta).by_id(p)),
+                );
                 w.state_hash() == u64::from_str_radix(sv.state_hash.trim(), 16).unwrap_or(0)
             };
             // 槽位：给了就用，没给按时间戳起一个（不覆盖任何既有存档）
@@ -1673,7 +1839,21 @@ fn handle(mut stream: TcpStream, state: &Arc<ServerState>) -> std::io::Result<()
                             }
                         }
                     }
-                    let world = rebuild(&state.module.lock().unwrap(), &sv.commands, sv.day);
+                    // 先锁一次模块：`rebuild` 也要借它，同一把锁不能嵌套拿。
+                    let world = {
+                        let m = state.module.lock().unwrap();
+                        let pside = sv
+                            .player
+                            .as_deref()
+                            .and_then(|p| Sides::from_meta(&m.meta).by_id(p));
+                        rebuild(
+                            &m,
+                            &sv.commands,
+                            sv.day,
+                            parse_mode(sv.command_mode.as_deref()),
+                            pside,
+                        )
+                    };
                     let hash = world.state_hash();
                     let expect = u64::from_str_radix(sv.state_hash.trim(), 16).unwrap_or(0);
                     let matched = hash == expect;
@@ -1747,14 +1927,24 @@ fn apply_order(w: &mut World, body: &str) -> Option<String> {
     let unit_idx = v.get("unit").and_then(|x| x.as_u64())? as usize;
     let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("hold");
     let target = v.get("target").and_then(|x| x.as_u64()).map(|x| x as u32);
-    apply_typed(w, unit_idx, kind, target)
+    let commit = v
+        .get("commit")
+        .and_then(|x| x.as_u64())
+        .map(|x| x.min(100) as u32);
+    apply_typed(w, unit_idx, kind, target, commit)
 }
 
 /// 真正执行一条命令。**回放用的也是这个函数**，所以校验与副作用必须全在这里。
 ///
 /// 这就是 OpenRA `ResolveOrder` 的角色：命令是数据，执行是纯函数式的
 /// `(world, command) -> Option<拒绝原因>`，回放时喂同一串命令就能重建世界。
-fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) -> Option<String> {
+fn apply_typed(
+    w: &mut World,
+    unit_idx: usize,
+    kind: &str,
+    target: Option<u32>,
+    commit: Option<u32>,
+) -> Option<String> {
     let u = w.units.get(unit_idx)?;
     if !u.is_alive() {
         return Some("该单位已不存在".into());
@@ -1809,6 +1999,34 @@ fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) 
             }
             (kind, Some(t))
         }
+        ("merge", Some(t)) => {
+            // 并编：`target` 这里是**友军单位下标**，不是省份。
+            let ti = t as usize;
+            if ti >= w.units.len() {
+                return Some("并编目标不存在".into());
+            }
+            if ti == unit_idx {
+                return Some("不能并给自己".into());
+            }
+            let tgt = &w.units[ti];
+            if tgt.side != side || tgt.position != from {
+                return Some(format!(
+                    "并编对象要同省同阵营：{} 在{}",
+                    tgt.name, w.provinces[tgt.position as usize].name
+                ));
+            }
+            // 只有打残的才拆。这条和 systems 里的 MERGE_MAX_RATIO 同一口径；
+            // 在这里先挡一次，是为了让玩家立刻看到原因，而不是点了没反应。
+            if u.strength > u.max_strength * sim_core::fixed::Fixed::ratio(5, 10) {
+                return Some(format!(
+                    "{}还有 {:.1} 千（满编 {:.1} 千），是支能打的部队，不必并编",
+                    u.name,
+                    u.strength.to_display_f64(),
+                    u.max_strength.to_display_f64()
+                ));
+            }
+            (kind, Some(t))
+        }
         ("attack" | "move" | "retreat", Some(t)) => {
             if t as usize >= w.provinces.len() {
                 return Some("目标省份不存在".into());
@@ -1857,11 +2075,13 @@ fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) 
     };
 
     let final_kind = kind;
+    // 指挥模式要在借 units 之前读出来：直接把将领的性格折成投入率
+    // **只在亲自指挥下发生**。委诸将领那一局维持 1.0，行为与 1.4.0 逐位相同。
+    let direct = w.command_mode.is_direct();
     let u = w.units.get_mut(unit_idx)?;
     // 只有 "auto" 交还控制权，其余都算玩家亲自下的命令。
     u.manual = final_kind != "auto";
-    u.order = match (final_kind, target) {
-        ("attack", Some(t)) => Order::Attack(t),
+    u.order = match (final_kind, target) {        ("attack", Some(t)) => Order::Attack(t),
         ("move", Some(t)) => Order::Move(t),
         ("retreat", Some(t)) => Order::Retreat(t),
         ("shift", Some(n)) => Order::Shift(n as u8),
@@ -1869,8 +2089,19 @@ fn apply_typed(w: &mut World, unit_idx: usize, kind: &str, target: Option<u32>) 
         ("rest", _) => Order::Rest,
         ("bomb_rail", Some(t)) => Order::BombRail(t),
         ("repair_rail", Some(t)) => Order::RepairRail(t),
+        ("merge", Some(t)) => Order::Merge(t),
         _ => Order::Hold,
     };
+    // 投入率：玩家点的那一档（40/60/80/100）。没点就按将领性格来。
+    //
+    // 这是"亲自指挥"下将领唯一还在起作用的地方——他决定摆多少兵上去，
+    // 而且这个数字在界面和报告里都看得见。不再有一刀看不见的 −15%。
+    if let Some(p) = commit {
+        u.committed = sim_core::fixed::Fixed::ratio(p.min(100) as i32, 100)
+            .clamp(sim_core::world::COMMIT_MIN, sim_core::world::COMMIT_MAX);
+    } else if direct {
+        u.committed = u.default_commit();
+    }
     None
 }
 
@@ -1889,6 +2120,11 @@ struct CmdRecord {
     /// 将领的解释（llm 命令才有）
     #[serde(default)]
     reason: String,
+    /// 投入率（百分比，40–100）。`None` = 按将领性格取默认。
+    ///
+    /// 必须进命令流：它直接改变战力与伤亡，漏记就会让回放算出另一个世界。
+    #[serde(default)]
+    commit: Option<u32>,
 }
 
 /// 按"命令记录"重放一条命令。**实时与回放共用这一段**。
@@ -1904,17 +2140,32 @@ struct CmdRecord {
 fn apply_record(w: &mut World, c: &CmdRecord) -> bool {
     // 预览版人事：撤换不是"命令"，但它同样改变状态，所以必须走命令流，
     // 否则回放算出来的世界和实时世界对不上（回放校验会当场抓住）。
+    // 指挥模式：亲自指挥 / 委诸将领。
+    //
+    // 这是一局的**结构性选择**，不是难度档：它决定命令从哪条路走。
+    // 所以切换必须记进命令流——否则"前 20 天委诸将领、之后亲自指挥"的
+    // 存档重放时会从第一天就按最终模式跑，回放校验当场对不上。
+    if c.kind == "mode" {
+        w.command_mode = match c.target {
+            Some(1) => sim_core::world::CommandMode::Direct,
+            _ => sim_core::world::CommandMode::Delegated,
+        };
+        return true;
+    }
     if c.kind == "relieve" {
         let _ = sim_core::politics::relieve(w, c.unit);
         return true;
     }
-    if apply_typed(w, c.unit, &c.kind, c.target).is_some() {
+    if apply_typed(w, c.unit, &c.kind, c.target, c.commit).is_some() {
         return false; // 被拒的命令不产生状态变化
     }
     if c.source == "llm" {
+        let direct = w.command_mode.is_direct();
         if let Some(u) = w.units.get_mut(c.unit) {
             u.manual = true; // 将领自己拿的主意，本 tick 规则 AI 不许覆盖
-            if !c.reason.is_empty() {
+            // 亲自指挥下不存在"抗命"这一说：命令是玩家下的，将领的意见只
+            // 该出现在报告里。给他记 `disobeyed` 就是白扣 15% 战力。
+            if !c.reason.is_empty() && !direct {
                 u.disobeyed = true;
                 u.dissent_reason = Some(c.reason.clone());
                 u.dissent_count += 1;
@@ -1928,8 +2179,18 @@ fn apply_record(w: &mut World, c: &CmdRecord) -> bool {
 ///
 /// 这是整套架构的地基：世界 = `(模块, 种子, 命令流)` 的确定性函数。
 /// 只要这条成立，存档就只是把命令流写下来，回放就是再跑一遍。
-fn rebuild(module: &sim_content::LoadedModule, cmds: &[CmdRecord], until_day: u32) -> World {
+fn rebuild(
+    module: &sim_content::LoadedModule,
+    cmds: &[CmdRecord],
+    until_day: u32,
+    mode: sim_core::world::CommandMode,
+    player: Option<Side>,
+) -> World {
     let mut w = build_world(module);
+    // 指挥模式必须在第一次 tick 之前就位：它决定 `run_ai` 会不会替玩家
+    // 那一方做决定。晚一步设置，回放算出来的世界就和实时世界分叉了。
+    w.command_mode = mode;
+    w.player_side = player;
     sim_core::intel::run_intel(&mut w);
     for day in 0..=until_day {
         for c in cmds.iter().filter(|c| c.day == day && c.reject.is_none()) {
@@ -1952,9 +2213,11 @@ fn replay_check(
     live_hash: u64,
     live_tick: u32,
     cmds: &[CmdRecord],
+    mode: sim_core::world::CommandMode,
+    player: Option<Side>,
 ) -> String {
     use serde_json::json;
-    let fresh = rebuild(module, cmds, live_tick);
+    let fresh = rebuild(module, cmds, live_tick, mode, player);
     let applied = cmds.iter().filter(|c| c.day <= live_tick && c.reject.is_none()).count();
     let fh = fresh.state_hash();
     json!({
@@ -1981,6 +2244,26 @@ struct SaveFile {
     /// 玩家扮演哪一方（1.1）。老存档没有这一段 → 用模块默认方，行为不变。
     #[serde(default)]
     player: Option<String>,
+    /// 指挥模式（1.5）：`"direct"` / `"delegated"`。
+    /// 老存档没有这一段 → 委诸将领，行为与 1.4.0 完全一致。
+    #[serde(default)]
+    command_mode: Option<String>,
+}
+
+/// 存档里的模式字符串 → 枚举。认不出来的一律当"委诸将领"。
+fn parse_mode(s: Option<&str>) -> sim_core::world::CommandMode {
+    match s {
+        Some("direct") => sim_core::world::CommandMode::Direct,
+        _ => sim_core::world::CommandMode::Delegated,
+    }
+}
+
+fn mode_str(m: sim_core::world::CommandMode) -> &'static str {
+    if m.is_direct() {
+        "direct"
+    } else {
+        "delegated"
+    }
 }
 
 /// 模块版本比较：只认数字段（`0.3.0` / `1.1` / `2`），非数字段当 0。
@@ -2331,6 +2614,7 @@ fn write_save(
         v: SAVE_FORMAT_VERSION,
         module_id: mid,
         module_version: mver,
+        command_mode: Some(mode_str(w.command_mode).to_string()),
         seed: w.seed,
         day: w.tick,
         state_hash: format!("{:016x}", w.state_hash()),
@@ -2456,6 +2740,7 @@ fn order_to_cmd(o: &Order) -> (&'static str, Option<u32>) {
         Order::Rest => ("rest", None),
         Order::BombRail(t) => ("bomb_rail", Some(*t)),
         Order::RepairRail(t) => ("repair_rail", Some(*t)),
+        Order::Merge(_) => ("merge", None),
         Order::Hold => ("hold", None),
     }
 }
@@ -2472,6 +2757,7 @@ fn kind_cn(k: &str) -> &'static str {
         "hold" => "固守",
         "bomb_rail" => "炸路",
         "repair_rail" => "抢修",
+        "merge" => "并编",
         _ => "执行",
     }
 }
@@ -2623,6 +2909,7 @@ fn expire_requests(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<Str
             unit,
             kind: kind.clone(),
             target,
+            commit: None,
             reject: None,
             source: "llm".into(),
             reason: "上意未回，本官自决".into(),
@@ -2757,7 +3044,13 @@ fn deliver_telegrams(state: &Arc<ServerState>, w: &World, day: u32) -> Vec<Strin
             // 再挡掉就等于这个机制永远只能靠模组作者手改数据来触发。
             let ground_only = !w.fx.rail_damage;
             if let Some(ask) = build_ask_kind(state, w, *idx, &text, ground_only) {
-                state.brain.submit(llm::Job { unit: *idx, day, ask, telegram: Some(id) });
+                state.brain.submit(llm::Job {
+                    unit: *idx,
+                    day,
+                    ask,
+                    telegram: Some(id),
+                    sitrep: false,
+                });
             }
         }
         {
@@ -2999,6 +3292,7 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
     }
     Some(llm::Ask {
         day: w.tick,
+        sitrep: false,
         general: u.commander.name.clone(),
         unit: u.name.clone(),
         side: side_name(state, u.side),
@@ -3061,7 +3355,47 @@ fn node_by_name(w: &World, prov: u32, name: &str) -> Option<u8> {
 /// 规则：
 /// - 判断与现有命令**一致**（`dissent=false`）→ 不改命令，只记一条战报（他表了态）。
 /// - 判断不同 → 覆盖命令，记一条抗命战报。**这就是"将领向你上报"的落点。**
+/// 把后台回来的战况报告落进战报。
+///
+/// 为什么单独抽出来：它**不该只挂在 tick 边界**上。模型一次要几秒，
+/// 最常见的用法恰恰是"推几天 → 停下来看"——这时候报告刚回来，卡在队列里，
+/// 界面上的军情一直不出现，非得再推一天才冒出来。
+///
+/// 这么做是安全的：报告只进 `w.log`，而 `log` 不进状态哈希、不参与模拟。
+/// 所以"什么时候落库"不影响这一局的确定性，只影响玩家什么时候看到。
+fn flush_sitreps(state: &Arc<ServerState>, w: &mut World, day: u32) {
+    let reports: Vec<llm::Sitrep> = {
+        let mut q = state.brain.sitreps.lock().unwrap();
+        std::mem::take(&mut *q)
+    };
+    for r in reports {
+        // 太旧的丢掉：三天前的敌情报上来只会误导
+        if r.day > day || day.saturating_sub(r.day) > 3 {
+            continue;
+        }
+        let Some(u) = w.units.get(r.unit) else {
+            continue;
+        };
+        if !u.is_alive() {
+            continue;
+        }
+        let text = r.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let line = format!("{}（{}）：{}", u.name, u.commander.name, text);
+        let side = u.side;
+        w.report_for(sim_core::world::EventKind::Intel, line, side);
+    }
+}
+
 fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, String, Side)> {
+    // 先收战况报告：它们只进战报，不碰命令。
+    //
+    // 放在最前面是有原因的：报告是"你怎么知道战场"，命令是"战场怎么变"。
+    // 顺序反了，玩家会先看到结果再看到解释。
+    flush_sitreps(state, w, day);
+
     let taken: Vec<(usize, llm::Ready)> = {
         let mut ready = state.brain.ready.lock().unwrap();
         // 允许"迟到"：模型要几秒，判断几乎总在当日 tick 之后才回来。
@@ -3196,6 +3530,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
             unit: idx,
             kind: kind.to_string(),
             target,
+            commit: None,
             reject: None,
             source: "llm".into(),
             reason: j.reason.clone(),
@@ -3268,7 +3603,7 @@ fn drain_ready(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, 
 
         // 日方：直接执行，并记一条抗命通报
         let mut trial = w.clone();
-        if apply_typed(&mut trial, idx, kind, target).is_some() {
+        if apply_typed(&mut trial, idx, kind, target, None).is_some() {
             let tgt = j.target.clone().unwrap_or_else(|| "无".into());
             notes.push((
                 false,
@@ -3332,6 +3667,8 @@ fn answer_report(state: &Arc<ServerState>, w: &mut World, id: u32, approve: bool
             unit,
             kind: ik.clone(),
             target: it,
+            // 勒令"照原令执行"就是全师压上：不许再留预备队。
+            commit: Some(100),
             reject: None,
             source: "player".into(),
             reason: "上峰不准，勒令照原令执行".into(),
@@ -3425,6 +3762,8 @@ fn answer_report(state: &Arc<ServerState>, w: &mut World, id: u32, approve: bool
         unit,
         kind: kind.clone(),
         target: tgt,
+        // 玩家核准的改令 = 按核准的方案打，用将领自己的默认投入率。
+        commit: None,
         reject: None,
         source: "llm".into(),
         reason: "经上峰核准".into(),
@@ -3483,10 +3822,81 @@ fn request_due(state: &Arc<ServerState>, w: &World) {
             break;
         }
         if let Some(ask) = build_ask(state, w, idx, "") {
-            state.brain.submit(llm::Job { unit: idx, day, ask, telegram: None });
+            state.brain.submit(llm::Job {
+                unit: idx,
+                day,
+                ask,
+                telegram: None,
+                sitrep: false,
+            });
             trace(format!("   问询 unit#{idx}（第{day}日）"));
             budget -= 1;
         }
+    }
+}
+
+/// 亲自指挥：向**在接触中**的部队要一份战况报告。
+///
+/// 为什么不复用 `request_due`：那一边问的是"你听不听命"，回答会被翻译成命令。
+/// 这一边问的是"你看见什么"，回答只进战报。两件事混在一个通道里，
+/// 迟早会出现"报告被当成命令执行"这种事。
+///
+/// 三个克制的理由：
+/// 1. 一天最多三份——报告是给人读的，多了就是刷屏；
+/// 2. 只问**脚下或邻省有敌人**的部队——没人的地方没什么可报的；
+/// 3. 同一支部队隔天才问一次——省调用，也符合"电报是稀罕物"。
+fn request_sitrep(state: &Arc<ServerState>, w: &World, day: u32) {
+    let me = player(state);
+    const MAX_PER_DAY: usize = 3;
+    let contact = |idx: usize| -> bool {
+        let pos = w.units[idx].position;
+        let near = |p: u32| {
+            w.units_in(p).iter().any(|&j| {
+                let x = &w.units[j as usize];
+                x.side != me && x.is_alive() && x.kind.is_ground()
+            })
+        };
+        if near(pos) {
+            return true;
+        }
+        w.provinces
+            .get(pos as usize)
+            .map(|p| p.neighbors.iter().any(|&n| near(n)))
+            .unwrap_or(false)
+    };
+
+    let mut picked = Vec::new();
+    for (i, u) in w.units.iter().enumerate() {
+        if picked.len() >= MAX_PER_DAY {
+            break;
+        }
+        if u.side != me || !u.is_alive() || u.arrived == false {
+            continue;
+        }
+        // 隔天轮转：按单位下标与日期的奇偶配对，确定性，回放不会漂
+        if (i as u32 + day) % 2 != 0 {
+            continue;
+        }
+        if !contact(i) {
+            continue;
+        }
+        picked.push(i);
+    }
+
+    for idx in picked {
+        let Some(mut ask) = build_ask_kind(state, w, idx, "", false) else {
+            continue;
+        };
+        ask.sitrep = true;
+        let name = w.units[idx].name.clone();
+        state.brain.submit(llm::Job {
+            unit: idx,
+            day,
+            ask,
+            telegram: None,
+            sitrep: true,
+        });
+        trace(format!("   情报：向 {name} 要一份战况（第{day}日）"));
     }
 }
 
@@ -3575,6 +3985,12 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
                     "encircled": u.encircled,
                     "order": u.order.label(),
                     "order_code": u.order.code().1,
+                    // 投入率：亲自指挥下将领唯一还在管的数字。
+                    // 摆上去几成兵，界面上必须一眼看得见——否则"他打折扣"
+                    // 就还是那个玩家摸不着的一刀。
+                    "commit": round2(u.committed.to_display_f64()),
+                    "commit_pct": (u.committed.to_display_f64() * 100.0).round() as i64,
+                    "disobeyed": u.disobeyed,
                     "node": u.node,
                     "formation": u.formation,
                     // 编制状态：覆灭日、将领结局、整编日。
@@ -3773,6 +4189,9 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
         },
         "provinces": provinces,
         "edges": edges,
+        // 指挥模式：前端据此决定"点部队"是能下令还是只能查看。
+        "command_mode": mode_str(w.command_mode),
+        "direct": w.command_mode.is_direct(),
         // 战报改成类型化事件：tick + kind + text。
         // 前端按 kind 上色，不再用正则去匹配中文措辞。
         // 只把"客观事实"和"本方内部文件"发给玩家。
@@ -4126,7 +4545,13 @@ fn run_hq(state: &Arc<ServerState>, w: &mut World, day: u32) -> Vec<(bool, Strin
                 };
                 let incoming = format!("{title}：{text}");
                 if let Some(ask) = build_ask(state, w, idx, &incoming) {
-                    state.brain.submit(llm::Job { unit: idx, day, ask, telegram: None });
+                    state.brain.submit(llm::Job {
+                unit: idx,
+                day,
+                ask,
+                telegram: None,
+                sitrep: false,
+            });
                     trace(format!("   司令部 → {to}：{text}"));
                     notes.push((false, format!("敌司令部电令 {}", to), hq_side));
                 }
