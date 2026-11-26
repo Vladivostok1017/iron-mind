@@ -154,7 +154,15 @@ fn post_via_curl(
             &timeout_secs.to_string(),
             "-K",
             &cfg_path.to_string_lossy(),
-            "-d",
+            // **必须用 `--data-binary`，不能用 `-d`**：
+            // `-d`（也就是 --data）会按行读取并**把换行删掉再拼接**。
+            // 我们的请求体是 serde_json 生成的单行 JSON，理应没有换行；
+            // 但只要提示词里混进一个真实的换行（raw string、模型回复、
+            // 从文件读进来的文本都可能带），`-d` 就会把它吞掉，
+            // 于是服务端看到的是"JSON 在 N 列结束、后面还有字符"——
+            // 报错长得像 `trailing characters at line 1 column 5147`，
+            // 而我们的代码看起来一切正常。--data-binary 原样发送。
+            "--data-binary",
             &format!("@{}", body_path.to_string_lossy()),
         ])
         .output()
@@ -164,7 +172,8 @@ fn post_via_curl(
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     if text.trim().is_empty() {
         return Err(format!(
-            "模型无响应（stderr: {}）",
+            "模型无响应（请求 {} 字节；stderr: {}）",
+            body.len(),
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }

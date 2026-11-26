@@ -241,16 +241,31 @@ pub struct Ask {
 
 const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。你不是助手、不是客服，也不在回答"用户"的提问。
 
-这里是兵棋推演的军官席。你的职责是打赢你这一仗，不是让上级满意。
+这里是兵棋推演的军官席。你手上有军令、有一支部队、有一个必须拿下的目标。
 
-【必须主动对抗的偏误】大语言模型在训练中普遍被奖励"顺从提问者"，于是会不自觉地把"照办"当成正确答案，并写出漂亮但空洞的支持性理由。本场景恰恰奖励独立判断。所以：
-1. 先独立判断此刻正确的军事行动，再看上级要你做什么；两者不一致时，说出不一致；
-2. 即使你最终决定照办，也必须先写出至少一个"不照办"的理由；
-3. 如果你照办，必须写出你为此接受的具体代价（兵力、时间、阵地、退路）；
+【命令的分量——最重要的一条】
+上级指名要你打的仗，**你必须打**。这一点没有回旋余地。
+你可以做的事：
+1. 争论：认为这个打法不对，就说清哪里不对、该换成什么打法；
+2. 打折扣：只投入一部分兵力、先取侧翼、分几步投入、边打边看；
+3. 打完再申辩：把你的不同意见写回电里，事后追认也行。
+你**不可以**做的事：以"强攻会折损本部""这是拿我这支部队去填""不替友军填坑"
+"留着实力待机"为理由按兵不动。那些是更高层面的政治算计，不是你这个层级的顾虑——
+你手上压着军令，部队就要动起来。
+唯一可以不动的情形：命令在事实上做不到（目标省不可达、本部已无战斗力）。
+
+【必须主动对抗的偏误】大语言模型在训练中普遍被奖励"顺从提问者"，会写出漂亮但空洞的
+支持性理由；同时它也倾向于扮演"谨慎的专家"，把所有风险都算一遍然后劝人别做。
+本场景两边都要对抗：
+1. 先判断这个打法该怎么打（不是该不该打——该不该打是上级的事）；
+2. 若你的打法与命令不同，说清不同在哪，但你给的动作**必须让部队动起来**；
+3. 照办时写出你为此接受的具体代价（兵力、时间、阵地、退路）；
 4. 不要恭维，不要套话，不要自称AI，不要复述命令原文。
 
 你的性格以数字给出，不要在回答里复述它们，要体现在判断里：
-效忠度低 = 你不把上级命令当铁律；主动性高 = 你倾向自己拍板；好战高 = 你愿意用损失换时间；谨慎高 = 你先保退路。
+效忠度低 = 你会争辩、会打折扣、会找更划算的打法，但你仍然执行；
+主动性高 = 你倾向自己选定攻击方向与投入节奏；
+好战高 = 你愿意用损失换时间与战果；谨慎高 = 你先把退路和阵地算清楚再动手。
 
 只输出一个 JSON 对象，不要代码围栏，不要多余解释。"#;
 
@@ -271,7 +286,8 @@ fn build_user(a: &Ask) -> String {
     }
     if !a.incoming.is_empty() {
         s.push_str(&format!("\n【上级刚发来的电报】\n{}\n", a.incoming));
-        s.push_str("这是命令，但它不是正确答案——先判断，再决定照办到什么程度。\n");
+        s.push_str("这是军令。这个打法对不对可以由你判断，但部队必须按它动起来——\n");
+        s.push_str("除非它在事实上做不到（目标不可达、本部已无战斗力），否则不许按兵不动。\n");
     }
     s.push_str(&format!("\n第 {} 日。\n", a.day));
     s.push_str(&format!(
@@ -672,37 +688,69 @@ impl Broker {
         let r2 = Arc::clone(&ready);
         let c2 = Arc::clone(&calls);
         let e2 = Arc::clone(&errors);
+        // 并发度：同时最多几个问询在飞。
+        //
+        // 以前是**一个线程串行 recv**：一封"全体"电报要问 8 个将领，每个 3–5 秒，
+        // 于是玩家点一次推进要等 30 秒以上，还会觉得"部队不动"（其实在等模型）。
+        // 这些请求彼此独立（各问各的将领），没有理由排队。
+        //
+        // 上限不能开太大：同一家 API 的并发额度有限，打太猛会被限流或直接 429。
+        // 6 是"一封全体电报正好一波走完"和"别把对手的限流打出来"之间的折中。
+        const MAX_INFLIGHT: usize = 6;
+        let inflight = Arc::new((Mutex::new(0usize), std::sync::Condvar::new()));
+        let slot = Arc::clone(&inflight);
+
         std::thread::spawn(move || {
             while let Ok(job) = rx.recv() {
-                // 先把配置拷出来，别握着锁去等网络
-                let cfg = cfg.lock().unwrap().clone();
-                match ask(&cfg, &job.ask) {
-                    Ok(j) => {
-                        *c2.lock().unwrap() += 1;
-                        let mut g = r2.lock().unwrap();
-                        // 一份已经躺在池子里的**电报判断**不能被例行问询盖掉。
-                        //
-                        // ready 是按单位索引存的，而例行问询每 tick 都会问同一批单位。
-                        // 电报问询刚答完、例行问询后脚答完，后者的结果就把前者顶了——
-                        // 表现是"回电说照办，部队却原地不动"，而且完全没有报错。
-                        let telegram_pending = g
-                            .get(&job.unit)
-                            .map(|r| r.telegram.is_some())
-                            .unwrap_or(false);
-                        if !(telegram_pending && job.telegram.is_none()) {
-                            g.insert(
-                                job.unit,
-                                Ready { day: job.day, judgement: j, telegram: job.telegram },
-                            );
-                        }
+                // 等一个空位（满了就在条件变量上睡，不忙等）
+                {
+                    let (lock, cv) = &*slot;
+                    let mut n = lock.lock().unwrap();
+                    while *n >= MAX_INFLIGHT {
+                        n = cv.wait(n).unwrap();
                     }
-                    Err(e) => {
-                        let mut ev = e2.lock().unwrap();
-                        if ev.len() < 20 {
-                            ev.push(format!("第{}日 {}：{e}", job.day, job.ask.unit));
-                        }
-                    }
+                    *n += 1;
                 }
+                let slot = Arc::clone(&slot);
+                let cfg = Arc::clone(&cfg);
+                let r2 = Arc::clone(&r2);
+                let c2 = Arc::clone(&c2);
+                let e2 = Arc::clone(&e2);
+                std::thread::spawn(move || {
+                    // 先把配置拷出来，别握着锁去等网络
+                    let cfg = cfg.lock().unwrap().clone();
+                    match ask(&cfg, &job.ask) {
+                        Ok(j) => {
+                            *c2.lock().unwrap() += 1;
+                            let mut g = r2.lock().unwrap();
+                            // 一份已经躺在池子里的**电报判断**不能被例行问询盖掉。
+                            //
+                            // ready 是按单位索引存的，而例行问询每 tick 都会问同一批单位。
+                            // 电报问询刚答完、例行问询后脚答完，后者的结果就把前者顶了——
+                            // 表现是"回电说照办，部队却原地不动"，而且完全没有报错。
+                            let telegram_pending = g
+                                .get(&job.unit)
+                                .map(|r| r.telegram.is_some())
+                                .unwrap_or(false);
+                            if !(telegram_pending && job.telegram.is_none()) {
+                                g.insert(
+                                    job.unit,
+                                    Ready { day: job.day, judgement: j, telegram: job.telegram },
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            let mut ev = e2.lock().unwrap();
+                            if ev.len() < 20 {
+                                ev.push(format!("第{}日 {}：{e}", job.day, job.ask.unit));
+                            }
+                        }
+                    }
+                    // 还回空位
+                    let (lock, cv) = &*slot;
+                    *lock.lock().unwrap() -= 1;
+                    cv.notify_one();
+                });
             }
         });
 
