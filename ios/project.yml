@@ -20,7 +20,9 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "1.3.0"
+    # 默认值。**真正出包时由 tools/build-ios.sh 用 Cargo.toml 的版本覆盖**，
+    # 免得出现"App 标 1.3.0、内核 1.5.1"这种两个版本号打架的情况。
+    MARKETING_VERSION: "1.5.1"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     # cargo 要往 ../target 写东西，脚本沙箱必须关掉（Xcode 15 默认是开的）

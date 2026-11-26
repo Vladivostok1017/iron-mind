@@ -143,6 +143,7 @@ if [ "$NEEDS_TARGET_MODE" = 1 ]; then
     -target IronMind \
     -configuration "$CONFIG" \
     -sdk "$SDK" \
+    MARKETING_VERSION="$VERSION" \
     OBJROOT="$ROOT/ios/build/obj-$CONFIG" \
     SYMROOT="$ROOT/ios/build/sym-$CONFIG" \
     ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
@@ -156,6 +157,7 @@ else
     -scheme IronMind \
     -configuration "$CONFIG" \
     -sdk "$SDK" \
+    MARKETING_VERSION="$VERSION" \
     -destination "$DEST" \
     -derivedDataPath "$DERIVED" \
     ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
