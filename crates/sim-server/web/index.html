@@ -1205,6 +1205,17 @@ const CAM_MAX = 20;
 // 不在小比例尺上显示：省里挤 5 支部队、标记只有 14px 宽，番号必然糊成一团。
 // 上一次渲染标记时用的缩放值：和当前 cam.z 不一致就要重绘（见 applyCam）
 let markScaleZ = 0;
+
+/// 标记的"长大"系数：放大时标记该变大一点，但**不能线性**（放大 6 倍标记也大 6 倍
+/// 会糊满屏），也不能完全不变（上一版就是完全不变，用户反馈"放大后兵太小"）。
+/// 取 z^0.42 并封顶 2 倍：z=2 时 1.34 倍、z=6 时 2 倍、再放大就一直是 2 倍。
+function markGrow() {
+  return Math.min(2, Math.pow(Math.max(1, cam.z), 0.42));
+}
+/// 世界单位 → "恒定屏幕尺寸"的换算系数（配合 markGrow 的折中）
+function markUnit() {
+  return markGrow() / Math.max(1, cam.z);
+}
 let markRepaint = false;
 
 const CN_DIGIT = { 一:1, 二:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9 };
@@ -2073,7 +2084,7 @@ function renderMap() {
   // 省名/估计/工事要**全局**置顶：每个省是一个独立图层（`g`），
   // 只在层内调顺序挡不住后画的省 —— "东华门"的「东」就是这样被隔壁省的兵牌压掉的。
   // 文字描边宽度按这个系数缩到屏幕恒定（见 CSS 里的 calc(... * var(--u))）
-  svg.style.setProperty("--u", String(1 / Math.max(1, cam.z)));
+  svg.style.setProperty("--u", String(markUnit()));
 
   const allLabels = [];
   for (const p of S.provinces) {
@@ -2118,8 +2129,8 @@ function renderMap() {
           if (!c2 || !c2.n) return;
           const here = (p.units || []).filter((u) => (u.node || 0) === i).length;
           const t = el("text", {
-            x: c2.x, y: c2.y + 6 * (1 / Math.max(1, cam.z)),
-            style: "font-size:" + (8.5 / Math.max(1, cam.z)) + "px",
+            x: c2.x, y: c2.y + 6 * markUnit(),
+            style: "font-size:" + (8.5 * markUnit()) + "px",
             class: "pos-chip" + (here ? " busy" : ""),
           }, posG);
           t.textContent = (i + 1) + " " + pos.name +
@@ -2250,6 +2261,8 @@ function renderMap() {
   // 之前标签是最后建的层（压在兵牌上），放大后省名的黑边会把整个兵牌糊住。
   // 现在先建这一层，标签最后再塞进来 —— DOM 位置不变，仍在部队层下面。
   const labelLayer = el("g", { class: "maplabels", "pointer-events": "none" }, svg);
+  // 行军线也建在部队层之前：线上那个"3日"本来画在最后，放大后压在兵牌上。
+  // DOM 位置决定绘制顺序，后面往里 append 路径仍然可以。
 
   // 名称与标记（画在多边形之上，避免被覆盖）
   for (const p of S.provinces) {
@@ -2279,8 +2292,15 @@ function renderMap() {
     const topLabels = [];
     // 省名的竖向位置随缩放让开：放大后同样的字号占的像素更多，
     // 贴着兵牌就会挤在一起（不是"名字被挡住"，是"挤得看不清"）。
-    const U2 = 1 / Math.max(1, cam.z);
-    const nameY = c[1] + (isWater ? 18 * U2 : 8 * U2);
+    const U2 = markUnit();
+    let nameY = c[1] + (isWater ? 18 * U2 : 8 * U2);
+    // 显示阵地分格时，省名挪到**省的最上沿**：省名在质心的话会正好压在
+    // 落在省心的那块阵地说明上（两块文字打架）。
+    if ((p.positions || []).length > 1 && (nodeProv === p.id || curProv === p.id)) {
+      let top = 1e9;
+      for (const pt of geom.cells[p.id] || []) if (pt[1] < top) top = pt[1];
+      if (top < 1e8) nameY = top + 13 * U2;
+    }
     if (fits) {
       const cls = "name" + (p.mine ? "" : (p.owner_known ? " enemy" : " unknown"));
       const nm = el("text", { x: c[0], y: nameY, style: "font-size:" + (10.5 * U2) + "px", class: cls }, g);
@@ -2309,7 +2329,7 @@ function renderMap() {
     // 很多省在 z=1 时根本没有这么宽）。
     // 标记与文字**不随地图放大**：尺寸除以 cam.z，换算成屏幕像素恒定。
     // 放大后省变大、标记不变，才不会被标记糊住。
-    const U = 1 / Math.max(1, cam.z);
+    const U = markUnit();
     // 番号不再受缩放门槛限制：有些地图的省本来就小，放大到 1.8 倍根本没法看。
     const codes = units.map((u) => unitCode(u.name));
     const pw = codes.map((cd) => (cd ? Math.max(14, 5 + cd.length * 6.4) : 14) * U);
@@ -2340,16 +2360,31 @@ function renderMap() {
     // 同块多支往上排，避免互相压住。
     const cents = posLayout[p.id];
     if (cents && units.length && (nodeProv === p.id || curProv === p.id)) {
-      const used = {};
-      const re = [];
+      // 同一个阵地里挤多支部队时，别再竖着排成一列（放大后会连成一坨）：
+      // 两两并排、多的往上叠，每一行按各自宽度居中。
+      const perLine = 2;
+      const cells = {};
       units.forEach((u, k) => {
         const i = u.node || 0;
         const c2 = cents[i];
         if (!c2 || !c2.n) return;
-        const j = used[i] = (used[i] || 0);
-        used[i] += 1;
-        re.push({ k, ux: c2.x, uy: c2.y - 11 * U - j * 15 * U });
+        (cells[i] = cells[i] || []).push(k);
       });
+      const re = [];
+      for (const i of Object.keys(cells)) {
+        const ks = cells[i];
+        const c2 = cents[i];
+        for (let from = 0; from < ks.length; from += perLine) {
+          const row = ks.slice(from, from + perLine);
+          const w = row.reduce((a, kk) => a + pw[kk], 0) + gap * (row.length - 1);
+          const line = from / perLine;
+          let cur = c2.x - w / 2;
+          for (const kk of row) {
+            re.push({ k: kk, ux: cur + pw[kk] / 2, uy: c2.y - 11 * U - line * 15 * U });
+            cur += pw[kk] + gap;
+          }
+        }
+      }
       if (re.length) { spots.length = 0; spots.push(...re); }
     }
     // 几何从落点反推（交战环要用）
