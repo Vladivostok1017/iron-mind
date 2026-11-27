@@ -400,6 +400,31 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
         }
     }
 
+    // 被敌方舰队封锁的沿岸省集合（一次算好，BFS 里只查表）。
+    // 规则：军舰带着 `Order::Blockade` 停在某片水域 → 这片水域的**我方陆地邻省**
+    // 一律算被封锁。多个舰队就取并集。
+    let mut blockaded_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for u in world.units.iter() {
+        if !u.is_alive() || u.kind != UnitKind::Naval || u.order != Order::Blockade {
+            continue;
+        }
+        // 谁被封：这里封的是**敌方**（相对这支舰队）的沿岸省。
+        let blocked_side = u.side.opponent();
+        let here = &world.provinces[u.position as usize];
+        if here.terrain != Terrain::Water {
+            continue;
+        }
+        for &nb in &here.neighbors {
+            let q = &world.provinces[nb as usize];
+            if q.terrain != Terrain::Water && q.owner == blocked_side {
+                blockaded_set.insert(nb);
+            }
+        }
+    }
+    // 不再二次筛选：BFS 只会走到**本方**拥有的省（`np.owner != side` 就跳过），
+    // 所以集合里其他方的条目根本不会被查到。之前那次筛选写反了方向，
+    // 把本方的省全滤掉，导致封锁永远不生效。
+
     let decay = Fixed::ratio(75, 100);
 
     while let Some(cur) = queue.pop_front() {
@@ -410,6 +435,7 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             if np.owner != side {
                 continue;
             }
+            let cur_water = world.provinces[cur as usize].terrain == Terrain::Water;
             // 补给可以走水道（日军靠长江运补给就是这么来的），
             // 以前这里是直接跳过——于是"日军靠长江补给"这条史实在引擎里不存在。
             // 现在水道通，但损耗比铁路大（见下面的 base）。
@@ -419,10 +445,16 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             // 补给照常流，哪怕敌人一个联队正蹲在公路上。于是穿插、袭击后方、
             // 绕过据点断粮这些事在引擎里根本不存在。
             // 现在按 30% 通行能力折算——截两段就基本断了（0.3×0.3≈0.09）。
-            let interdicted = world.units_in(nb).iter().any(|&i| {
+            let mut interdicted = world.units_in(nb).iter().any(|&i| {
                 let u = &world.units[i as usize];
                 u.is_alive() && u.kind.is_ground() && u.side != side
             });
+            // 封锁：敌方军舰带着「封锁」命令停在这一省旁边的海面上，
+            // 这条**海运**补给线就断了（陆路不受影响 —— 船封不住公路）。
+            // 只对水道方向生效：从水上来、进到被封的沿岸省。
+            if cur_water && !interdicted {
+                interdicted = blockaded_set.contains(&nb);
+            }
             let pass = if interdicted {
                 Fixed::ratio(3, 10)
             } else {
@@ -436,8 +468,18 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             let dmg = np.rail_damage; // 关着 rail_damage 时恒为 0
             let base = if np.rail && dmg < 3 {
                 Fixed::ratio(95, 100) - Fixed::ratio(18, 100) * Fixed::from_int(dmg as i32)
-            } else if np.terrain == Terrain::Water {
-                Fixed::ratio(85, 100)
+            } else if np.terrain == Terrain::Water || cur_water {
+                // 水路：默认 0.85。**如果码头上有我方港口**（出发省或到达省有港），
+                // 就是"在港口装船/卸船"，损耗降到 0.95 —— 港口把海运往前推。
+                // 端口在**任意一端**都算"装卸"：从港口装船，或到港口卸船。
+                // 之前只认"上一段是水路且上一省有港"，于是从陆地港口出发的那一跳被漏掉。
+                let cur_p = &world.provinces[cur as usize];
+                let port_here = (np.port && np.owner == side) || (cur_p.port && cur_p.owner == side);
+                if port_here {
+                    Fixed::ratio(95, 100)
+                } else {
+                    Fixed::ratio(85, 100)
+                }
             } else {
                 decay
             };
@@ -1941,10 +1983,18 @@ fn run_air(world: &mut World, now: u32) {
     // (攻击方, 省, 受击单位, 伤害)
     let mut strikes: Vec<(usize, u32, usize, Fixed)> = Vec::new();
     let mut worn: Vec<usize> = Vec::new();
+    // (空军单位下标, 目标省)：供界面画爆点
+    let mut last_strikes: Vec<(usize, u32)> = Vec::new();
 
     for i in 0..world.units.len() {
         let u = &world.units[i];
         if !u.is_alive() || u.kind != UnitKind::Air || u.strength.is_zero() {
+            continue;
+        }
+        // 「侦察」命令：只出情报（`recon_radius` 在 intel 里每天都会生效），
+        // 不投弹、不损耗。以前没有这条命令，空军只要存在就必然出击，
+        // 玩家想"先看看再打"是做不到的。
+        if u.order == Order::Recon {
             continue;
         }
         if u.strike_power.is_zero() {
@@ -1957,9 +2007,42 @@ fn run_air(world: &mut World, now: u32) {
         // 自动模式以前是"半径内所有敌控省一起炸"，于是一个飞行团能在同一天
         // 同时压制三个省，加起来比一支师还能打。航空兵是要集中使用的：
         // 挑一个最值得炸的地方——最好是正在打的仗——其余放掉。
+        // 机场：飞机不占地面，**它的出发点是机场**。射程从最近的我方机场起算，
+        // 于是"把机场往前推"等于把空军往前推。没有机场的一方缺油缺备件，
+        // 出击效率减半（史实里空军离开基地体系就几乎不能持续出动）。
+        let bases: Vec<u32> = world
+            .provinces
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.airbase && p.owner == u.side)
+            .map(|(i, _)| i as u32)
+            .collect();
+        // 射程取**所有我方机场的并集**，而不是"离飞机最近的那个机场"。
+        // 飞机可以从任何一个机场起飞，指挥官关心的是"够不够得着"，
+        // 不是"哪个基地最近"。没有机场时退回飞机自己所在的位置（旧行为）。
+        let origins: Vec<u32> = if bases.is_empty() {
+            vec![u.position]
+        } else {
+            bases.clone()
+        };
+        // 机场是**内容层声明的能力**：模块里一个机场都没写 → 保持旧行为（不减效）。
+        // 写了机场、但本方一个都没有 → 缺油缺备件，出击效率减半。
+        // 这样老模块的空军不会因为这次改动凭空变弱。
+        let any_airbase = world.provinces.iter().any(|p| p.airbase);
+        let base_eff = if !any_airbase {
+            Fixed::ONE
+        } else if bases.is_empty() {
+            Fixed::ratio(1, 2)
+        } else {
+            Fixed::ONE
+        };
+
         let reach: Vec<u32> = match u.order.target() {
             Some(t) if (t as usize) < world.provinces.len() => vec![t],
-            _ => within_radius(world, u.position, u.recon_radius)
+            _ => origins
+                .iter()
+                .flat_map(|&o| within_radius(world, o, u.recon_radius))
+                .collect::<Vec<u32>>()
                 .into_iter()
                 .filter(|&p| {
                     (p as usize) < world.provinces.len()
@@ -2007,6 +2090,10 @@ fn run_air(world: &mut World, now: u32) {
                 continue;
             }
 
+            // 记下"这一轮炸了哪里"，地图据此在目标省画一个爆点。
+            // 这只是展示用的字段（不进状态哈希），回放不受影响。
+            last_strikes.push((i, p));
+
             let mut total = Fixed::ZERO;
             for &j in &targets {
                 total += world.units[j].strength;
@@ -2031,7 +2118,7 @@ fn run_air(world: &mut World, now: u32) {
                 } else {
                     Fixed::ONE
                 };
-                let dmg = power * share * Fixed::ratio(EFF.0, EFF.1) * supremacy * column;
+                let dmg = power * share * Fixed::ratio(EFF.0, EFF.1) * supremacy * column * base_eff;
                 strikes.push((i, p, j, dmg));
                 hit = true;
             }
@@ -2086,6 +2173,17 @@ fn run_air(world: &mut World, now: u32) {
             crate::world::EventKind::Combat,
             format!("{who} 空袭 {where_}：敌军损失 {:.2} 千", dmg.to_display_f64()),
         );
+    }
+    // 把"这一轮炸了哪里"写回单位，供地图画爆点。**只是展示字段，不进状态哈希**，
+    // 回放靠命令流，不靠它。没出击就清空，免得旧爆点一直挂着。
+    for u in world.units.iter_mut() {
+        if u.kind == UnitKind::Air {
+            u.last_strike = None;
+            u.last_strike_day = now;
+        }
+    }
+    for (i, p) in last_strikes {
+        world.units[i].last_strike = Some(p);
     }
     let _ = now;
 }

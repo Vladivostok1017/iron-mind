@@ -53,6 +53,8 @@ fn prov(id: u32, name: &str, owner: SideDef, nb: &[u32], supply: bool) -> Provin
         supply_source: supply,
         rail: false,
         station: None,
+        airbase: false,
+        port: false,
         fort: 0,
         supply_throughput: 1.0,
         neighbors: nb.to_vec(),

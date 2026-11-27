@@ -111,6 +111,72 @@ fn air_war(enemy_air: Option<f64>) -> World {
 }
 
 #[test]
+fn recon_order_does_not_wear_out_the_air_group() {
+    // 「侦察」命令：只出情报，不投弹、不损耗。以前空军只要存在就必然出击，
+    // 想"先看看再打"是做不到的。
+    let mut w = air_war(None);
+    w.units[0].order = Order::Recon;
+    let before = w.units[0].strength;
+    sim_core::run_ticks(&mut w, 3);
+    assert_eq!(w.units[0].strength, before, "侦察不该损耗飞机");
+    let enemy_hurt = 10.0 - w.units[1].strength.to_display_f64();
+    assert!(enemy_hurt < 0.01, "侦察不该投弹（敌方损失 {enemy_hurt}）");
+}
+
+#[test]
+fn airbase_extends_strike_reach() {
+    // 0 机场(我方) — 1 — 2 — 3 前进机场(我方) — 4 目标(敌方)
+    // 飞行团停在 0、半径 2：从自己位置只够到 2；3 有前进机场时，射程从机场起算
+    // → 能够到 4。判据用 `last_strike`（这一轮炸的是哪个省），
+    // 不去看伤亡 —— 那个会被"断粮/被围"的损耗污染。
+    let build = |forward_base: bool| {
+        let mut provs = Vec::new();
+        for i in 0..5u32 {
+            let mut p = Province::new(&format!("p{i}"), Terrain::Plain, Side::A);
+            if i == 4 {
+                p.owner = Side::B;
+                p.is_supply_source = true;
+            }
+            if i == 0 {
+                p.is_supply_source = true;
+                p.airbase = true;
+            }
+            if i == 3 && forward_base {
+                p.airbase = true;
+            }
+            provs.push(p);
+        }
+        for i in 0..5usize {
+            let mut nb = Vec::new();
+            if i > 0 {
+                nb.push(i as u32 - 1);
+            }
+            if i < 4 {
+                nb.push(i as u32 + 1);
+            }
+            provs[i].neighbors = nb;
+        }
+        let mut air = Unit::new("飞行团", Side::A, 0, 1);
+        air.kind = UnitKind::Air;
+        air.recon_radius = 2;
+        air.strike_power = Fixed::ratio(35, 100);
+        let mut foe = Unit::new("敌守军", Side::B, 4, 10);
+        foe.manual = true;
+        foe.order = Order::Hold;
+        let mut w = World::new(7, provs, vec![air, foe]);
+        w.campaign_days = u32::MAX;
+        w.comms.transmission = 0;
+        w.comms.staff = 0;
+        sim_core::run_ticks(&mut w, 1);
+        w.units[0].last_strike
+    };
+    let near_only = build(false);
+    let with_forward = build(true);
+    assert_ne!(near_only, Some(4), "只有后方机场时不该够到目标省");
+    assert_eq!(with_forward, Some(4), "前进机场应当把射程推到目标省");
+}
+
+#[test]
 fn enemy_air_supremacy_reduces_bombing_effect() {
     let mut free = air_war(None);
     sim_core::run_ticks(&mut free, 1);
@@ -223,6 +289,75 @@ fn station_reloads_supply() {
     assert!(
         with_station > plain * 1.5,
         "车站应当把补给明显推得更远（{plain} → {with_station}）"
+    );
+}
+
+#[test]
+fn port_speeds_sea_supply() {
+    // 0(补给源,陆地) — 1(水道) — 2(陆地, 有部队)
+    // 0 有港口时，从港口"装船"进水道的那一跳损耗从 0.85 降到 0.95。
+    let build = |port: bool| {
+        let mut a = Province::new("港城", Terrain::Plain, Side::A);
+        a.is_supply_source = true;
+        a.neighbors = vec![1];
+        if port {
+            a.port = true;
+        }
+        let mut sea = Province::new("江面", Terrain::Water, Side::A);
+        sea.neighbors = vec![0, 2];
+        let mut c = Province::new("前线", Terrain::Plain, Side::A);
+        c.neighbors = vec![1];
+        let mut u = Unit::new("前线师", Side::A, 2, 8);
+        u.supply_reach = Fixed::ZERO;
+        u.manual = true;
+        u.order = Order::Hold;
+        let mut w = World::new(1, vec![a, sea, c], vec![u]);
+        w.campaign_days = u32::MAX;
+        sim_core::run_ticks(&mut w, 1);
+        w.units[0].supply.to_display_f64()
+    };
+    let plain = build(false);
+    let with_port = build(true);
+    assert!(
+        with_port > plain,
+        "有港口时海运补给应当更足（{plain} → {with_port}）"
+    );
+}
+
+#[test]
+fn blockade_cuts_sea_supply() {
+    // 0(补给源,陆地) — 1(水道) — 2(我方沿岸省, 有部队)
+    // 敌方军舰带着「封锁」命令停在 1：从水上进 2 的那一跳被切断。
+    let build = |enemy_fleet: bool| {
+        let mut a = Province::new("港城", Terrain::Plain, Side::A);
+        a.is_supply_source = true;
+        a.neighbors = vec![1];
+        let mut sea = Province::new("江面", Terrain::Water, Side::A);
+        sea.neighbors = vec![0, 2];
+        let mut c = Province::new("前线", Terrain::Plain, Side::A);
+        c.neighbors = vec![1];
+        let mut u = Unit::new("前线师", Side::A, 2, 8);
+        u.supply_reach = Fixed::ZERO;
+        u.manual = true;
+        u.order = Order::Hold;
+        let mut units = vec![u];
+        if enemy_fleet {
+            let mut fleet = Unit::new("敌舰队", Side::B, 1, 6);
+            fleet.kind = UnitKind::Naval;
+            fleet.manual = true;
+            fleet.order = Order::Blockade;
+            units.push(fleet);
+        }
+        let mut w = World::new(1, vec![a, sea, c], units);
+        w.campaign_days = u32::MAX;
+        sim_core::run_ticks(&mut w, 1);
+        w.units[0].supply.to_display_f64()
+    };
+    let open = build(false);
+    let blockaded = build(true);
+    assert!(
+        blockaded < open * 0.7,
+        "被封锁时海运补给应当明显下降（{open} → {blockaded}）"
     );
 }
 

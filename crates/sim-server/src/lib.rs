@@ -2090,6 +2090,9 @@ fn apply_typed(
         ("bomb_rail", Some(t)) => Order::BombRail(t),
         ("repair_rail", Some(t)) => Order::RepairRail(t),
         ("merge", Some(t)) => Order::Merge(t),
+        // 空军的侦察、海军的封锁：都不需要目标省
+        ("recon", _) => Order::Recon,
+        ("blockade", _) => Order::Blockade,
         _ => Order::Hold,
     };
     // 投入率：玩家点的那一档（40/60/80/100）。没点就按将领性格来。
@@ -2741,6 +2744,8 @@ fn order_to_cmd(o: &Order) -> (&'static str, Option<u32>) {
         Order::BombRail(t) => ("bomb_rail", Some(*t)),
         Order::RepairRail(t) => ("repair_rail", Some(*t)),
         Order::Merge(_) => ("merge", None),
+        Order::Recon => ("recon", None),
+        Order::Blockade => ("blockade", None),
         Order::Hold => ("hold", None),
     }
 }
@@ -2758,6 +2763,8 @@ fn kind_cn(k: &str) -> &'static str {
         "bomb_rail" => "炸路",
         "repair_rail" => "抢修",
         "merge" => "并编",
+        "recon" => "侦察",
+        "blockade" => "封锁",
         _ => "执行",
     }
 }
@@ -4068,6 +4075,9 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
                     // 所在的省：指令栏要用它查"本省有哪几个阵地"。
                     // 部队是嵌在省下面发的，但指令栏拿到的是单个 unit 对象。
                     "position": u.position,
+                    // 空军最近一次空袭的目标省 + 日子（地图画爆点用；只画最近一天）
+                    "last_strike": u.last_strike,
+                    "last_strike_day": u.last_strike_day,
                     "formation": u.formation,
                     // 编制状态：覆灭日、将领结局、整编日。
                     // 前端要能说清"这支部队已经没了 / 主官殉国 / 还有 12 天重建"。
@@ -4117,6 +4127,9 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
             // 铁路：地形视图里要画出来。
             // 车站名：有车站在图上会有一个站点符号，悬停能看到名字。
             "station": p.station,
+            // 机场 / 港口：和自己的站点符号，同时说明这个省是"物资节点"
+            "airbase": p.airbase,
+            "port": p.port,
             // 之前只有引擎知道（`Province.rail` 参与补给计算），界面拿不到，
             // 于是"守住南浔铁路"这条最重要的战略提示在图上完全看不见。
             "rail": p.rail,

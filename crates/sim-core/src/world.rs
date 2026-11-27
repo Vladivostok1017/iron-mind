@@ -536,6 +536,10 @@ pub struct Province {
     /// 铁路断了（省丢了），同一支部队的补给立刻塌。
     /// 以前 supply_throughput 只是一个省上的常数，看不出"干线"这件事。
     pub rail: bool,
+    /// 机场：空军从有此项的省起飞（见 `run_air` 的射程计算）。
+    pub airbase: bool,
+    /// 港口：海运补给在这里装船，从港口进水道的损耗更小（见 `compute_supply`）。
+    pub port: bool,
     /// 车站名（可选）。有车站 = 铁路上的转运点：补给经过它会被"重新装载"，
     /// 于是补给能靠车站一站一站往前推，而不是从补给源一路衰减。
     /// 只在 `rail` 为真、且 `rail_damage < 3` 时起作用（见 `compute_supply`）。
@@ -568,6 +572,8 @@ impl Province {
             owner,
             is_supply_source: false,
             rail: false,
+            airbase: false,
+            port: false,
             station: None,
             rail_damage: 0,
             rail_repair: 0,
@@ -838,6 +844,10 @@ pub enum Order {
     Fortify,
     /// 整补：留在原地恢复补给与士气。
     Rest,
+    /// 侦察：只出情报、不投弹。空军用这个命令时**不损耗**兵力。
+    Recon,
+    /// 封锁：舰队在海面上切断敌方沿岸省的海运补给。
+    Blockade,
     /// 炸铁路（预览版 `Features::rail_damage`）。只有空军执行：
     /// 飞到目标省上空把这条线炸断一级。
     BombRail(u32),
@@ -870,6 +880,8 @@ impl Order {
             Order::RepairRail(p) => (8, *p),
             // 并编：参数是单位下标。同样只能**追加**在末尾。
             Order::Merge(u) => (9, *u),
+            Order::Recon => (10, 0),
+            Order::Blockade => (11, 0),
         }
     }
 
@@ -880,6 +892,7 @@ impl Order {
     pub fn target(&self) -> Option<u32> {
         match self {
             Order::Hold | Order::Shift(_) | Order::Fortify | Order::Rest => None,
+            Order::Recon | Order::Blockade => None,
             Order::Attack(p) | Order::Move(p) | Order::Retreat(p) => Some(*p),
             Order::BombRail(_) | Order::RepairRail(_) | Order::Merge(_) => None,
         }
@@ -893,7 +906,13 @@ impl Order {
             | Order::Retreat(p)
             | Order::BombRail(p)
             | Order::RepairRail(p) => Some(*p),
-            Order::Hold | Order::Shift(_) | Order::Fortify | Order::Rest | Order::Merge(_) => None,
+            Order::Hold
+            | Order::Shift(_)
+            | Order::Fortify
+            | Order::Rest
+            | Order::Merge(_)
+            | Order::Recon
+            | Order::Blockade => None,
         }
     }
 
@@ -906,6 +925,8 @@ impl Order {
                 | Order::Rest
                 | Order::RepairRail(_)
                 | Order::Merge(_)
+                | Order::Recon
+                | Order::Blockade
         )
     }
 
@@ -921,6 +942,8 @@ impl Order {
             Order::BombRail(_) => "炸路",
             Order::RepairRail(_) => "抢修",
             Order::Merge(_) => "并编",
+            Order::Recon => "侦察",
+            Order::Blockade => "封锁",
         }
     }
 }
@@ -1077,6 +1100,10 @@ pub struct Unit {
     pub kind: UnitKind,
     /// 作战姿态。见 [`Stance`]。
     pub stance: Stance,
+    /// 空军最近一次空袭的目标省（**展示用**，不进状态哈希）。
+    pub last_strike: Option<u32>,
+    /// 上面那次空袭发生的日子。界面只画最近一天的爆点。
+    pub last_strike_day: u32,
     /// 空军侦察半径（跳数）。仅 `UnitKind::Air` 有效。
     pub recon_radius: u32,
     /// 空军的轰炸强度（0 表示只侦察）。
@@ -1171,6 +1198,8 @@ impl Unit {
             losses: Fixed::ZERO,
             effectiveness: Fixed::ONE,
             supply_reach: Fixed::ZERO,
+            last_strike: None,
+            last_strike_day: 0,
             order: Order::Hold,
             commander: Commander::default_for(name),
             kind: UnitKind::Infantry,

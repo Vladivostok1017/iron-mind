@@ -323,16 +323,31 @@
      远看就是灰白交替的一条线。以前是一条暖色虚线，看着像"小路"而不是干线。 */
   /* 铁路（照高德/OSM 那种画法）：**深色底轨 + 白色短刻度**。
      之前做成"白底 + 深色枕木"是反的 —— 真实地图上白的是刻度、底是深色。 */
-  .rail .railbed { stroke: #0a0f15; stroke-width: 5.6; stroke-linecap: round; opacity: .55; }
-  .rail .rails { stroke: #2f363f; stroke-width: 3.4; stroke-linecap: butt; }
+  .rail .railbed { stroke: #0a0f15; stroke-width: 6.4; stroke-linecap: round; opacity: .5; }
+  /* 底轨要比白刻度**明显宽**：这样白段是"嵌在暗带里"的刻度，
+     而不是"白虚线"。宽度差不够时，远看就只是一条虚线。 */
+  .rail .rails { stroke: #2f363f; stroke-width: 4.4; stroke-linecap: butt; }
   /* 白色刻度：短实线 + 较长的空，沿线条均匀排开，远看就是"缝合线"那种铁轨 */
-  .rail .sleepers { stroke: #edf1f5; stroke-width: 2.6; stroke-dasharray: 2.6 5.0; stroke-linecap: butt; }
+  .rail .sleepers { stroke: #dde4ec; stroke-width: 2.4; stroke-dasharray: 8 9; stroke-linecap: butt; }
   /* 预览版铁路被炸：坏一段变橙、断了变红并拉开间隔 */
   /* 被炸：线还在，但颜色转橙；炸断（3 级）：轨面转红、枕木断成点，表示这段不通了 */
   .rail .rails.hurt { stroke: #b87333; }
   .rail .sleepers.hurt { stroke: #f6d9a8; }
   .rail .rails.cut { stroke: #8e2f24; }
   .rail .sleepers.cut { stroke: #d0503e; stroke-width: 1.6; stroke-dasharray: 1 8; }
+  /* 机场/港口：带字的方牌。比图案好认，也不用赌字体里有没有那个符号。 */
+  #map .node-badge { stroke-width: 1; }
+  #map .node-badge.air { fill: #16222c; stroke: #7fb2d8; }
+  #map .node-badge.sea { fill: #16222c; stroke: #79b6a8; }
+  #map .node-badge-t { text-anchor: middle; font-weight: 700; pointer-events: none; }
+  #map .node-badge-t.air { fill: #bcdcf5; }
+  #map .node-badge-t.sea { fill: #b7e3d7; }
+  /* 空袭爆点：八条射线 + 实心点 */
+  #map .blast-ray { stroke: #ff7a4d; stroke-width: 1.6; stroke-linecap: round; }
+  #map .blast-core { fill: #ff9a5c; stroke: #2a0f06; stroke-width: 1; }
+  /* 封锁环：圈住被舰队封住的那片水面 */
+  #map .blockade-ring { fill: none; stroke: #d0503e; stroke-width: 1.4;
+    stroke-dasharray: 6 4; opacity: .8; pointer-events: none; }
   /* 车站：地图上的站点符号（双圈） */
   #map .station-ring { fill: #0a0f15; stroke: #eceff3; stroke-width: 1.1; }
   #map .station-core { fill: #eceff3; }
@@ -2533,13 +2548,61 @@ function renderMap() {
   // 画在下面的话，省心（质心）上正好压着部队标记，站点就永远看不见了。
   {
     const stG = el("g", { class: "stations", "pointer-events": "none" }, svg);
+    // 机场 / 港口：物资节点，用带字的方牌表示（比图案更好认，也不用赌字体）
+    const badge = (cx, cy, txt, cls) => {
+      const u = markUnit();
+      el("rect", { x: cx - 5.5 * u, y: cy - 5.5 * u, width: 11 * u, height: 11 * u,
+        rx: 2 * u, class: "node-badge " + cls }, stG);
+      el("text", { x: cx, y: cy + 2.6 * u, style: "font-size:" + (7 * u) + "px",
+        class: "node-badge-t " + cls }, stG).textContent = txt;
+    };
     for (const p of S.provinces) {
+      const cp = geom.centroids[p.id];
+      if (cp) {
+        if (p.airbase) badge(cp[0] - 11 * markUnit(), cp[1] - 9 * markUnit(), "机", "air");
+        if (p.port) badge(cp[0] + 11 * markUnit(), cp[1] - 9 * markUnit(), "港", "sea");
+      }
       if (!p.station) continue;
       const c = geom.centroids[p.id];
       if (!c) continue;
       const u = markUnit();
       el("circle", { cx: c[0], cy: c[1] - 9 * u, r: 3.8 * u, class: "station-ring" }, stG);
       el("circle", { cx: c[0], cy: c[1] - 9 * u, r: 3.8 * u * 0.42, class: "station-core" }, stG);
+    }
+
+    // 空袭爆点：空军最近一天炸过的地方，画一个放射状的爆点
+    for (const p of S.provinces) {
+      const strikes = (p.units || []).filter((x) => x.last_strike === p.id &&
+        (S.tick - (x.last_strike_day || 0)) <= 1);
+      if (!strikes.length) continue;
+      const cp = geom.centroids[p.id];
+      if (!cp) continue;
+      const u = markUnit();
+      const bw = el("g", { class: "blast" }, stG);
+      for (let k = 0; k < 8; k++) {
+        const ang = (Math.PI / 4) * k;
+        el("line", {
+          x1: cp[0] + Math.cos(ang) * 5 * u, y1: cp[1] + Math.sin(ang) * 5 * u,
+          x2: cp[0] + Math.cos(ang) * 10 * u, y2: cp[1] + Math.sin(ang) * 10 * u,
+          class: "blast-ray",
+        }, bw);
+      }
+      el("circle", { cx: cp[0], cy: cp[1], r: 3.4 * u, class: "blast-core" }, bw);
+    }
+
+    // 封锁环：带着「封锁」命令的舰队，把它所在的那片水域圈出来
+    for (const p of S.provinces) {
+      const fleet = (p.units || []).some((x) =>
+        !x.mine && x.kind_code === 3 && x.order === "封锁") ||
+        (p.units || []).some((x) => x.mine && x.kind_code === 3 && x.order === "封锁");
+      if (!fleet) continue;
+      const c2 = geom.centroids[p.id];
+      const poly2 = geom.cells[p.id];
+      if (!c2 || !poly2) continue;
+      let rx = 0;
+      for (const pt of poly2) rx = Math.max(rx, Math.abs(pt[0] - c2[0]));
+      el("circle", { cx: c2[0], cy: c2[1], r: Math.max(14 * markUnit(), rx * 0.7),
+        class: "blockade-ring" }, stG);
     }
   }
 
@@ -3227,6 +3290,8 @@ function showTip(ev, p) {
   }
   rows.push("<div class='t-row'>归属：<b>" + (p.mine ? "我方" : (p.owner_known ? "敌方" : "未知")) + "</b></div>");
   if (p.station) rows.push("<div class='t-row'>车站：<b>" + p.station + "</b>（铁路转运点）</div>");
+  if (p.airbase) rows.push("<div class='t-row'>机场：<b>有</b>（空军从这里起飞，射程按机场算）</div>");
+  if (p.port) rows.push("<div class='t-row'>港口：<b>有</b>（海运装卸点，进水道的损耗更小）</div>");
   if (p.supply_source) rows.push("<div class='t-row'>补给源</div>");
   // 预览版铁路状态：炸了几级、还能不能通车。图上只有颜色深浅，这里给数字。
   if (fxOn("rail_damage") && p.rail) {
@@ -3301,6 +3366,9 @@ let curCommit = null;     // 投入率（百分比）。null = 让将领按性�
 //            （引擎里那个枚举留着：委诸将领模式下 AI 会用它表达"主动后撤"，
 //             而勇将可能抗命死守。玩家界面不需要。）
 // - 并编   = 残部并入同省友军。
+// 空军/海军有自己的命令集：「侦察」只出情报不投弹、「封锁」切断敌方海运补给。
+const VERBS_AIR = [["recon", "侦察", false], ["advance", "出击", true], ["hold", "待命", false]];
+const VERBS_SEA = [["blockade", "封锁", false], ["advance", "推进", true], ["hold", "待命", false]];
 const VERBS = [
   ["hold", "固守", false],   // 落地时按兵种换成 fortify/hold，见 fireVerb
   ["rest", "整补", false],
@@ -3309,9 +3377,12 @@ const VERBS = [
 ];
 const TEMPOS = [[null, "按将领"], [60, "六成"], [80, "八成"], [100, "全压"]];
 
+const VERB_LABEL = {
+  hold: "固守", rest: "整补", advance: "推进", merge: "并编",
+  recon: "侦察", blockade: "封锁", fortify: "筑工事",
+};
 function verbLabel(k) {
-  const v = VERBS.find((x) => x[0] === k);
-  return v ? v[1] : k;
+  return VERB_LABEL[k] || k;
 }
 
 function syncModeBtn() {
@@ -3377,7 +3448,10 @@ function openOrderBar(u) {
   }
   const vb = $("ob-verbs");
   vb.innerHTML = "";
-  for (const [k, label, needTarget] of VERBS) {
+  // 兵种决定能下什么命令：空军只会飞（侦察/出击），海军只会封（封锁/推进）。
+  // 给地面部队发「侦察」、给空军发「筑工事」都是没有意义的按钮。
+  const verbs = u.kind_code === 2 ? VERBS_AIR : u.kind_code === 3 ? VERBS_SEA : VERBS;
+  for (const [k, label, needTarget] of verbs) {
     const b = document.createElement("button");
     b.textContent = label;
     if (pendingVerb === k) b.className = "armed";
