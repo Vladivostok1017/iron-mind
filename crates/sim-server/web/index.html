@@ -149,6 +149,8 @@
   .unit.enemy .plate { fill: #bd5b4e; }
   .unit.sel .plate { stroke: var(--gold); stroke-width: 2.2; }
   .unit .glyph { font-size: 7px; fill: #0a0e13; font-weight: 700; text-anchor: middle; pointer-events: none; }
+  /* 放大后显示番号短码（38军 / 106师）：字比单字标记小一点，才塞得进 14px 高 */
+  .unit .glyph.wide { font-size: 6.2px; letter-spacing: -.15px; }
   .unit .cname { font-size: 8.5px; fill: #bcc7d3; text-anchor: middle; pointer-events: none;
     paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
   /* 交战：这一省里敌我双方都有地面部队。**只加一圈虚线环，不改省份填色** ——
@@ -1167,6 +1169,47 @@ const W = 1000, H = 720, PAD = 26;
 let cam = { x: 0, y: 0, z: 1 };
 const CAM_MAX = 6;
 
+// 放大到这个倍数以上，部队标记里显示**番号短码**（下面那行仍然是将领名）。
+// 不在小比例尺上显示：省里挤 5 支部队、标记只有 14px 宽，番号必然糊成一团。
+const ZOOM_NAMES = 1.8;
+let lodNames = null;
+
+const CN_DIGIT = { 一:1, 二:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9 };
+function cnNum(t) {
+  if (/^[0-9]+$/.test(t)) return t;
+  if (t.indexOf("十") >= 0) {
+    const [a, b] = t.split("十");
+    const tens = a ? (CN_DIGIT[a] || 0) : 1;
+    return String(tens * 10 + (b ? (CN_DIGIT[b] || 0) : 0));
+  }
+  let n = 0;
+  for (const ch of t) n = n * 10 + (CN_DIGIT[ch] || 0);
+  return String(n);
+}
+// 从番号里抽一个能塞进标记的短码：「第38集团军装甲先遣队」→ 38军、
+// 「第106师团」→ 106师。抽不出来就返回 null（标记继续用 兵/机/舰）——
+// 宁可显示「兵」，也不能显示一个猜错的番号。
+const UNIT_TYPES = [
+  ["集团军", "军"], ["师团", "师"], ["纵队", "队"], ["支队", "队"],
+  ["大队", "队"], ["舰队", "队"], ["车队", "队"], ["分队", "队"],
+  ["师", "师"], ["军", "军"], ["旅", "旅"], ["团", "团"], ["营", "营"],
+  ["区", "区"],
+];
+const UNIT_QUAL = "(?:警备|守备|独立|装甲|摩托化|通信|通讯|工兵|炮兵|骑兵|预备)?";
+function unitCode(name) {
+  if (!name) return null;
+  for (const [full, short] of UNIT_TYPES) {
+    const re = new RegExp("第?([0-9]+|[一二三四五六七八九十]+)" + UNIT_QUAL + full);
+    const m = name.match(re);
+    if (m) return cnNum(m[1]) + short;
+  }
+  // 没有编号但有兵种：「卫戍区通信营」→「营」。一个字的兵种码也比「兵」有信息量。
+  for (const [full, short] of UNIT_TYPES) {
+    if (name.indexOf(full) >= 0) return short;
+  }
+  return null;
+}
+
 function camView() {
   const w = W / cam.z, h = H / cam.z;
   return { x: cam.x, y: cam.y, w, h };
@@ -1175,7 +1218,18 @@ function camView() {
 function applyCam() {
   const v = camView();
   const svg = document.getElementById("map");
-  if (svg) svg.setAttribute("viewBox", v.x + " " + v.y + " " + v.w + " " + v.h);
+  if (svg) {
+    svg.setAttribute("viewBox", v.x + " " + v.y + " " + v.w + " " + v.h);
+    // 跨过「显示番号」的门槛时要重建一次标记：viewBox 只缩放，
+    // 不会把标记里的文字换掉。缩放本身不重绘，所以这里补一次。
+    const lod = cam.z >= ZOOM_NAMES;
+    if (lodNames !== null && lod !== lodNames) {
+      lodNames = lod;
+      render();
+    } else if (lodNames === null) {
+      lodNames = lod;
+    }
+  }
 }
 
 // 把相机限制在地图范围内，别让玩家把地图拖出屏幕外
@@ -1908,24 +1962,38 @@ function renderMap() {
       el("circle", { cx: c[0] + 26, cy: c[1] - 34, r: 7, class: "clash-badge" }, g);
       el("text", { x: c[0] + 26, y: c[1] - 31.4, class: "clash-mark" }, g).textContent = "战";
     }
+    // 放大后标记里换成番号短码，宽度不再统一：按各自的宽度从左到右排，
+    // 间距跟着变 —— 否则「106师」这种四字码会压到旁边那支的标记上。
+    const zoomed = cam.z >= ZOOM_NAMES;
+    const codes = units.map((u) => (zoomed ? unitCode(u.name) : null));
+    const pw = codes.map((cd) => (cd ? Math.max(14, 5 + cd.length * 6.4) : 14));
+    const gap = zoomed ? 4 : 1;
+    let total = pw.reduce((a, b) => a + b, 0) + gap * Math.max(0, units.length - 1);
+    let cursor = c[0] - total / 2;
     units.forEach((u, k) => {
-      const ux = c[0] + (k - (units.length - 1) / 2) * 15;
+      const ux = cursor + pw[k] / 2;
       const uy = c[1] - 16;
+      const plateW = pw[k];
+      cursor += pw[k] + gap;
       const ug = el("g", { class: "unit " + (u.mine ? "mine" : "enemy") + (selUnit === u.index ? " sel" : "") }, g);
-      el("rect", { x: ux - 7, y: uy - 7, width: 14, height: 14, rx: 2, class: "plate" }, ug);
-      const gl = el("text", { x: ux, y: uy + 2.6, class: "glyph" }, ug);
-      gl.textContent = u.kind_code === 2 ? "机" : (u.kind_code === 3 ? "舰" : "兵");
+      el("rect", { x: ux - plateW / 2, y: uy - 7, width: plateW, height: 14, rx: 2, class: "plate" }, ug);
+      const gl = el("text", { x: ux, y: uy + 2.6, class: "glyph" + (codes[k] ? " wide" : "") }, ug);
+      gl.textContent = codes[k] || (u.kind_code === 2 ? "机" : (u.kind_code === 3 ? "舰" : "兵"));
       // 兵力条：满编为 1。打残的部队在图上就该看得出来 —— 不用点开。
       // 兵力条**只在打残时出现**：满编的部队不需要那条线，
       // 每人一条反而让地图更花（实测整屏 30 支部队的时候很吵）。
       const mx = u.max_strength || u.strength || 1;
       const frac = Math.max(0, Math.min(1, (u.strength || 0) / mx));
       if (frac < 0.95) {
-        el("rect", { x: ux - 7, y: uy + 8.5, width: 14, height: 2, class: "sbar-bg" }, ug);
-        el("rect", { x: ux - 7, y: uy + 8.5, width: Math.max(1.5, 14 * frac), height: 2, class: "sbar" }, ug);
+        el("rect", { x: ux - plateW / 2, y: uy + 8.5, width: plateW, height: 2, class: "sbar-bg" }, ug);
+        el("rect", { x: ux - plateW / 2, y: uy + 8.5, width: Math.max(1.5, plateW * frac), height: 2, class: "sbar" }, ug);
       }
-      const cn = el("text", { x: ux, y: uy + 20, class: "cname" }, ug);
-      cn.textContent = u.commander.slice(0, 3);
+      // 放大后标记里已经是番号了，将领名这一行就收起来：一个省挤五支部队时，
+      // 五个 3 字名连成一片，比没有还难读。只在选中的那支下面留一行。
+      if (!zoomed || selUnit === u.index) {
+        const cn = el("text", { x: ux, y: uy + 20, class: "cname" }, ug);
+        cn.textContent = u.commander.slice(0, 3);
+      }
       // 多阵地省：只给**选中**的单位显示阵地名。
       // 全显示的话，一个省三四个单位就糊成一团，反而看不清地图。
       if (p.positions && p.positions.length > 1 && p.positions[u.node] && selUnit === u.index) {
