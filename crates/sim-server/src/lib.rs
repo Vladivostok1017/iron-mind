@@ -4031,24 +4031,30 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
                 if !mine && i_intel.accuracy == Accuracy::Unknown {
                     return None; // 没侦察到就不显示
                 }
+                // 敌方部队只给**情报允许的部分**：番号要看 `identity_known`
+                // （第二次接触才认得出），兵力/士气/补给是**真值**，不能给 ——
+                // 敌方只有省一级的估计（见下面 `intel`）。
+                let known = mine || i_intel.identity_known;
+                let masked = if mine { "" } else { "番号不明" };
                 Some(json!({
                     "index": ui,
-                    "name": u.name,
-                    "commander": u.commander.name,
-                    "commander_title": u.commander.title,
-                    "commander_persona": u.commander.persona,
+                    "identity_known": known,
+                    "name": if known { u.name.clone() } else { masked.to_string() },
+                    "commander": if known { u.commander.name.clone() } else { String::new() },
+                    "commander_title": if known { u.commander.title.clone() } else { String::new() },
+                    "commander_persona": if known { u.commander.persona.clone() } else { String::new() },
                     "kind": u.kind.label(),
                     "kind_code": u.kind.code(),
                     // 真实阵营（不是"敌我"）：选阵营之后，"side=cn" 既可能是玩家也可能是 AI。
                     // 敌我判断统一看 `mine`。
                     "side": id_of(u.side),
                     "mine": mine,
-                    "strength": round1(u.strength.to_display_f64()),
-                    // 满编兵力：界面据此画一条"还剩几成"的细条，
-                    // 不用点开就看得出哪支部队已经打残了。
-                    "max_strength": round1(u.max_strength.to_display_f64()),
-                    "morale": round2(u.morale.to_display_f64()),
-                    "supply": round2(u.supply.to_display_f64()),
+                    // 我方给真值；敌方给 null —— 敌方只有"这一省大约多少人"的
+                    // 估计，没有逐部队的实数。界面据此只给我方画兵力条。
+                    "strength": if mine { json!(round1(u.strength.to_display_f64())) } else { json!(null) },
+                    "max_strength": if mine { json!(round1(u.max_strength.to_display_f64())) } else { json!(null) },
+                    "morale": if mine { json!(round2(u.morale.to_display_f64())) } else { json!(null) },
+                    "supply": if mine { json!(round2(u.supply.to_display_f64())) } else { json!(null) },
                     "encircled": u.encircled,
                     "order": u.order.label(),
                     "order_code": u.order.code().1,

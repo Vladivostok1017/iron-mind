@@ -2435,7 +2435,7 @@ function renderMap() {
       // 每人一条反而让地图更花（实测整屏 30 支部队的时候很吵）。
       const mx = u.max_strength || u.strength || 1;
       const frac = Math.max(0, Math.min(1, (u.strength || 0) / mx));
-      if (frac < 0.95) {
+      if (u.mine && u.strength != null && frac < 0.95) {
         el("rect", { x: ux - plateW / 2, y: uy + 8.5 * U, width: plateW, height: 2 * U, class: "sbar-bg" }, ug);
         el("rect", { x: ux - plateW / 2, y: uy + 8.5 * U, width: Math.max(1.5 * U, plateW * frac), height: 2 * U, class: "sbar" }, ug);
       }
@@ -2458,7 +2458,36 @@ function renderMap() {
       }
       ug.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        if (!u.mine) return;
+        if (!u.mine) {
+          // 敌方部队：以前点了**完全没反应**。现在给一张"我们知道什么"的卡，
+          // 但只给情报允许的字段（番号要看身份是否认出来，兵力只有省一级估计）。
+          const posName = (p.positions || [])[u.node] ? p.positions[u.node].name : "";
+          const it = p.intel || {};
+          const rows2 = [];
+          rows2.push("归属：<b>敌方</b>");
+          rows2.push("番号：" + (u.identity_known
+            ? "<b>" + u.name + "</b>"
+            : "未认出（同一支部队再接触一次可能认出）"));
+          if (u.kind) rows2.push("兵种：" + u.kind);
+          if (u.commander) {
+            rows2.push("指挥官：" + u.commander + (u.commander_title ? "（" + u.commander_title + "）" : ""));
+          }
+          rows2.push("所在：" + p.name + (posName ? "·" + posName : ""));
+          if ((p.positions || []).length > 1) {
+            rows2.push("阵地：第 " + ((u.node || 0) + 1) + " / " + p.positions.length + " 个");
+          }
+          rows2.push("当面兵力（估计）：约 <b>" +
+            (it.strength == null ? "?" : it.strength.toFixed(1)) + " 千</b>");
+          if (it.accuracy) rows2.push("情报来源：" + it.accuracy + (it.stale ? "（已过期）" : ""));
+          if (p.fort) rows2.push("工事：" + p.fort + " 级");
+          if (u.encircled) rows2.push("<span style='color:#e0a33a'>被围</span>");
+          Dlg.open({
+            title: "敌情 · " + p.name,
+            body: rows2.join("<br>"),
+            actions: [{ label: "知道了", primary: true }],
+          });
+          return;
+        }
         // 「并编」要选的是**同省友军**，不是省份：这一下就是选目标。
         if (typeof pendingVerb !== "undefined" && pendingVerb === "merge" && selUnit !== null) {
           const from = selUnit;
@@ -3192,8 +3221,10 @@ function showTip(ev, p) {
     rows.push("<div class='t-row'>敌情：<b>" + p.intel.accuracy + "</b>　约 <b>" + p.intel.strength.toFixed(1) + "</b> 千</div>");
   }
   for (const u of p.units || []) {
+    // 敌方部队没有逐部队实数（只有省一级估计），所以这里不写兵力
+    const strBit = u.strength == null ? "" : u.strength.toFixed(1) + " 千";
     rows.push("<div class='t-row'>" + (u.mine ? "我" : "敌") + "：<b>" + u.name + "</b> " +
-      u.strength.toFixed(1) + " 千" + (u.disobeyed ? " ⚠" : "") + "</div>");
+      strBit + (u.disobeyed ? " ⚠" : "") + "</div>");
     // 人物志：只给我方单位显示，否则悬停卡片会长得看不下去
     if (u.mine && u.commander_persona) {
       rows.push("<div class='t-row' style='color:#8b95a1;line-height:1.5'>" +
