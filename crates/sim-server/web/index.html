@@ -985,8 +985,10 @@
     <div class="sep"></div>
     <!-- 模块 = 这一仗的剧本。游戏只提供框架，剧本由玩家自己写，所以必须能在这儿换。 -->
     <select id="mod-sel" title="切换模块（会重开一局）" style="font-size:11.5px;background:#141b23;color:#c3ccd6;border:1px solid #2d3947;border-radius:4px;padding:5px 6px;max-width:190px"></select>
-    <!-- 本方统帅部的作战方针：玩家该知道自己司令部的方向，再决定要不要越级 -->
-    <div id="plan" title="本方司令部的作战方针（方向，不是命令）"></div>
+    <!-- 当面态势：只报事实（敌我有效战力、够得着的敌方省与其设施、守军兵力）。
+         判断是玩家和将领的事——这行以前写"司令部：推进 → …"，会被误读成
+         "上面还有个司令部在给我下命令"，而那些字其实是函数替人下的结论。 -->
+    <div id="plan" title="当面态势：敌我有效战力与够得着的敌方省份（事实，不含建议）"></div>
     <div id="hint">地图只作查看：点单位看详情；下命令请用右侧电报台</div>
     <!-- 有了首页之后，必须有一条路回到首页：桌面软件没有"地址栏"可以刷新 -->
     <!-- 指挥模式：委诸将领 / 亲自指挥。点一下切换，状态写在按钮上。 -->
@@ -1594,15 +1596,21 @@ function render() {
 function renderTop() {
   try {
     const el = document.getElementById("plan");
-    if (el && S && S.plan) {
-      el.innerHTML = "司令部：" + (S.plan.focus && S.plan.focus.length
-        ? S.plan.posture + " → " + S.plan.focus.join("、")
-        : S.plan.posture);
-      el.title = S.plan.summary;
-      // 手机上底栏藏了方针，抽屉里那份要跟着同一份数据走
+    if (el && S && S.situation) {
+      // **只报事实**：敌我有效战力 + 够得着的敌方省。
+      // 以前这行写"司令部：推进 → 东华门、建国门"，两个问题：
+      //   1. 玩家读成"上面还有个司令部在给我下命令"（其实他才是最高指挥）；
+      //   2. "推进/收缩"是函数替将领下的结论，写进提示词后成了它抗命的依据。
+      const f = S.situation;
+      const names = (f.targets || []).slice(0, 2).map((x) => x.name);
+      el.innerHTML = "当面：" + (f.own_power || 0).toFixed(1) + " / " +
+        (f.foe_power || 0).toFixed(1) + " 千（战力比 " + (f.ratio || 0).toFixed(2) + "）" +
+        (names.length ? " · 够得着：" + names.join("、") : "");
+      el.title = f.summary;
+      // 手机上底栏藏了这行，抽屉里那份要跟着同一份数据走
       const ops = document.getElementById("ops-plan");
       if (ops) {
-        ops.textContent = S.plan.summary || el.textContent;
+        ops.textContent = f.summary || el.textContent;
       }
     }
   } catch (e) { }

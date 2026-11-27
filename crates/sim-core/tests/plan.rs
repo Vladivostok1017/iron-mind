@@ -1,10 +1,14 @@
-//! 统帅部的作战方针（给非玩家阵营的"假指挥官"）。
+//! 战区态势：**只报事实，不给判断**。
 //!
-//! 之前非玩家阵营没有指挥部：八个师团各自看邻省、各自决定，像八个独立军阀。
-//! 现在有一份确定性的方针（不额外花钱）：姿态由兵力比定，
-//! 主攻方向由"够得着的敌方省"里价值最高的两个定。
+//! 这组测试守的是一条边界：`theater_facts()` 只许说"敌我各多少兵、哪些敌方省
+//! 够得着、那些省里有什么设施和守军"，**不许说"该推进/该守/该退"**。
+//!
+//! 为什么较这条劲：这段文字会进 LLM 将领的提示词。一旦它带着结论
+//! （以前是 `posture: 推进` + "主攻方向 X、Y"），将领"抗命"时引用的就是
+//! 那个结论 —— 判断实际上是函数做的，模型的角色退化成找理由。
+//! 所以 `summary_contains_no_recommendation` 是这里最重要的一条。
 
-use sim_core::ai::{theater_plan, Posture};
+use sim_core::ai::theater_facts;
 use sim_core::world::{Province, Side, Terrain, Unit, World};
 
 /// 0 我方(源) - 1 中间 - 2 敌方(源) - 3 敌后方(源, 铁路)
@@ -32,52 +36,84 @@ fn map() -> World {
 }
 
 #[test]
-fn plan_is_deterministic() {
+fn facts_are_deterministic() {
     let w = map();
-    let a = theater_plan(&w, Side::A);
-    let b = theater_plan(&w, Side::A);
-    assert_eq!(a, b, "同一态势必须给出同一方针");
+    let a = theater_facts(&w, Side::A);
+    let b = theater_facts(&w, Side::A);
+    assert_eq!(a, b, "同一态势必须给出同一份事实");
 }
 
 #[test]
-fn only_reachable_enemy_provinces_are_targets() {
+fn only_reachable_enemy_provinces_are_listed() {
     let w = map();
-    let p = theater_plan(&w, Side::A);
-    assert!(!p.focus.is_empty(), "应当有主攻方向：{:?}", p.summary);
+    let f = theater_facts(&w, Side::A);
+    assert!(!f.targets.is_empty(), "应当有够得着的敌方省：{:?}", f.summary);
     // 够得着的只有"沙河"（与九江相邻）；德安、南昌都在后面
-    assert_eq!(p.focus[0], 1, "主攻方向应当是相邻的沙河");
-    // 沙河不是补给源也不是铁路，价值 0；但它够得着，所以就是目标
-    assert!(!p.summary.is_empty());
+    assert_eq!(f.targets[0].province, 1, "只该列出相邻的沙河");
+    assert_eq!(f.targets[0].name, "沙河");
+    assert_eq!(f.targets.len(), 1, "德安、南昌够不着，不该进列表");
 }
 
 #[test]
-fn posture_follows_the_balance() {
-    let mut w = map();
-    // 我方 40 千 vs 敌方 10 千 → 推进
-    assert_eq!(theater_plan(&w, Side::A).posture, Posture::Advance);
-    // 把敌方抬到 100 千 → 收缩
-    w.units[1].strength = sim_core::Fixed::from_int(100);
-    w.units[1].max_strength = sim_core::Fixed::from_int(100);
-    // 我方 40 vs 敌方 100：连一半都不到 → 收缩
-    assert_eq!(theater_plan(&w, Side::A).posture, Posture::Withdraw);
-}
-
-#[test]
-fn summary_mentions_direction_and_ratio() {
+fn reports_power_ratio_and_garrison_as_facts() {
     let w = map();
-    let s = theater_plan(&w, Side::A).summary;
-    assert!(s.contains("沙河"), "方针里要有方向：{s}");
-    assert!(s.contains("兵力比"), "方针里要有兵力比：{s}");
+    let f = theater_facts(&w, Side::A);
+    assert!((f.own_power - 40.0).abs() < 0.01, "我方 40 千：{}", f.own_power);
+    assert!((f.foe_power - 10.0).abs() < 0.01, "敌方 10 千：{}", f.foe_power);
+    assert!((f.ratio - 4.0).abs() < 0.01, "兵力比 4.00：{}", f.ratio);
+    // 守军兵力是事实，得报出来 —— 将领要拿它算敢不敢打
+    assert!(
+        (f.targets[0].garrison - 10.0).abs() < 0.01,
+        "沙河守军 10 千：{}",
+        f.targets[0].garrison
+    );
+    assert!(f.summary.contains("守军"), "{}", f.summary);
 }
 
 #[test]
-fn no_enemy_in_reach_falls_back_to_holding() {
+fn facilities_are_listed_not_ranked_as_a_plan() {
+    let mut w = map();
+    // 让德安也够得着：它同时有补给源与铁路（两个设施）
+    w.provinces[2].neighbors = vec![0, 1, 3];
+    let f = theater_facts(&w, Side::A);
+    let de_an = f
+        .targets
+        .iter()
+        .find(|t| t.name == "德安")
+        .expect("德安现在够得着");
+    assert!(de_an.facilities.contains(&"补给源".to_string()));
+    assert!(de_an.facilities.contains(&"铁路".to_string()));
+    // 设施多的排在前面（按设施多寡排序），但没有任何"打哪个"的字样
+    assert_eq!(f.targets[0].name, "德安", "设施多的排在前面");
+}
+
+#[test]
+fn summary_contains_no_recommendation() {
+    let w = map();
+    let s = theater_facts(&w, Side::A).summary;
+    for banned in ["推进", "巩固", "收缩", "建议", "主攻", "应当", "应该", "方针"] {
+        assert!(
+            !s.contains(banned),
+            "态势里不许出现判断性措辞「{banned}」：{s}"
+        );
+    }
+    // 该有的都得有：双方兵力、兵力比、够得着的省
+    assert!(s.contains("战力比"), "{}", s);
+    assert!(s.contains("沙河"), "{}", s);
+}
+
+#[test]
+fn no_reachable_enemy_reports_empty_targets() {
     let mut w = map();
     // 把所有敌方省都变成我方的
     for p in w.provinces.iter_mut() {
         p.owner = Side::A;
     }
-    let plan = theater_plan(&w, Side::A);
-    assert!(plan.focus.is_empty());
-    assert!(plan.summary.contains("没有可攻目标"), "{}", plan.summary);
+    let f = theater_facts(&w, Side::A);
+    assert!(f.targets.is_empty(), "没有够得着的敌方省");
+    assert!(
+        f.summary.contains("没有与我方地面部队相邻的敌方省份"),
+        "{}",
+        f.summary
+    );
 }

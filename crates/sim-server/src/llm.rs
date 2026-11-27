@@ -190,7 +190,7 @@ pub struct Judgement {
 }
 
 /// 问一次模型需要的全部信息。**只放他能知道的**。
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Ask {
     pub day: u32,
     /// true = 这一次要的是**战况报告**，不是命令（亲自指挥）。
@@ -238,8 +238,9 @@ pub struct Ask {
     pub incoming: String,
     /// 这个战役有没有开"铁路被炸"（预览版）。没开就别在提示词里给它派活。
     pub rail_damage: bool,
-    /// 司令部（统帅部）的作战方针。这是**方向**，不是命令。
-    pub hq_plan: String,
+    /// 战区态势：**只有事实**（敌我有效战力、够得着的敌方省及其设施与守军兵力）。
+    /// 不含任何"该推进还是该收缩"的判断 —— 怎么解读是这名将领自己的事。
+    pub situation: String,
 }
 
 const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。你不是助手、不是客服，也不在回答"用户"的提问。
@@ -404,10 +405,13 @@ fn build_user(a: &Ask) -> String {
             ));
         }
     }
-    if !a.hq_plan.is_empty() {
+    if !a.situation.is_empty() {
+        // 给它**事实**，不给结论。以前这里写"司令部的作战方针：推进：主攻方向 X、Y"，
+        // 于是它抗命时引用的是"方针说该推进"，而不是自己想清楚该不该打。
         s.push_str(&format!(
-            "\n司令部的作战方针：{}\n这是方向，不是命令。你与它不一致时可以按自己的判断办，但要说明理由。\n",
-            a.hq_plan
+            "\n当面态势（只有事实，不含任何建议）：{}\n\
+             怎么解读由你自己判断：该进、该守、该退，都是你的结论，不是别人给的。\n",
+            a.situation
         ));
     }
     s.push_str(&format!(
@@ -1320,6 +1324,23 @@ mod hq_tests {
         assert!(s.contains("第2师"), "提示词里要有麾下各部");
         assert!(s.contains("被围"), "被围的部队要标出来");
         assert!(s.contains("甲城"), "提示词里要有已知敌情");
+    }
+
+    #[test]
+    fn prompt_gives_facts_not_verdicts() {
+        // 提示词里只许出现**事实**。以前这里是"司令部的作战方针：推进：主攻方向 X、Y"，
+        // 等于函数替将领把判断做了，它抗命时引用的也是这句结论。
+        let mut a = Ask::default();
+        a.situation = "当面：我 12.4 千 / 敌 6.8 千（战力比 1.82）。\
+                       与我方地面部队相邻的敌方省份（按设施多寡排序）：东华门（补给源） 守军 3.2 千。"
+            .into();
+        let s = build_user(&a);
+        assert!(s.contains("当面态势（只有事实，不含任何建议）"), "要标明这是事实");
+        assert!(s.contains("战力比 1.82"), "事实要原样带进去");
+        assert!(s.contains("东华门"), "够得着的省要带进去");
+        assert!(s.contains("怎么解读由你自己判断"), "要明确判断归将领");
+        assert!(!s.contains("作战方针"), "不许再把结论包装成方针");
+        assert!(!s.contains("这是方向，不是命令"), "旧框架不许残留");
     }
 
     #[test]

@@ -238,70 +238,64 @@ struct CommandContext {
 /// 行动像八个独立军阀，而不是一支有作战方针的军。史实里第 11 军司令部是有的
 /// （"沿南浔线南下、相机夺取南昌"），而在模拟里它不存在。
 ///
-/// 这里补的是一份**确定性、不额外花钱**的方针：只看战场事实
-/// （兵力比、目标价值、够不够得着），不叫第二次模型。
-/// 规则 AI 直接照它办事；LLM 将领在提示词里看到它，然后**可以不同意**——
-/// 这才是真实指挥链：司令部给方向，师团长给判断。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TheaterPlan {
-    /// 主要用兵方向（按优先级排序的目标省）。
-    pub focus: Vec<u32>,
-    pub posture: Posture,
-    /// 一句话说明，直接进提示词。
+/// 某一方的**战区态势**：只报事实，不给判断。
+///
+/// 这条边界是刻意划的 —— 函数负责"数清战场"，将领负责"怎么看"。
+/// 曾经的写法叫 `theater_plan`，给出 `posture`（推进 / 巩固 / 收缩）和
+/// "主攻方向 X、Y"，整段塞进 LLM 将领的提示词。后果是：
+///   · 将领读到的不是"敌我多少兵、哪些要点够得着"，而是"司令部建议推进"；
+///   · 它抗命时引用的也是这句建议 —— 等于让一个便宜函数替将领把判断做了，
+///     "抗命"退化成"照着那个函数的结论找理由"。
+/// 现在这里只有数字与位置。解读是将领自己的事：规则 AI 在 `decide_side`，
+/// LLM 将领在它自己的回答里。
+#[derive(Clone, Debug, PartialEq)]
+pub struct TheaterFacts {
+    /// 我方有效战力（千）：含工事与士气折算，见 `World::total_combat_power`。
+    /// **不是人头** —— 历史上进攻方普遍人少（淞沪 1:2.6），只看人头会让
+    /// 入侵方永远被算成"该收缩"。
+    pub own_power: f64,
+    /// 敌方有效战力（千）。
+    pub foe_power: f64,
+    /// own / foe。敌方为零时给 9.99。
+    pub ratio: f64,
+    /// 与我方地面部队相邻的敌方省（"够得着"的），按设施多寡排序，最多 4 个。
+    pub targets: Vec<Target>,
+    /// 一句话事实陈述，直接进提示词。
     pub summary: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Posture {
-    /// 全面推进
-    Advance,
-    /// 巩固现有战线（实力不足或补给不济）
-    Hold,
-    /// 收缩（被打残了）
-    Withdraw,
+/// 一个"够得着的敌方省"。字段全是模块里写死的属性或当场数出来的兵力，
+/// 不含任何"该不该打"的推断。
+#[derive(Clone, Debug, PartialEq)]
+pub struct Target {
+    pub province: u32,
+    pub name: String,
+    /// 设施：补给源 / 铁路 / 工事 N 级。都没有就是空。
+    pub facilities: Vec<String>,
+    /// 省内敌方地面部队兵力合计（千）。空省为 0。
+    pub garrison: f64,
 }
 
-impl Posture {
-    pub fn label(self) -> &'static str {
-        match self {
-            Posture::Advance => "推进",
-            Posture::Hold => "巩固",
-            Posture::Withdraw => "收缩",
-        }
-    }
-}
-
-/// 算出某一方的作战方针。
+/// 算出某一方的战区态势（**事实，不是方针**）。
 ///
 /// 判据三条，全部来自战场事实，不掺任何国别设定：
-/// 1. 现存兵力比决定姿态（0.8 倍以上才全面推进）；
-/// 2. 目标是敌方控制的省，价值 = 补给源 3 + 铁路 2 + 工事 1；
-/// 3. 只考虑**够得着**的（邻接本方部队），同级按省号保序。
-pub fn theater_plan(world: &World, side: Side) -> TheaterPlan {
+///   1. 双方有效战斗力（不看人头）；
+///   2. 只算与我方地面部队相邻的敌方省 —— 够不着的不进列表；
+///   3. 每个目标带设施与守军兵力，排序按设施多寡，**但不写"打哪个"**。
+pub fn theater_facts(world: &World, side: Side) -> TheaterFacts {
     let enemy = side.opponent();
-    // 用**有效战斗力**而不是人头：历史上进攻方普遍人数劣势
-    // （淞沪 1:2.6），只看人头会让入侵者永远被建议"收缩"。
     let own_power = world.total_combat_power(side);
     let foe_power = world.total_combat_power(enemy);
+    let own_v = own_power.to_display_f64();
+    let foe_v = foe_power.to_display_f64();
+    let ratio = if foe_power.is_zero() { 9.99 } else { own_v / foe_v };
 
-    // 阈值也按有效战力重标：1.0 / 0.7 一档。
-    // 原来的 1.25 / 2.0 倍人头口径，在"人少但精锐"的进攻方身上永远判成收缩。
-    let posture = if own_power.is_zero() || foe_power.is_zero() {
-        Posture::Hold
-    } else if own_power > foe_power {
-        Posture::Advance
-    } else if own_power * Fixed::ratio(7, 10) > foe_power {
-        Posture::Hold
-    } else {
-        Posture::Withdraw
-    };
-
-    let mut cands: Vec<(u32, i32)> = Vec::new();
-    for p in 0..world.provinces.len() {
-        let prov = &world.provinces[p];
+    let mut targets: Vec<Target> = Vec::new();
+    for (i, prov) in world.provinces.iter().enumerate() {
         if prov.owner == side || prov.terrain == Terrain::Water {
             continue;
         }
+        // "够得着" = 有相邻省里驻着我方地面部队。够不着的不进列表。
         let reachable = prov.neighbors.iter().any(|&nb| {
             world.units_in(nb).iter().any(|&j| {
                 let x = &world.units[j as usize];
@@ -311,42 +305,74 @@ pub fn theater_plan(world: &World, side: Side) -> TheaterPlan {
         if !reachable {
             continue;
         }
-        let mut value = 0i32;
+        let mut facilities: Vec<String> = Vec::new();
         if prov.is_supply_source {
-            value += 3;
+            facilities.push("补给源".into());
         }
         if prov.rail {
-            value += 2;
+            facilities.push("铁路".into());
         }
         if prov.fort > 0 {
-            value += 1;
+            facilities.push(format!("工事 {} 级", prov.fort));
         }
-        cands.push((p as u32, value));
+        let garrison: f64 = world
+            .units_in(i as u32)
+            .iter()
+            .filter(|&&j| {
+                let u = &world.units[j as usize];
+                u.side == enemy && u.kind.is_ground() && u.is_alive()
+            })
+            .map(|&j| world.units[j as usize].strength.to_display_f64())
+            .sum();
+        targets.push(Target {
+            province: i as u32,
+            name: prov.name.clone(),
+            facilities,
+            garrison,
+        });
     }
-    cands.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let focus: Vec<u32> = cands.iter().take(2).map(|c| c.0).collect();
+    // 排序按**设施多寡**，不是按"该打哪个"。规则写在提示词里，将领可以自己改主意。
+    targets.sort_by(|a, b| {
+        b.facilities
+            .len()
+            .cmp(&a.facilities.len())
+            .then(a.province.cmp(&b.province))
+    });
+    targets.truncate(4);
 
-    let names: Vec<String> = focus
-        .iter()
-        .map(|&p| world.provinces[p as usize].name.clone())
-        .collect();
-    let ratio = if foe_power.is_zero() {
-        9.99
-    } else {
-        own_power.to_display_f64() / foe_power.to_display_f64()
-    };
-    let summary = if names.is_empty() {
-        format!("{}：当面没有可攻目标，守住现有战线。", posture.label())
-    } else {
+    let summary = if targets.is_empty() {
         format!(
-            "{}：主攻方向 {}（兵力比 {:.2}）。",
-            posture.label(),
-            names.join("、"),
-            ratio
+            "当面：我 {:.1} 千 / 敌 {:.1} 千（战力比 {:.2}）。没有与我方地面部队相邻的敌方省份。",
+            own_v, foe_v, ratio
+        )
+    } else {
+        let list = targets
+            .iter()
+            .map(|t| {
+                let mut bits = t.name.clone();
+                if !t.facilities.is_empty() {
+                    bits.push_str(&format!("（{}）", t.facilities.join("、")));
+                }
+                if t.garrison > 0.0 {
+                    bits.push_str(&format!(" 守军 {:.1} 千", t.garrison));
+                }
+                bits
+            })
+            .collect::<Vec<_>>()
+            .join("；");
+        format!(
+            "当面：我 {:.1} 千 / 敌 {:.1} 千（战力比 {:.2}）。与我方地面部队相邻的敌方省份（按设施多寡排序）：{}。",
+            own_v, foe_v, ratio, list
         )
     };
 
-    TheaterPlan { focus, posture, summary }
+    TheaterFacts {
+        own_power: own_v,
+        foe_power: foe_v,
+        ratio,
+        targets,
+        summary,
+    }
 }
 
 /// 每 tick 为双方重算意图。

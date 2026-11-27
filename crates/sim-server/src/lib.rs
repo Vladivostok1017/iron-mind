@@ -3322,7 +3322,7 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
         memory: memory_for(state, w, idx),
         incoming: incoming.to_string(),
         rail_damage: w.fx.rail_damage,
-        hq_plan: sim_core::ai::theater_plan(w, u.side).summary,
+        situation: sim_core::ai::theater_facts(w, u.side).summary,
     })
 }
 
@@ -4121,11 +4121,20 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
     });
     // 本方司令部的作战方针：这是给玩家的（自己的统帅部怎么想，他应该知道），
     // 敌方的方针属于情报，不给。
-    let own_plan = sim_core::ai::theater_plan(w, viewer);
-    let plan = json!({
-        "posture": own_plan.posture.label(),
-        "focus": own_plan.focus.iter().map(|&p| w.provinces[p as usize].name.clone()).collect::<Vec<_>>(),
-        "summary": own_plan.summary,
+    // 只报事实：敌我有效战力、够得着的敌方省、那些省的设施与守军。
+    // 这里**刻意不算"该推进还是该收缩"** —— 那是将领的判断。写进提示词后
+    // 就会变成它的结论（抗命时引用的也是它），等于替 AI 把判断做了。
+    let own_facts = sim_core::ai::theater_facts(w, viewer);
+    let situation = json!({
+        "own_power": own_facts.own_power,
+        "foe_power": own_facts.foe_power,
+        "ratio": own_facts.ratio,
+        "targets": own_facts.targets.iter().map(|t| json!({
+            "name": t.name,
+            "facilities": t.facilities,
+            "garrison": t.garrison,
+        })).collect::<Vec<_>>(),
+        "summary": own_facts.summary,
     });
     json!({
         "tick": w.tick,
@@ -4163,7 +4172,7 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
             .iter()
             .map(|(unit, who, day)| json!({ "unit": unit, "who": who, "day": day }))
             .collect::<Vec<_>>(),
-        "plan": plan,
+        "situation": situation,
         "outcome": outcome,
         // 玩家扮演哪一方（可选）。前端用它决定"我军/敌军"的文案与颜色，
         // 以及顶栏该显示模块给这一方起的名字。
