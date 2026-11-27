@@ -399,10 +399,26 @@ content/scenarios/
   空袭当天在目标省画八条射线的爆点；舰队封锁时圈一片红虚线。
 - 这些符号都画在**最上层**（和车站同一组）：画在部队层下面会被省心的兵牌挡住。
 
+### 教学关（玩家不该先读手册）
+
+`content/scenarios/tutorial.imod`（5 省 / 4 部队）+ 页面里的 `Tutorial` 步骤机。
+
+- **按真实操作推进**：`select`（点兵牌）/ `telegram`（发电报）/ `advance`（推进一天）/
+  `mail`（开信箱）/ `supply`（切补给视图）。钩子挂在**动作**上，不是挂在省份坐标上 ——
+  换一张教学地图照样能用。
+- 五处钩子：部队点击、`sendTelegram()` 开头、`pushOn()` 判断 tick/advance、
+  `openMail()` 开头、`.mode` 点击里判断 `view === "supply"`。
+- 激活：`startModule()` 把模块路径写进 `sessionStorage.im_module`，`renderTop()` 每次
+  调 `Tutorial.maybeStart()`。走 sessionStorage 是因为**转屏会重载页面**，内存变量会丢。
+- 卡片贴左下角、可「跳过」；最后一步给「完成，回首页」。首页菜单「教程 · 三分钟」。
+
+`docs/27-玩家手册.md` 只留作开发/QA 与模块作者参考，**不是给玩家的入口**。
+
 ### 版本
 
-`1.6.0`（Cargo workspace + Android `versionCode 9`；iOS/mac 由脚本读 Cargo）。
-Release: `v1.6.0`（iOS ipa 未签名 + macOS zip，Windows/Android 在 Windows 上编）。
+`1.7.0`（Cargo workspace + Android `versionCode 10`；iOS/mac 由脚本读 Cargo）。
+Release `v1.7.0`：铁路/车站/机场/港口/封锁/侦察/空袭爆点 + `demo_nodes` 演示模块。
+教学关（`tutorial.imod`）在这一版之后才做，所以**不在 v1.7.0 的包里**，下一版带上。
 
 ---
 
