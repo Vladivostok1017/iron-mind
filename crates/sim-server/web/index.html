@@ -891,6 +891,22 @@
     width: 30px; height: 24px; border-radius: 4px; border: 1px solid #2d3947;
     background: #161e28; color: #c3ccd6; font-size: 15px; line-height: 1; cursor: pointer;
   }
+  /* 教学卡：贴在左下角（不挡地图中心、也不挡右下角的推进按钮） */
+  #tut { position: absolute; left: 14px; bottom: 76px; width: 320px; z-index: 60;
+    background: #121820; border: 1px solid #2f3d4c; border-radius: 8px;
+    padding: 10px 12px 11px; box-shadow: 0 10px 30px rgba(0,0,0,.55); }
+  #tut.hidden { display: none; }
+  #tut .tut-h { display: flex; align-items: center; gap: 8px; }
+  #tut #tut-step { font-size: 10px; letter-spacing: .12em; color: #c9a227; }
+  #tut .tut-dots { display: flex; gap: 4px; margin-right: auto; }
+  #tut .tut-dots i { width: 5px; height: 5px; border-radius: 50%; background: #2f3d4c; }
+  #tut .tut-dots i.on { background: #c9a227; }
+  #tut .tut-dots i.done { background: #4a7a52; }
+  #tut .tut-x { background: transparent; border: none; color: #6f7a86; font-size: 15px;
+    cursor: pointer; line-height: 1; padding: 0 2px; }
+  #tut .tut-x:hover { color: #cfd8e3; }
+  #tut .tut-t { font-size: 13.5px; color: #e6edf5; font-weight: 600; margin: 6px 0 4px; }
+  #tut .tut-d { font-size: 11.5px; color: #9aa6b4; line-height: 1.7; }
   #orderbar .ob-row { display: flex; gap: 5px; flex-wrap: wrap; }
   #orderbar .ob-row + .ob-row { margin-top: 5px; }
   #orderbar .ob-row button {
@@ -1034,6 +1050,17 @@
        浮在地图下沿、底栏之上。原地命令（固守/工事/整补）点一下就落地；
        要指目标的，先点动词再点省份，两下。全程不弹窗——手机上每次弹窗
        都是多三次点击，而这条路径要用的次数最多。 -->
+  <div id="tut" class="hidden">
+    <div class="tut-h">
+      <span id="tut-step"></span>
+      <span class="tut-dots" id="tut-dots"></span>
+      <button class="tut-x" id="tut-skip" title="跳过教程">×</button>
+    </div>
+    <div class="tut-t" id="tut-t"></div>
+    <div class="tut-d" id="tut-d"></div>
+    <button class="btn primary" id="tut-next" style="display:none;width:100%;margin-top:8px">完成，回首页</button>
+  </div>
+
   <div id="orderbar" class="hidden">
     <div class="ob-top">
       <b id="ob-name"></b>
@@ -1119,6 +1146,10 @@
       <button class="h-item" id="hm-load">
         <div class="i-k">L</div>
         <div><div class="i-t">读取存档</div><div class="i-d">存档存的是命令流，读档会核对哈希</div></div>
+      </button>
+      <button class="h-item" id="hm-tutorial">
+        <div class="i-k">?</div>
+        <div><div class="i-t">教程 · 三分钟</div><div class="i-d">一条桥、两个团：跟着做完五步，就会玩了</div></div>
       </button>
       <button class="h-item" id="hm-guide">
         <div class="i-k">T</div>
@@ -1736,7 +1767,88 @@ function render() {
   }
 }
 
+// ── 教学关（教程 · 三分钟）─────────────────────────────────────────────
+//
+// 为什么不做"读手册"：玩家不该为了玩游戏先读说明书。所以教学关就是**一局真战役**，
+// 只是地图小、对面弱，屏幕上多一张卡写着"现在该点哪儿"，你照做它就往下走。
+//
+// 步骤按**玩家的真实操作**推进（点了部队 / 发了电报 / 推进了一天 / 开了信箱 /
+// 切了补给视图），不按时间、也不硬编码坐标 —— 换一张教学地图照样能用。
+const Tutorial = (() => {
+  const STEPS = [
+    { k: "select", t: "点一下你的兵牌", d: "地图上蓝色的「兵」就是你的部队。点它，能看到详情和当前命令。" },
+    { k: "telegram", t: "在右侧电报台发一句命令", d: "写给「第1团」，人话就行 —— 比如「推进到界桥」。将领按自己的理解执行，可能打折扣。" },
+    { k: "advance", t: "点底部「推进 1 日」", d: "一天一天过。命令不是立刻生效的，传令要时间。" },
+    { k: "mail", t: "打开战报信箱", d: "谁打了、打掉多少、谁抗命了，都在这里。战斗结果不由你亲眼看见，只由报告告诉你。" },
+    { k: "supply", t: "切到「补给」视图", d: "看补给怎么从北岸车站沿铁路流到桥头。铁路断了，前方几天就撑不住了。" },
+    { k: "done", t: "学会了", d: "循环就是这四步：看态势 → 下命令 → 推进一天 → 读战报。剩下的去正片里打。" },
+  ];
+  let step = -1;
+  let active = false;
+  let started = false;
+
+  const card = () => document.getElementById("tut");
+
+  function paint() {
+    const c = card();
+    if (!c) return;
+    if (!active || step < 0) { c.classList.add("hidden"); return; }
+    c.classList.remove("hidden");
+    const st = STEPS[step];
+    c.querySelector("#tut-step").textContent = (step + 1) + " / " + STEPS.length;
+    c.querySelector("#tut-t").textContent = st.t;
+    c.querySelector("#tut-d").textContent = st.d;
+    c.querySelector("#tut-dots").innerHTML = STEPS.map((_, i) =>
+      "<i class=\"" + (i < step ? "done" : i === step ? "on" : "") + "\"></i>").join("");
+    c.querySelector("#tut-next").style.display = step === STEPS.length - 1 ? "" : "none";
+  }
+
+  function note(kind) {
+    if (!active || step < 0) return;
+    if (STEPS[step].k !== kind) return;
+    step += 1;
+    paint();
+  }
+
+  function start() {
+    if (started) return;
+    started = true;
+    active = true;
+    step = 0;
+    paint();
+  }
+  function stop() {
+    active = false;
+    step = -1;
+    started = false;
+    paint();
+  }
+  /// 模块换进来看一眼：路径里带 tutorial 就开教学。
+  function maybeStart() {
+    let path = "";
+    try { path = sessionStorage.getItem("im_module") || ""; } catch (e) {}
+    if (!path) {
+      const sel = document.getElementById("mod-sel");
+      path = (sel && sel.value) || "";
+    }
+    if (/tutorial\.imod/i.test(path)) start();
+    else if (active) stop();
+  }
+  return { note, start, stop, maybeStart, isActive: () => active, step: () => step };
+})();
+
+bind("tut-skip", "click", () => Tutorial.stop());
+bind("tut-next", "click", () => { Tutorial.stop(); Home.show(); });
+bind("hm-tutorial", "click", async () => {
+  const m = await listModules();
+  const t = (m.mods || []).find((x) => /tutorial\.imod$/i.test(x.path || ""));
+  if (!t) { toast("这个版本没有教学关"); return; }
+  const sides = t.sides || [];
+  startModule(t.path, sides[0] ? sides[0].id : null);
+});
+
 function renderTop() {
+  try { Tutorial.maybeStart(); } catch (e) {}
   try {
     const el = document.getElementById("plan");
     if (el && S && S.situation) {
@@ -2530,6 +2642,7 @@ function renderMap() {
         }
         selUnit = u.index;
         curProv = p.id;
+        try { Tutorial.note("select"); } catch (e) {}
         nodeProv = null; // 侧栏跟回"我的部队所在省"
         if (S && S.direct) {
           openOrderBar(u);
@@ -2910,6 +3023,7 @@ async function refreshTelegrams() {
 }
 
 async function sendTelegram() {
+  try { Tutorial.note("telegram"); } catch (e) {}
   const to = $("dp-to").value;
   const text = $("dp-text").value.trim();
   if (!text) { toast("电报内容不能为空"); return; }
@@ -2943,6 +3057,7 @@ function mailItems() {
 }
 
 function openMail() {
+  try { Tutorial.note("mail"); } catch (e) {}
   const m = $("mail");
   if (!m) return;
   // 默认筛选是"重要"，可开局那几天常常一条都不沾——打开信箱看到一片空白，
@@ -3542,6 +3657,7 @@ bind("ob-close", "click", () => {
 bind("modes", "click", (e) => {  const b = e.target.closest(".mode");
   if (!b) return;
   view = b.dataset.view;
+  try { if (view === "supply") Tutorial.note("supply"); } catch (e) {}
   document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("on", x === b));
   paintHypsLegend();
   render();
@@ -4506,6 +4622,7 @@ const Situation = (() => {
 // 告警因此搬到推进之后的「要闻」里（这一天打完了，这里有三件事要你看），
 // 推进路径上现在一个弹窗都没有。
 function pushOn(kind, days) {
+  try { if (kind === "tick" || kind === "advance") Tutorial.note("advance"); } catch (e) {}
   api(kind === "advance" ? "/api/advance" : "/api/tick", kind === "advance" ? {} : { days });
 }
 
@@ -4859,6 +4976,9 @@ const Home = (() => {
         if (sj.error) { toast(sj.error); return; }
         S = sj;
       }
+      // 记下当前模块的路径：页面转屏/重载后靠它判断"这是不是教学关"。
+      try { sessionStorage.setItem("im_module", path); } catch (e) {}
+      try { Tutorial.maybeStart(); } catch (e) {}
       DEV_GEN = null;   // 同上：图我们自己换了，别让轮询再换一次
       GEO = null;
       BASEMAP = null;

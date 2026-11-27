@@ -1,0 +1,76 @@
+{
+  "units": [
+    {
+      "id": "north.1",
+      "name": "第1团",
+      "side": "north",
+      "kind": "infantry",
+      "strength": 6.0,
+      "position": 1,
+      "effectiveness": 1.0,
+      "supply_reach": 0.1,
+      "commander": {
+        "name": "第一团长",
+        "obedience": 0.9,
+        "initiative": 0.4,
+        "aggression": 0.6,
+        "caution": 0.5
+      },
+      "note": "先动它：这是教程里你要指挥的第一支部队"
+    },
+    {
+      "id": "north.2",
+      "name": "第2团",
+      "side": "north",
+      "kind": "infantry",
+      "strength": 5.0,
+      "position": 1,
+      "effectiveness": 0.95,
+      "supply_reach": 0.1,
+      "commander": {
+        "name": "第二团长",
+        "obedience": 0.85,
+        "initiative": 0.5,
+        "aggression": 0.5,
+        "caution": 0.6
+      },
+      "note": "预备队：同省第二个阵地，可以调兵过去"
+    },
+    {
+      "id": "south.1",
+      "name": "南岸守备队",
+      "side": "south",
+      "kind": "infantry",
+      "strength": 4.0,
+      "position": 2,
+      "effectiveness": 1.0,
+      "supply_reach": 0.1,
+      "commander": {
+        "name": "守备队长",
+        "obedience": 0.8,
+        "initiative": 0.4,
+        "aggression": 0.5,
+        "caution": 0.6
+      },
+      "note": "守着界桥"
+    },
+    {
+      "id": "south.2",
+      "name": "南岸预备队",
+      "side": "south",
+      "kind": "infantry",
+      "strength": 3.0,
+      "position": 3,
+      "effectiveness": 1.0,
+      "supply_reach": 0.1,
+      "commander": {
+        "name": "预备队长",
+        "obedience": 0.8,
+        "initiative": 0.4,
+        "aggression": 0.5,
+        "caution": 0.6
+      },
+      "note": "南岸桥头"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": "org.ironmind.tutorial",
+  "name": "教程 · 三分钟学会下命令",
+  "version": "0.1.0",
+  "author": "iron-mind",
+  "description": "教学关：一条铁路、一座桥、两支敌军。跟着屏幕上的提示走完五步，就学会了这个游戏的全部循环 —— 看态势、下命令、推进一天、读战报。不是史实场景。",
+  "engine": {
+    "min": "1.7.0"
+  },
+  "content_schema": 1,
+  "sides": [
+    {
+      "id": "north",
+      "name": "北岸"
+    },
+    {
+      "id": "south",
+      "name": "南岸"
+    }
+  ],
+  "playable_side": "north",
+  "scale": "siege",
+  "domains": [
+    "land"
+  ]
+}
