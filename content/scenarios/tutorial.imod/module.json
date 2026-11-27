@@ -1,9 +1,9 @@
 {
   "id": "org.ironmind.tutorial",
-  "name": "教程 · 三分钟学会下命令",
-  "version": "0.1.0",
+  "name": "教程 · 一条铁路、一条江",
+  "version": "0.2.0",
   "author": "iron-mind",
-  "description": "教学关：一条铁路、一座桥、两支敌军。跟着屏幕上的提示走完五步，就学会了这个游戏的全部循环 —— 看态势、下命令、推进一天、读战报。不是史实场景。",
+  "description": "教学关：铁路、车站、机场、江面、港口都在一张小图上。跟着屏幕左下角的卡片走十步，就把三军和后勤的规矩过一遍。不是史实场景。",
   "engine": {
     "min": "1.7.0"
   },
@@ -19,8 +19,10 @@
     }
   ],
   "playable_side": "north",
-  "scale": "siege",
+  "scale": "battle",
   "domains": [
-    "land"
+    "land",
+    "naval",
+    "air"
   ]
 }

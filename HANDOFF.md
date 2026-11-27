@@ -401,13 +401,20 @@ content/scenarios/
 
 ### 教学关（玩家不该先读手册）
 
-`content/scenarios/tutorial.imod`（5 省 / 4 部队）+ 页面里的 `Tutorial` 步骤机。
+`content/scenarios/tutorial.imod`（8 省 / 7 部队，含江面、两个港口、两个机场、
+一支舰队）+ 页面里的 `Tutorial` 步骤机，共 **10 步**：选部队 / 发电报 / 推进 /
+读战报 / 补给视图 / 阵地（右键省）/ 空军 / 海军 / 情报视图 / 收尾。
 
 - **按真实操作推进**：`select`（点兵牌）/ `telegram`（发电报）/ `advance`（推进一天）/
   `mail`（开信箱）/ `supply`（切补给视图）。钩子挂在**动作**上，不是挂在省份坐标上 ——
   换一张教学地图照样能用。
-- 五处钩子：部队点击、`sendTelegram()` 开头、`pushOn()` 判断 tick/advance、
-  `openMail()` 开头、`.mode` 点击里判断 `view === "supply"`。
+- 钩子：部队点击（地面/`kind_code===2` 空军/`===3` 海军）、`sendTelegram()` 开头、
+  `pushOn()` 判断 tick/advance、`openMail()` 开头、`.mode` 点击里判断
+  `view === "supply"|"intel"`、省份右键（`nodeProv` 赋值处）→ 阵地。
+- **首页「教程」点不动那个 bug**：`startModule` 是 `Home` 内部的函数，不是全局；
+  在 async 回调里直接调它抛 `ReferenceError`，只会变成 unhandled rejection，
+  连 `window.onerror` 都不触发 —— 表现就是"点了没反应"。改成 `Home.startModule`，
+  并套 try/catch 把错误显示成 toast。
 - 激活：`startModule()` 把模块路径写进 `sessionStorage.im_module`，`renderTop()` 每次
   调 `Tutorial.maybeStart()`。走 sessionStorage 是因为**转屏会重载页面**，内存变量会丢。
 - 卡片贴左下角、可「跳过」；最后一步给「完成，回首页」。首页菜单「教程 · 三分钟」。

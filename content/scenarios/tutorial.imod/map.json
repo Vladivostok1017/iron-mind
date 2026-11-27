@@ -1,25 +1,28 @@
 {
   "projection": "wgs84",
   "bbox": [
-    118.05,
-    30.65,
-    118.4,
+    118.02,
+    30.64,
+    118.42,
     30.9
   ],
   "provinces": [
     {
       "id": 0,
       "name": "北岸车站",
-      "terrain": "plain",
+      "terrain": "urban",
       "owner": "north",
       "neighbors": [
-        1
+        1,
+        5
       ],
       "supply_source": true,
       "supply_throughput": 1,
       "rail": true,
+      "airbase": true,
+      "port": false,
       "fort": 1,
-      "lon": 118.1,
+      "lon": 118.08,
       "lat": 30.86,
       "station": "北岸站",
       "positions": [
@@ -30,7 +33,7 @@
           "fort": 1
         }
       ],
-      "note": "你的补给源：铁路从这里出发"
+      "note": "你的补给源 + 车站 + 机场，都在这儿"
     },
     {
       "id": 1,
@@ -44,9 +47,11 @@
       "supply_source": false,
       "supply_throughput": 1,
       "rail": true,
+      "airbase": false,
+      "port": false,
       "fort": 2,
-      "lon": 118.18,
-      "lat": 30.82,
+      "lon": 118.16,
+      "lat": 30.83,
       "positions": [
         {
           "name": "桥头堡",
@@ -61,12 +66,12 @@
           "fort": 1
         }
       ],
-      "note": "你的两个团在这里。点兵牌试试"
+      "note": "两个团在这里；两个阵地可以分别驻兵"
     },
     {
       "id": 2,
       "name": "界桥",
-      "terrain": "plain",
+      "terrain": "urban",
       "owner": "south",
       "neighbors": [
         1,
@@ -75,9 +80,11 @@
       "supply_source": false,
       "supply_throughput": 1,
       "rail": true,
+      "airbase": false,
+      "port": false,
       "fort": 1,
-      "lon": 118.24,
-      "lat": 30.78,
+      "lon": 118.23,
+      "lat": 30.79,
       "positions": [
         {
           "name": "桥面",
@@ -92,7 +99,7 @@
           "fort": 1
         }
       ],
-      "note": "敌军守在这里。桥面很窄（30%）：塞不下两个团"
+      "note": "敌军守着；桥面只有 30% 展开宽度，塞不下两个团"
     },
     {
       "id": 3,
@@ -106,9 +113,11 @@
       "supply_source": false,
       "supply_throughput": 1,
       "rail": true,
+      "airbase": false,
+      "port": false,
       "fort": 1,
       "lon": 118.3,
-      "lat": 30.74,
+      "lat": 30.75,
       "positions": [
         {
           "name": "南岸阵地",
@@ -122,17 +131,20 @@
     {
       "id": 4,
       "name": "南岸车站",
-      "terrain": "plain",
+      "terrain": "urban",
       "owner": "south",
       "neighbors": [
-        3
+        3,
+        7
       ],
       "supply_source": true,
       "supply_throughput": 1,
       "rail": true,
+      "airbase": true,
+      "port": false,
       "fort": 0,
       "lon": 118.36,
-      "lat": 30.7,
+      "lat": 30.71,
       "station": "南岸站",
       "positions": [
         {
@@ -143,6 +155,79 @@
         }
       ],
       "note": "敌军的补给源：打掉它，对面就断粮"
+    },
+    {
+      "id": 5,
+      "name": "江北码头",
+      "terrain": "urban",
+      "owner": "north",
+      "neighbors": [
+        0,
+        6
+      ],
+      "supply_source": false,
+      "supply_throughput": 1,
+      "rail": false,
+      "airbase": false,
+      "port": true,
+      "fort": 0,
+      "lon": 118.06,
+      "lat": 30.72,
+      "positions": [
+        {
+          "name": "码头",
+          "terrain": "urban",
+          "width": 0.7,
+          "fort": 1
+        }
+      ],
+      "note": "你的港口：海运在这里装船"
+    },
+    {
+      "id": 6,
+      "name": "江面",
+      "terrain": "water",
+      "owner": "north",
+      "neighbors": [
+        5,
+        7
+      ],
+      "supply_source": false,
+      "supply_throughput": 1,
+      "rail": false,
+      "airbase": false,
+      "port": false,
+      "fort": 0,
+      "lon": 118.16,
+      "lat": 30.7,
+      "note": "只有海军能进；在这里可以封锁对岸的海运"
+    },
+    {
+      "id": 7,
+      "name": "江南码头",
+      "terrain": "urban",
+      "owner": "south",
+      "neighbors": [
+        4,
+        6
+      ],
+      "supply_source": false,
+      "supply_throughput": 1,
+      "rail": false,
+      "airbase": false,
+      "port": true,
+      "fort": 0,
+      "lon": 118.28,
+      "lat": 30.69,
+      "positions": [
+        {
+          "name": "码头",
+          "terrain": "urban",
+          "width": 0.7,
+          "fort": 0
+        }
+      ],
+      "note": "敌军的港口：被封锁就从海运断粮"
     }
   ]
 }

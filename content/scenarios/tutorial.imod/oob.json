@@ -16,7 +16,7 @@
         "aggression": 0.6,
         "caution": 0.5
       },
-      "note": "先动它：这是教程里你要指挥的第一支部队"
+      "note": "先指挥它"
     },
     {
       "id": "north.2",
@@ -34,7 +34,43 @@
         "aggression": 0.5,
         "caution": 0.6
       },
-      "note": "预备队：同省第二个阵地，可以调兵过去"
+      "note": "预备队：可以调到另一个阵地"
+    },
+    {
+      "id": "north.air",
+      "name": "北岸飞行队",
+      "side": "north",
+      "kind": "air",
+      "strength": 2.0,
+      "position": 0,
+      "effectiveness": 1.0,
+      "recon_radius": 3,
+      "strike_power": 0.2,
+      "commander": {
+        "name": "飞行队长",
+        "obedience": 0.85,
+        "initiative": 0.6,
+        "aggression": 0.6,
+        "caution": 0.4
+      },
+      "note": "牌子写「机」：只能侦察或出击，不占省"
+    },
+    {
+      "id": "north.fleet",
+      "name": "江防艇队",
+      "side": "north",
+      "kind": "naval",
+      "strength": 3.0,
+      "position": 6,
+      "effectiveness": 1.0,
+      "commander": {
+        "name": "艇队长",
+        "obedience": 0.85,
+        "initiative": 0.5,
+        "aggression": 0.5,
+        "caution": 0.6
+      },
+      "note": "牌子写「舰」：只能待在水面"
     },
     {
       "id": "south.1",
@@ -71,6 +107,25 @@
         "caution": 0.6
       },
       "note": "南岸桥头"
+    },
+    {
+      "id": "south.air",
+      "name": "南岸飞行队",
+      "side": "south",
+      "kind": "air",
+      "strength": 2.0,
+      "position": 4,
+      "effectiveness": 1.0,
+      "recon_radius": 3,
+      "strike_power": 0.2,
+      "commander": {
+        "name": "南岸飞行队长",
+        "obedience": 0.8,
+        "initiative": 0.6,
+        "aggression": 0.6,
+        "caution": 0.4
+      },
+      "note": "从南岸站起飞"
     }
   ]
 }

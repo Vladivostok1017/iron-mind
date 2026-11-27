@@ -1776,12 +1776,26 @@ function render() {
 // 切了补给视图），不按时间、也不硬编码坐标 —— 换一张教学地图照样能用。
 const Tutorial = (() => {
   const STEPS = [
-    { k: "select", t: "点一下你的兵牌", d: "地图上蓝色的「兵」就是你的部队。点它，能看到详情和当前命令。" },
-    { k: "telegram", t: "在右侧电报台发一句命令", d: "写给「第1团」，人话就行 —— 比如「推进到界桥」。将领按自己的理解执行，可能打折扣。" },
-    { k: "advance", t: "点底部「推进 1 日」", d: "一天一天过。命令不是立刻生效的，传令要时间。" },
-    { k: "mail", t: "打开战报信箱", d: "谁打了、打掉多少、谁抗命了，都在这里。战斗结果不由你亲眼看见，只由报告告诉你。" },
-    { k: "supply", t: "切到「补给」视图", d: "看补给怎么从北岸车站沿铁路流到桥头。铁路断了，前方几天就撑不住了。" },
-    { k: "done", t: "学会了", d: "循环就是这四步：看态势 → 下命令 → 推进一天 → 读战报。剩下的去正片里打。" },
+    { k: "select", t: "点一下你的兵牌",
+      d: "地图上蓝色的「兵」是你的地面部队。点它，能看到兵力、士气、补给和当前命令。" },
+    { k: "telegram", t: "在右侧电报台给第1团发一句人话",
+      d: "写「推进到界桥」就行。你不是在点按钮，你是在下命令——将领按自己的理解执行，可能打折扣、可能抗命。" },
+    { k: "advance", t: "点底部「推进 1 日」",
+      d: "一天一天过。命令不是立刻生效的，传令要时间。看顶栏的「战报 N 份在途」——那是还在路上的消息。" },
+    { k: "mail", t: "打开战报信箱",
+      d: "谁打了、打掉多少、谁抗命了，全在这儿。你不是上帝视角，只能从报告里知道战场。" },
+    { k: "supply", t: "切到「补给」视图",
+      d: "补给从「北岸车站」出发，沿铁路一站一站往前推：车站会把补给重新装载回 0.9。铁路被炸断，靠它转运的补给会一起塌。" },
+    { k: "positions", t: "右键点一下「北岸桥头」",
+      d: "一个省可以有好几个阵地。这一省有「桥头堡」和「北岸高地」；阵地的展开宽度决定能站几个团——界桥的桥面只有 30%，两个团挤不进去。" },
+    { k: "air", t: "点一下空军的牌子（写着「机」）",
+      d: "空军不占省、不会走路，只有两条命令：侦察（只出情报、不损耗）和出击（投弹，会损耗飞机）。它还能炸铁路——炸断一段，车站转运全废。" },
+    { k: "naval", t: "点一下舰队的牌子（写着「舰」）",
+      d: "舰队只能待在水面（江面那块）。它的作用是「封锁」：掐断对岸港口的海运补给；沿岸的仗它还能给舰炮支援。" },
+    { k: "intel", t: "切到「情报」视图",
+      d: "敌情有三档：精确、近似（±40%）、未知。番号要**接触两次**才认得出，情报超过 3 天就标「已过期」。数字是打听到的，不是真的。" },
+    { k: "done", t: "学会了",
+      d: "整个游戏就是这四步循环：看态势 → 下命令 → 推进一天 → 读战报。去正片里打一场真的。" },
   ];
   let step = -1;
   let active = false;
@@ -1840,11 +1854,18 @@ const Tutorial = (() => {
 bind("tut-skip", "click", () => Tutorial.stop());
 bind("tut-next", "click", () => { Tutorial.stop(); Home.show(); });
 bind("hm-tutorial", "click", async () => {
-  const m = await listModules();
-  const t = (m.mods || []).find((x) => /tutorial\.imod$/i.test(x.path || ""));
-  if (!t) { toast("这个版本没有教学关"); return; }
-  const sides = t.sides || [];
-  startModule(t.path, sides[0] ? sides[0].id : null);
+  // `startModule` 是 Home 内部的函数（不是全局），必须走 Home.startModule。
+  // 之前直接调 `startModule(...)` 抛 ReferenceError，而它在 async 回调里 →
+  // 只生成一个 unhandled rejection，连 window.onerror 都不触发，表现就是"点了没反应"。
+  try {
+    const m = await listModules();
+    const t = (m.mods || []).find((x) => /tutorial\.imod$/i.test(x.path || ""));
+    if (!t) { toast("这个版本没有教学关"); return; }
+    const sides = t.sides || [];
+    await Home.startModule(t.path, sides[0] ? sides[0].id : null);
+  } catch (e) {
+    toast("教学关打不开：" + e);
+  }
 });
 
 function renderTop() {
@@ -2304,6 +2325,7 @@ function renderMap() {
       ev.preventDefault();
       ev.stopPropagation();
       nodeProv = p.id;
+      try { Tutorial.note("positions"); } catch (e) {}
       hideTip();
       render();
       const n = (p.positions || []).length;
@@ -2642,7 +2664,11 @@ function renderMap() {
         }
         selUnit = u.index;
         curProv = p.id;
-        try { Tutorial.note("select"); } catch (e) {}
+        try {
+          Tutorial.note("select");
+          if (u.kind_code === 2) Tutorial.note("air");
+          if (u.kind_code === 3) Tutorial.note("naval");
+        } catch (e) {}
         nodeProv = null; // 侧栏跟回"我的部队所在省"
         if (S && S.direct) {
           openOrderBar(u);
@@ -3657,7 +3683,10 @@ bind("ob-close", "click", () => {
 bind("modes", "click", (e) => {  const b = e.target.closest(".mode");
   if (!b) return;
   view = b.dataset.view;
-  try { if (view === "supply") Tutorial.note("supply"); } catch (e) {}
+  try {
+    if (view === "supply") Tutorial.note("supply");
+    if (view === "intel") Tutorial.note("intel");
+  } catch (e) {}
   document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("on", x === b));
   paintHypsLegend();
   render();
