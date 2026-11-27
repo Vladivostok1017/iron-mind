@@ -1,0 +1,316 @@
+{
+  "projection": "wgs84",
+  "bbox": [
+    117.95,
+    30.55,
+    118.45,
+    30.95
+  ],
+  "provinces": [
+    {
+      "id": 0,
+      "name": "北站",
+      "terrain": "urban",
+      "owner": "north",
+      "neighbors": [
+        1,
+        5
+      ],
+      "lon": 118.05,
+      "lat": 30.86,
+      "supply_source": true,
+      "rail": true,
+      "station": "北站",
+      "airbase": true,
+      "fort": 2,
+      "positions": [
+        {
+          "name": "站前广场",
+          "terrain": "urban",
+          "width": 0.5,
+          "fort": 2
+        },
+        {
+          "name": "货场东口",
+          "terrain": "plain",
+          "width": 0.3,
+          "fort": 1
+        },
+        {
+          "name": "机库区",
+          "terrain": "plain",
+          "width": 0.2,
+          "fort": 0
+        }
+      ],
+      "note": "北岸的铁路枢纽：车站 + 机场 + 补给源都在这里",
+      "supply_throughput": 1,
+      "port": false
+    },
+    {
+      "id": 1,
+      "name": "货场",
+      "terrain": "plain",
+      "owner": "north",
+      "neighbors": [
+        0,
+        2
+      ],
+      "lon": 118.15,
+      "lat": 30.85,
+      "rail": true,
+      "station": "货场站",
+      "positions": [
+        {
+          "name": "卸货线",
+          "terrain": "plain",
+          "width": 0.6,
+          "fort": 1
+        },
+        {
+          "name": "编组场",
+          "terrain": "plain",
+          "width": 0.4,
+          "fort": 0
+        }
+      ],
+      "note": "第二个车站：补给在这里重新装载，能一站一站往前推",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "airbase": false,
+      "port": false,
+      "fort": 0
+    },
+    {
+      "id": 2,
+      "name": "桥北",
+      "terrain": "plain",
+      "owner": "north",
+      "neighbors": [
+        1,
+        3
+      ],
+      "lon": 118.25,
+      "lat": 30.8,
+      "rail": true,
+      "fort": 3,
+      "positions": [
+        {
+          "name": "桥头堡",
+          "terrain": "urban",
+          "width": 0.4,
+          "fort": 3
+        },
+        {
+          "name": "北引桥",
+          "terrain": "plain",
+          "width": 0.6,
+          "fort": 1
+        }
+      ],
+      "note": "窄阵地（0.4）：展开不下太多兵，多的只能当预备队",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "airbase": false,
+      "port": false
+    },
+    {
+      "id": 3,
+      "name": "桥南",
+      "terrain": "plain",
+      "owner": "south",
+      "neighbors": [
+        2,
+        4
+      ],
+      "lon": 118.25,
+      "lat": 30.69,
+      "rail": true,
+      "fort": 2,
+      "positions": [
+        {
+          "name": "南桥头",
+          "terrain": "urban",
+          "width": 0.4,
+          "fort": 2
+        },
+        {
+          "name": "南引桥",
+          "terrain": "plain",
+          "width": 0.6,
+          "fort": 0
+        }
+      ],
+      "note": "对面就是桥北：谁站住桥头，谁就卡住这条铁路",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "airbase": false,
+      "port": false
+    },
+    {
+      "id": 4,
+      "name": "南站",
+      "terrain": "urban",
+      "owner": "south",
+      "neighbors": [
+        3,
+        7,
+        9
+      ],
+      "lon": 118.3,
+      "lat": 30.64,
+      "supply_source": true,
+      "rail": true,
+      "station": "南站",
+      "airbase": true,
+      "fort": 2,
+      "positions": [
+        {
+          "name": "站台",
+          "terrain": "urban",
+          "width": 0.5,
+          "fort": 2
+        },
+        {
+          "name": "机库",
+          "terrain": "plain",
+          "width": 0.5,
+          "fort": 0
+        }
+      ],
+      "note": "南岸的枢纽：车站 + 机场 + 补给源",
+      "supply_throughput": 1,
+      "port": false
+    },
+    {
+      "id": 5,
+      "name": "江北码头",
+      "terrain": "plain",
+      "owner": "north",
+      "neighbors": [
+        0,
+        6
+      ],
+      "lon": 118.06,
+      "lat": 30.74,
+      "port": true,
+      "positions": [
+        {
+          "name": "码头",
+          "terrain": "urban",
+          "width": 0.5,
+          "fort": 1
+        },
+        {
+          "name": "仓栈",
+          "terrain": "plain",
+          "width": 0.5,
+          "fort": 0
+        }
+      ],
+      "note": "港口：海运在这里装船，进水道的补给损耗更小",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "rail": false,
+      "airbase": false,
+      "fort": 0
+    },
+    {
+      "id": 6,
+      "name": "江心水面",
+      "terrain": "water",
+      "owner": "north",
+      "neighbors": [
+        5,
+        7,
+        8
+      ],
+      "lon": 118.16,
+      "lat": 30.73,
+      "note": "两支舰队都能进这片水：谁带「封锁」命令，谁就掐断对岸的海运",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "rail": false,
+      "airbase": false,
+      "port": false,
+      "fort": 0
+    },
+    {
+      "id": 7,
+      "name": "江南码头",
+      "terrain": "plain",
+      "owner": "south",
+      "neighbors": [
+        4,
+        6
+      ],
+      "lon": 118.26,
+      "lat": 30.72,
+      "port": true,
+      "positions": [
+        {
+          "name": "码头",
+          "terrain": "urban",
+          "width": 0.5,
+          "fort": 1
+        },
+        {
+          "name": "仓栈",
+          "terrain": "plain",
+          "width": 0.5,
+          "fort": 0
+        }
+      ],
+      "note": "南岸的港口",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "rail": false,
+      "airbase": false,
+      "fort": 0
+    },
+    {
+      "id": 8,
+      "name": "上游水面",
+      "terrain": "water",
+      "owner": "south",
+      "neighbors": [
+        6
+      ],
+      "lon": 118.34,
+      "lat": 30.74,
+      "note": "上游：另一支舰队泊在这里",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "rail": false,
+      "airbase": false,
+      "port": false,
+      "fort": 0
+    },
+    {
+      "id": 9,
+      "name": "南岸腹地",
+      "terrain": "plain",
+      "owner": "south",
+      "neighbors": [
+        4
+      ],
+      "lon": 118.36,
+      "lat": 30.66,
+      "positions": [
+        {
+          "name": "村庄",
+          "terrain": "plain",
+          "width": 1.0,
+          "fort": 0
+        }
+      ],
+      "note": "单阵地省：对照用",
+      "supply_throughput": 1,
+      "supply_source": false,
+      "rail": false,
+      "airbase": false,
+      "port": false,
+      "fort": 0
+    }
+  ]
+}

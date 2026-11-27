@@ -1,0 +1,14 @@
+{
+  "id": "scen.demo_nodes",
+  "name": "枢纽与水面",
+  "start_date": "1938-08-01",
+  "days": 40,
+  "seed": 20261127,
+  "comms": {
+    "preset": "telegraph"
+  },
+  "preview": {
+    "rail_damage": true,
+    "front_line": true
+  }
+}

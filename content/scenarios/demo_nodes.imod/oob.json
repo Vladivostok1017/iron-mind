@@ -1,0 +1,148 @@
+{
+  "units": [
+    {
+      "id": "north.garrison",
+      "name": "北岸守备营",
+      "side": "north",
+      "kind": "infantry",
+      "strength": 6.0,
+      "position": 2,
+      "effectiveness": 1.0,
+      "supply_reach": 0.05,
+      "commander": {
+        "name": "北岸守备营长",
+        "obedience": 0.85,
+        "initiative": 0.4,
+        "aggression": 0.5,
+        "caution": 0.7
+      },
+      "note": "守在桥头堡（窄阵地 0.4）"
+    },
+    {
+      "id": "north.depot",
+      "name": "货场警备队",
+      "side": "north",
+      "kind": "infantry",
+      "strength": 4.0,
+      "position": 1,
+      "effectiveness": 0.9,
+      "supply_reach": 0.1,
+      "commander": {
+        "name": "警备队长",
+        "obedience": 0.9,
+        "initiative": 0.3,
+        "aggression": 0.4,
+        "caution": 0.6
+      },
+      "note": "看仓库的"
+    },
+    {
+      "id": "north.air",
+      "name": "北岸飞行队",
+      "side": "north",
+      "kind": "air",
+      "strength": 2.0,
+      "position": 0,
+      "effectiveness": 1.0,
+      "recon_radius": 3,
+      "strike_power": 0.25,
+      "commander": {
+        "name": "飞行队长",
+        "obedience": 0.8,
+        "initiative": 0.6,
+        "aggression": 0.7,
+        "caution": 0.4
+      },
+      "note": "从北站机场起飞；试试「侦察」与「出击」两条命令"
+    },
+    {
+      "id": "north.fleet",
+      "name": "江防舰队",
+      "side": "north",
+      "kind": "naval",
+      "strength": 4.0,
+      "position": 6,
+      "effectiveness": 1.0,
+      "commander": {
+        "name": "江防司令",
+        "obedience": 0.85,
+        "initiative": 0.5,
+        "aggression": 0.5,
+        "caution": 0.6
+      },
+      "note": "停在江心水面：带「封锁」命令就能掐断南岸的海运"
+    },
+    {
+      "id": "south.assault",
+      "name": "南岸突击团",
+      "side": "south",
+      "kind": "infantry",
+      "strength": 7.0,
+      "position": 3,
+      "effectiveness": 1.1,
+      "supply_reach": 0.05,
+      "commander": {
+        "name": "突击团长",
+        "obedience": 0.7,
+        "initiative": 0.8,
+        "aggression": 0.9,
+        "caution": 0.3
+      },
+      "note": "主力，顶在桥南"
+    },
+    {
+      "id": "south.guard",
+      "name": "南站守备连",
+      "side": "south",
+      "kind": "infantry",
+      "strength": 3.5,
+      "position": 4,
+      "effectiveness": 0.9,
+      "supply_reach": 0.1,
+      "commander": {
+        "name": "守备连长",
+        "obedience": 0.9,
+        "initiative": 0.3,
+        "aggression": 0.4,
+        "caution": 0.7
+      },
+      "note": "守南站"
+    },
+    {
+      "id": "south.air",
+      "name": "南岸飞行队",
+      "side": "south",
+      "kind": "air",
+      "strength": 2.0,
+      "position": 4,
+      "effectiveness": 1.0,
+      "recon_radius": 3,
+      "strike_power": 0.25,
+      "commander": {
+        "name": "南岸飞行队长",
+        "obedience": 0.8,
+        "initiative": 0.6,
+        "aggression": 0.7,
+        "caution": 0.4
+      },
+      "note": "从南站机场起飞"
+    },
+    {
+      "id": "south.gunboat",
+      "name": "上游炮艇队",
+      "side": "south",
+      "kind": "naval",
+      "strength": 3.0,
+      "position": 8,
+      "effectiveness": 1.0,
+      "commander": {
+        "name": "炮艇队长",
+        "obedience": 0.8,
+        "initiative": 0.5,
+        "aggression": 0.6,
+        "caution": 0.5
+      },
+      "note": "泊在上游；要到江心才封得住北岸"
+    }
+  ]
+}

@@ -323,18 +323,23 @@
      远看就是灰白交替的一条线。以前是一条暖色虚线，看着像"小路"而不是干线。 */
   /* 铁路（照高德/OSM 那种画法）：**深色底轨 + 白色短刻度**。
      之前做成"白底 + 深色枕木"是反的 —— 真实地图上白的是刻度、底是深色。 */
-  .rail .railbed { stroke: #0a0f15; stroke-width: 6.4; stroke-linecap: round; opacity: .5; }
+  /* 外圈只留一层很淡的投影：深色描边会在深色地图上像"把省切开"。 */
+  .rail .railbed { stroke: #05090d; stroke-width: 5.2; stroke-linecap: round; opacity: .28; }
   /* 底轨要比白刻度**明显宽**：这样白段是"嵌在暗带里"的刻度，
      而不是"白虚线"。宽度差不够时，远看就只是一条虚线。 */
-  .rail .rails { stroke: #2f363f; stroke-width: 4.4; stroke-linecap: butt; }
+  /* 轨带用**浅灰**：深色地图上一条近黑的线会像把图切开。
+     浅灰轨带 + 中灰刻度 = "一段浅、一段深"，远看是铁轨而不是色块。 */
+  .rail .rails { stroke: #cbd3dd; stroke-width: 3.4; stroke-linecap: butt; }
   /* 白色刻度：短实线 + 较长的空，沿线条均匀排开，远看就是"缝合线"那种铁轨 */
-  .rail .sleepers { stroke: #dde4ec; stroke-width: 2.4; stroke-dasharray: 8 9; stroke-linecap: butt; }
+  /* 白刻度要**短于**灰段（5 实 / 10 空）：白段一长，整条线就读成"白虚线"了。
+     真实的铁路图是暗带为主、白刻度为辅。 */
+  .rail .sleepers { stroke: #5b6572; stroke-width: 3.4; stroke-dasharray: 4 6; stroke-linecap: butt; }
   /* 预览版铁路被炸：坏一段变橙、断了变红并拉开间隔 */
   /* 被炸：线还在，但颜色转橙；炸断（3 级）：轨面转红、枕木断成点，表示这段不通了 */
-  .rail .rails.hurt { stroke: #b87333; }
-  .rail .sleepers.hurt { stroke: #f6d9a8; }
-  .rail .rails.cut { stroke: #8e2f24; }
-  .rail .sleepers.cut { stroke: #d0503e; stroke-width: 1.6; stroke-dasharray: 1 8; }
+  .rail .rails.hurt { stroke: #d8a86a; }
+  .rail .sleepers.hurt { stroke: #8a5a20; }
+  .rail .rails.cut { stroke: #a5453a; }
+  .rail .sleepers.cut { stroke: #d97b6a; stroke-dasharray: 1 8; }
   /* 机场/港口：带字的方牌。比图案好认，也不用赌字体里有没有那个符号。 */
   #map .node-badge { stroke-width: 1; }
   #map .node-badge.air { fill: #16222c; stroke: #7fb2d8; }

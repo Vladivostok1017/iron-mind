@@ -1,0 +1,28 @@
+{
+  "id": "org.ironmind.demo_nodes",
+  "name": "演示 · 枢纽与水面",
+  "version": "0.1.0",
+  "author": "iron-mind",
+  "description": "一个专门演示后勤与空海机制的极小模块：铁路 + 两个车站、双方各一个机场、两个港口、一条可封锁的江面、多个多阵地省。不是史实场景——城名、部队番号都是编的，只为让你在地图上把这些东西看清楚。",
+  "engine": {
+    "min": "1.6.0"
+  },
+  "content_schema": 1,
+  "sides": [
+    {
+      "id": "north",
+      "name": "北岸守备军"
+    },
+    {
+      "id": "south",
+      "name": "南岸集群"
+    }
+  ],
+  "playable_side": "north",
+  "scale": "battle",
+  "domains": [
+    "land",
+    "naval",
+    "air"
+  ]
+}
