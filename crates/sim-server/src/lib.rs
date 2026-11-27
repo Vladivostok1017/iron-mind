@@ -4059,6 +4059,9 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
                     "commit_pct": (u.committed.to_display_f64() * 100.0).round() as i64,
                     "disobeyed": u.disobeyed,
                     "node": u.node,
+                    // 所在的省：指令栏要用它查"本省有哪几个阵地"。
+                    // 部队是嵌在省下面发的，但指令栏拿到的是单个 unit 对象。
+                    "position": u.position,
                     "formation": u.formation,
                     // 编制状态：覆灭日、将领结局、整编日。
                     // 前端要能说清"这支部队已经没了 / 主官殉国 / 还有 12 天重建"。

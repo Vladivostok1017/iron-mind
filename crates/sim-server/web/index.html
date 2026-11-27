@@ -995,6 +995,9 @@
       <button class="ob-x" id="ob-close" title="收走">×</button>
     </div>
     <div class="ob-row" id="ob-tempo"></div>
+    <!-- 阵地：亲自指挥下"最小操作单位"其实是阵地，不是省。
+         换阵地不耗天数，但决定了这个省能展开多少兵（capacity = width × 40）。 -->
+    <div class="ob-row" id="ob-nodes"></div>
     <div class="ob-row" id="ob-verbs"></div>
   </div>
 
@@ -1805,6 +1808,8 @@ function renderMap() {
     }
 
     const g = el("g", { class: "prov" + (selUnit !== null && curProv === p.id ? " sel" : ""), "data-prov": p.id }, svg);
+    // 阵地名/宽度这两行要进置顶图层（否则被兵牌和铁路压住）
+    const posLabels = [];
 
     el("path", {
       d: ptsToPath(poly),
@@ -1846,13 +1851,18 @@ function renderMap() {
         }
         const here = (p.units || []).filter((u) => (u.node || 0) === i);
         const cx = bx0 + (i + 0.5) * bandW;
-        el("text", { x: cx, y: cc[1] + 28, class: "pos-name" }, posG).textContent = pos.name;
-        el("text", { x: cx, y: cc[1] + 37, class: "pos-meta" }, posG).textContent =
-          Math.round((pos.width || 1) * 100) + "%" +
+        // 这两行要进**置顶图层**：留在省图层里会被兵牌和铁路压住
+        const pn = el("text", { x: cx, y: cc[1] + 28, class: "pos-name" }, posG);
+        pn.textContent = pos.name;
+        const pm = el("text", { x: cx, y: cc[1] + 37, class: "pos-meta" }, posG);
+        pm.textContent = Math.round((pos.width || 1) * 100) + "%" +
           (pos.fort ? "·砦" + pos.fort : "") +
           (here.length ? " ·" + here.length + "支" : "");
+        posLabels.push(pn, pm);
       });
     }
+    // 和 `posLabels` 同作用域地收集：画部队的是**另一个循环**，那边够不到它
+    allLabels.push(...posLabels);
 
     // 敌情精度：外描边
     if (!p.mine && p.intel.known) {
@@ -2050,10 +2060,42 @@ function renderMap() {
         cursor += pw[i] + gap;
       }
     });
-    const blockTopY = topRowY - 8;
-    const blockBottomY = topRowY + Math.max(0, rows.length - 1) * rowH + 10;
-    const blockMidY = (blockTopY + blockBottomY) / 2;
-    const blockHalfW = Math.max(14, Math.max(...rows.map(rowW)) / 2);
+    // 如果这个省正显示阵地分格，就把每支部队放回**自己那条带**（竖着叠）——
+    // 分了格、兵还全挤在省中心，等于没分。
+    // 注意：画分格的是**多边形的循环**，这里是**画部队的循环**，两者不共享作用域，
+    // 所以阵地列表要在这里自己取一份（之前用了上一循环的 `poss`，整张图渲染报错）。
+    const possU = p.positions || [];
+    if (rows.length && possU.length > 1 && (nodeProv === p.id || curProv === p.id)) {
+      let bx0 = 1e9, bx1 = -1e9;
+      for (const pt of poly) {
+        if (pt[0] < bx0) bx0 = pt[0];
+        if (pt[0] > bx1) bx1 = pt[0];
+      }
+      const bandW = (bx1 - bx0) / possU.length;
+      spots.length = 0;
+      for (let i = 0; i < possU.length; i++) {
+        const cx = bx0 + (i + 0.5) * bandW;
+        let j = 0;
+        units.forEach((u, k) => {
+          if ((u.node || 0) !== i) return;
+          spots.push({ k, ux: cx, uy: c[1] - 16 - j * rowH });
+          j += 1;
+        });
+      }
+    }
+    // 几何一律从落点反推：两种布局（整块 / 分带）共用同一段交战环代码
+    let blockTopY, blockBottomY, blockMidY, blockHalfW;
+    if (spots.length) {
+      const bxMin = Math.min(...spots.map((x) => x.ux - pw[x.k] / 2));
+      const bxMax = Math.max(...spots.map((x) => x.ux + pw[x.k] / 2));
+      blockTopY = Math.min(...spots.map((x) => x.uy - 7));
+      blockBottomY = Math.max(...spots.map((x) => x.uy + 10));
+      blockMidY = (blockTopY + blockBottomY) / 2;
+      blockHalfW = Math.max(14, (bxMax - bxMin) / 2);
+    } else {
+      blockTopY = c[1] - 24; blockBottomY = c[1] - 6;
+      blockMidY = c[1] - 15; blockHalfW = 14;
+    }
     // 工事标记（砦N）跟着整块走到右上角：固定在质心 +26 的位置会压在兵牌上。
     for (const e of topLabels) {
       if (e.getAttribute("class") === "fortmark") {
@@ -2936,6 +2978,32 @@ function openOrderBar(u) {
     if (v === curCommit) b.className = "on";
     b.onclick = () => { curCommit = v; openOrderBar(u); };
     tp.appendChild(b);
+  }
+  // 阵地行：只有本省拆过阵地（>1 个）才出现
+  const nb = $("ob-nodes");
+  if (nb) {
+    nb.innerHTML = "";
+    const prov = (S.provinces || []).find((x) => x.id === u.position);
+    const poss = (prov && prov.positions) || [];
+    if (poss.length > 1) {
+      nb.style.display = "";
+      poss.forEach((pos, i) => {
+        const b = document.createElement("button");
+        const n = (prov.units || []).filter((x) => (x.node || 0) === i).length;
+        const cur = (u.node || 0) === i;
+        b.textContent = pos.name + (pos.fort ? "·砦" + pos.fort : "") + (n ? " ×" + n : "");
+        b.title = "展开 " + Math.round((pos.width || 1) * 100) + "%，驻扎 " + n + " 支" +
+          (cur ? "（当前在此）" : "（点一下调过来，不耗天数）");
+        if (cur) b.className = "on";
+        b.onclick = () => {
+          api("/api/order", { unit: u.index, kind: "shift", target: i });
+          toast("调兵 → " + pos.name);
+        };
+        nb.appendChild(b);
+      });
+    } else {
+      nb.style.display = "none";
+    }
   }
   const vb = $("ob-verbs");
   vb.innerHTML = "";
