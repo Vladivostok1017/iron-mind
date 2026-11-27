@@ -2085,7 +2085,7 @@ bind("ops-mod-sel", "change", () => {
 bind("mod-sel", "change", async () => {
   const path = $("mod-sel").value;
   if (!path) return;
-  if (S && S.tick > 0 && !confirm("切换模块会重开一局，当前进度不保存。继续？")) {
+  if (S && S.tick > 0 && !(await Dlg.confirm("切换模块会重开一局，当前进度不保存。继续？"))) {
     loadModules();
     return;
   }
@@ -2484,11 +2484,11 @@ function renderOutliner() {
     // 预览版人事：右键撤换主官。放在右键而不是按钮上，是因为撤将是不可逆的，
     // 不该和"看一眼"的左键挨在一起——误点一次就少一个会打仗的人。
     if (fxOn("politics") && !u.ended_day) {
-      d.oncontextmenu = (ev) => {
+      d.oncontextmenu = async (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
         const who = u.commander || "主官";
-        if (!confirm("撤换 " + who + "？\n\n继任者是个听话但平庸的参谋，\n他那一派在朝中的分量会掉一截，这一局他不会回来。")) return;
+        if (!(await Dlg.confirm("撤换 " + who + "？\n\n继任者是个听话但平庸的参谋，\n他那一派在朝中的分量会掉一截，这一局他不会回来。"))) return;
         fetch("/api/personnel", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ unit: u.index, action: "relieve" }),
@@ -3094,14 +3094,41 @@ const Dlg = (() => {
     if (parent) parent.appendChild(e);
     return e;
   }
+  // 关窗时要通知谁：`confirm()` 的 Promise 靠它兜底（用户按 Esc / 点背板关掉）。
+  let onClose = null;
   function close() {
     const d = $("dlg");
     if (!d) return;
     d.classList.remove("on");
     $("dlg-body").replaceChildren();
     $("dlg-foot").replaceChildren();
+    const f = onClose;
+    onClose = null;
+    if (f) f();
     // 关窗之后补弹排队的要闻：请示批完，那一仗的战报不该就此消失。
     try { if (typeof Briefing !== "undefined") Briefing.popup(); } catch (e) {}
+  }
+
+  /// Promise 版 `confirm()`。
+  ///
+  /// 为什么不用原生 `confirm`：它要宿主实现 `WKUIDelegate` 的对话框代理，
+  /// 而 **wry 一个都没实现** —— macOS 上 `confirm()` 恒为 false、`alert()` 无声。
+  /// 表现就是"点了按钮什么都没发生"（换战役、选阵营、撤换将领全中招）。
+  /// WebView2 自带默认对话框，所以 Windows 上一直没暴露。
+  /// 这也是项目本来的方向：docs 里写着"桌面级软件不该用 prompt()"，早把 prompt 换掉了。
+  function confirm(msg) {
+    return new Promise((resolve) => {
+      let answered = false;
+      onClose = () => { if (!answered) resolve(false); };
+      open({
+        title: "确认",
+        body: String(msg).replace(/\\n/g, "<br>"),
+        actions: [
+          { label: "取消" },
+          { label: "继续", primary: true, onClick: () => { answered = true; resolve(true); } },
+        ],
+      });
+    });
   }
   function open(o) {
     $("dlg-title").textContent = o.title || "";
@@ -3126,7 +3153,7 @@ const Dlg = (() => {
       }, 40);
     }
   }
-  return { open, close, h };
+  return { open, close, h, confirm };
 })();
 bind("dlg-x", "click", () => Dlg.close());
 if ($("dlg")) $("dlg").addEventListener("click", (e) => { if (e.target.id === "dlg") Dlg.close(); });
@@ -3780,6 +3807,18 @@ const Home = (() => {
     open = true;
     // 玩家自己点"菜单"回首页：清掉"在局里"的标记，下次启动才正常显示首页
     try { sessionStorage.removeItem("im_in_game"); } catch (e) { }
+    // **回首页 = 把别的悬浮层全收掉。**
+    // #guide(150) / #setup(140) / #dlg(130) 的 z-index 都比 #home(110) 高，
+    // 只要有任意一层还开着，首页就是"看得见、点不动"——点击全被它吃了，
+    // 而且那层可能已经没什么可见内容（比如引导只剩一层暗底）。
+    // 踩过一次：进过一局（引导自动开始）再回菜单，首页被引导那层整个盖住，
+    // 表现就是"新的战役点不动"。
+    try { Guide.finish(); } catch (e) { }
+    try { Dlg.close(); } catch (e) { }
+    try { Setup.close(); } catch (e) { }
+    try { closeMail(); } catch (e) { }
+    try { closeOrderBar(); } catch (e) { }
+    try { if (window.__sheetSetOpen) window.__sheetSetOpen(false); } catch (e) { }
     $("home").classList.add("on");
     idx = 0;
     paintSel();
@@ -4076,7 +4115,7 @@ const Home = (() => {
   }
 
   async function startModule(path, side) {
-    if (S && S.tick > 0 && !confirm("换战役会丢掉当前进度（除非先存档）。继续？")) return;
+    if (S && S.tick > 0 && !(await Dlg.confirm("换战役会丢掉当前进度（除非先存档）。继续？"))) return;
     try {
       const r = await fetch("/api/module", {
         method: "POST", headers: { "Content-Type": "application/json" },
