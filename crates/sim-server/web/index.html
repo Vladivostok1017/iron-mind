@@ -343,8 +343,10 @@
   #map .node-badge-t.air { fill: #bcdcf5; }
   #map .node-badge-t.sea { fill: #b7e3d7; }
   /* 空袭爆点：八条射线 + 实心点 */
-  #map .blast-ray { stroke: #ff7a4d; stroke-width: 1.6; stroke-linecap: round; }
-  #map .blast-core { fill: #ff9a5c; stroke: #2a0f06; stroke-width: 1; }
+  #map .blast-glow { fill: #ff6a3d; opacity: .22; stroke: #7a2a10; stroke-width: 0.8; stroke-opacity: .45; }
+  #map .blast-ray { stroke: #ffb07a; stroke-width: 2.4; stroke-linecap: round;
+    paint-order: stroke; }
+  #map .blast-core { fill: #ffd9a8; stroke: #7a2a10; stroke-width: 1.2; }
   /* 封锁环：圈住被舰队封住的那片水面（虚线、不填充） */
   #map .blockade-ring { fill: none; stroke: #d0503e; stroke-width: 1.4;
     stroke-dasharray: 6 4; opacity: .8; pointer-events: none; }
@@ -2701,24 +2703,50 @@ function renderMap() {
       el("circle", { cx: c[0], cy: c[1] - 9 * u, r: 3.8 * u * 0.42, class: "station-core" }, stG);
     }
 
-    // 空袭爆点：空军最近一天炸过的地方，画一个放射状的爆点
+    // 空袭爆点：空军最近一天炸过的地方，画一个放射状的爆点。
+    //
+    // 注意遍历的是**全部部队**，不是"本省的部队"：空军停在自己那个省，
+    // 炸的是别的省，按省过滤永远匹配不到（第一版就是这么错的，一个爆点都画不出来）。
+    const blasts = new Map();
     for (const p of S.provinces) {
-      const strikes = (p.units || []).filter((x) => x.last_strike === p.id &&
-        (S.tick - (x.last_strike_day || 0)) <= 1);
-      if (!strikes.length) continue;
-      const cp = geom.centroids[p.id];
+      for (const u of p.units || []) {
+        if (u.last_strike == null) continue;
+        if ((S.tick - (u.last_strike_day || 0)) > 1) continue;
+        blasts.set(u.last_strike, (blasts.get(u.last_strike) || 0) + 1);
+      }
+    }
+    for (const [pid, n] of blasts) {
+      const cp = geom.centroids[pid];
       if (!cp) continue;
       const u = markUnit();
+      // 炸得越多，爆点越大（同一天两支空军炸一处也能看出来）
+      const k = Math.min(1.5, 1 + (n - 1) * 0.25);
+      // 放哪儿：省名在质心下方、兵牌挤在质心周围，压质心一定被埋掉。
+      // 所以找**离质心最远的那个多边形顶点**，往那边挪 62% —— 落在省内又空的地方。
+      let bx = cp[0] + 20 * u, by = cp[1] - 6 * u;
+      const poly = geom.cells[pid];
+      if (poly && poly.length) {
+        let far = null, fd = -1;
+        for (const pt of poly) {
+          const d = (pt[0] - cp[0]) ** 2 + (pt[1] - cp[1]) ** 2;
+          if (d > fd) { fd = d; far = pt; }
+        }
+        if (far) {
+          bx = cp[0] + (far[0] - cp[0]) * 0.62;
+          by = cp[1] + (far[1] - cp[1]) * 0.62;
+        }
+      }
       const bw = el("g", { class: "blast" }, stG);
-      for (let k = 0; k < 8; k++) {
-        const ang = (Math.PI / 4) * k;
+      el("circle", { cx: bx, cy: by, r: 15 * u * k, class: "blast-glow" }, bw);
+      for (let j = 0; j < 8; j++) {
+        const ang = (Math.PI / 4) * j + Math.PI / 8;
         el("line", {
-          x1: cp[0] + Math.cos(ang) * 5 * u, y1: cp[1] + Math.sin(ang) * 5 * u,
-          x2: cp[0] + Math.cos(ang) * 10 * u, y2: cp[1] + Math.sin(ang) * 10 * u,
+          x1: bx + Math.cos(ang) * 7 * u * k, y1: by + Math.sin(ang) * 7 * u * k,
+          x2: bx + Math.cos(ang) * 15 * u * k, y2: by + Math.sin(ang) * 15 * u * k,
           class: "blast-ray",
         }, bw);
       }
-      el("circle", { cx: cp[0], cy: cp[1], r: 3.4 * u, class: "blast-core" }, bw);
+      el("circle", { cx: bx, cy: by, r: 3.4 * u * k, class: "blast-core" }, bw);
     }
 
     // 封锁环：带着「封锁」命令的舰队，把它所在的那片水域圈出来

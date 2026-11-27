@@ -13,8 +13,8 @@ android {
         // 前端一行 babel 都没上，靠的就是这个下限。
         minSdk = 24
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.7.1"
+        versionCode = 12
+        versionName = "1.7.2"
         // 只出 arm64：现在还用 32 位 arm 的手机跑不动这种活儿，多一个 ABI
         // 就多一份 .so 和一份编译时间。
         ndk { abiFilters += "arm64-v8a" }
