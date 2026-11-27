@@ -321,17 +321,18 @@
   .rail { pointer-events: none; }
   /* 铁路：照地图的经典画法 —— 深色描边 + **浅灰轨面** + 深色短横当枕木，
      远看就是灰白交替的一条线。以前是一条暖色虚线，看着像"小路"而不是干线。 */
-  .rail .railbed { stroke: #0a0f15; stroke-width: 5.2; stroke-linecap: round; opacity: .9; }
-  .rail .rails { stroke: #e6ebf1; stroke-width: 3.0; stroke-linecap: butt; }
-  /* 枕木：**比轨面略宽**的深色短横，两端露出来一点 —— 这才是地图上"铁轨"的样子。
-     比轨面窄就成了"白线段"，比轨面宽太多又像黑线。1.2 实 / 4.6 空。 */
-  .rail .sleepers { stroke: #10171f; stroke-width: 4.4; stroke-dasharray: 1.2 4.6; stroke-linecap: butt; }
+  /* 铁路（照高德/OSM 那种画法）：**深色底轨 + 白色短刻度**。
+     之前做成"白底 + 深色枕木"是反的 —— 真实地图上白的是刻度、底是深色。 */
+  .rail .railbed { stroke: #0a0f15; stroke-width: 5.6; stroke-linecap: round; opacity: .55; }
+  .rail .rails { stroke: #2f363f; stroke-width: 3.4; stroke-linecap: butt; }
+  /* 白色刻度：短实线 + 较长的空，沿线条均匀排开，远看就是"缝合线"那种铁轨 */
+  .rail .sleepers { stroke: #edf1f5; stroke-width: 2.6; stroke-dasharray: 2.6 5.0; stroke-linecap: butt; }
   /* 预览版铁路被炸：坏一段变橙、断了变红并拉开间隔 */
   /* 被炸：线还在，但颜色转橙；炸断（3 级）：轨面转红、枕木断成点，表示这段不通了 */
-  .rail .rails.hurt { stroke: #f0b45c; }
-  .rail .sleepers.hurt { stroke: #8a5416; }
-  .rail .rails.cut { stroke: #d0503e; }
-  .rail .sleepers.cut { stroke: #d0503e; stroke-dasharray: 1 7; }
+  .rail .rails.hurt { stroke: #b87333; }
+  .rail .sleepers.hurt { stroke: #f6d9a8; }
+  .rail .rails.cut { stroke: #8e2f24; }
+  .rail .sleepers.cut { stroke: #d0503e; stroke-width: 1.6; stroke-dasharray: 1 8; }
   /* 车站：地图上的站点符号（双圈） */
   #map .station-ring { fill: #0a0f15; stroke: #eceff3; stroke-width: 1.1; }
   #map .station-core { fill: #eceff3; }
