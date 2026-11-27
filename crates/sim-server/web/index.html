@@ -2097,7 +2097,9 @@ function renderMap() {
           if (!c2 || !c2.n) return;
           const here = (p.units || []).filter((u) => (u.node || 0) === i).length;
           const t = el("text", {
-            x: c2.x, y: c2.y + 6, class: "pos-chip" + (here ? " busy" : ""),
+            x: c2.x, y: c2.y + 6 * (1 / Math.max(1, cam.z)),
+            style: "font-size:" + (8.5 / Math.max(1, cam.z)) + "px",
+            class: "pos-chip" + (here ? " busy" : ""),
           }, posG);
           t.textContent = (i + 1) + " " + pos.name +
             " " + Math.round((pos.width || 1) * 100) + "%" +
@@ -2244,30 +2246,30 @@ function renderMap() {
     }
     // 水道名很长（长江·田家镇），显示时只留后半截
     const label = p.name.indexOf("·") >= 0 ? p.name.split("·")[1] : p.name;
-    const fits = maxx - minx >= label.length * 13;
+    const fits = maxx - minx >= label.length * 13 / Math.max(1, cam.z);
 
     // 省名/估计/工事这些**要压在最上面**：SVG 是后画的盖住先画的，
     // 而单位块是在它们后面画的 —— 不挪到队尾，省名就会被兵牌压住。
     const topLabels = [];
     // 省名的竖向位置随缩放让开：放大后同样的字号占的像素更多，
     // 贴着兵牌就会挤在一起（不是"名字被挡住"，是"挤得看不清"）。
-    const zoomedLbl = cam.z >= ZOOM_NAMES;
-    const nameY = c[1] + (isWater ? 18 : (zoomedLbl ? 12 : 4));
+    const U2 = 1 / Math.max(1, cam.z);
+    const nameY = c[1] + (isWater ? 18 * U2 : 8 * U2);
     if (fits) {
       const cls = "name" + (p.mine ? "" : (p.owner_known ? " enemy" : " unknown"));
-      const nm = el("text", { x: c[0], y: nameY, class: cls }, g);
+      const nm = el("text", { x: c[0], y: nameY, style: "font-size:" + (10.5 * U2) + "px", class: cls }, g);
       nm.textContent = label;
       topLabels.push(nm);
     }
 
     if (fits && !p.mine && p.intel.known && p.intel.strength > 0) {
-      const es = el("text", { x: c[0], y: nameY + 12, class: "est" }, g);
+      const es = el("text", { x: c[0], y: nameY + 12 * U2, style: "font-size:" + (9.5 * U2) + "px", class: "est" }, g);
       es.textContent = "≈" + p.intel.strength.toFixed(0);
       topLabels.push(es);
     }
 
     if (fits && p.fort > 0) {
-      const f = el("text", { x: c[0] + 26, y: c[1] - 10, class: "fortmark" }, g);
+      const f = el("text", { x: c[0] + 26 * U2, y: c[1] - 10 * U2, style: "font-size:" + (8 * U2) + "px", class: "fortmark" }, g);
       f.textContent = "砦" + p.fort;
       topLabels.push(f);
     }
@@ -2279,12 +2281,15 @@ function renderMap() {
     // 一个省在屏幕上占的地方远不止一排：部队多就**往上叠行**。
     // 挤成一行会横向溢出省界、还会把省名压住（5 支部队 × 15px = 75px，
     // 很多省在 z=1 时根本没有这么宽）。
-    const zoomed = cam.z >= ZOOM_NAMES;
-    const codes = units.map((u) => (zoomed ? unitCode(u.name) : null));
-    const pw = codes.map((cd) => (cd ? Math.max(14, 5 + cd.length * 6.4) : 14));
-    const gap = zoomed ? 4 : 1;
-    const perRow = zoomed ? 4 : 3;
-    const rowH = 16;
+    // 标记与文字**不随地图放大**：尺寸除以 cam.z，换算成屏幕像素恒定。
+    // 放大后省变大、标记不变，才不会被标记糊住。
+    const U = 1 / Math.max(1, cam.z);
+    // 番号不再受缩放门槛限制：有些地图的省本来就小，放大到 1.8 倍根本没法看。
+    const codes = units.map((u) => unitCode(u.name));
+    const pw = codes.map((cd) => (cd ? Math.max(14, 5 + cd.length * 6.4) : 14) * U);
+    const gap = 3 * U;
+    const perRow = 3;
+    const rowH = 16 * U;
     const rows = [];
     for (let i = 0; i < units.length; i += perRow) {
       rows.push({ from: i, to: Math.min(i + perRow, units.length) });
@@ -2295,7 +2300,7 @@ function renderMap() {
       return Math.max(0, w);
     };
     // 最下面一行贴着省名上方，往上叠
-    const topRowY = c[1] - 16 - Math.max(0, rows.length - 1) * rowH;
+    const topRowY = c[1] - 16 * U - Math.max(0, rows.length - 1) * rowH;
     const spots = [];
     rows.forEach((r, ri) => {
       const uy = topRowY + ri * rowH;
@@ -2317,7 +2322,7 @@ function renderMap() {
         if (!c2 || !c2.n) return;
         const j = used[i] = (used[i] || 0);
         used[i] += 1;
-        re.push({ k, ux: c2.x, uy: c2.y - 11 - j * 15 });
+        re.push({ k, ux: c2.x, uy: c2.y - 11 * U - j * 15 * U });
       });
       if (re.length) { spots.length = 0; spots.push(...re); }
     }
@@ -2326,12 +2331,12 @@ function renderMap() {
     if (spots.length) {
       const bxMin = Math.min(...spots.map((x) => x.ux - pw[x.k] / 2));
       const bxMax = Math.max(...spots.map((x) => x.ux + pw[x.k] / 2));
-      blockTopY = Math.min(...spots.map((x) => x.uy - 7));
-      blockBottomY = Math.max(...spots.map((x) => x.uy + 10));
+      blockTopY = Math.min(...spots.map((x) => x.uy - 7 * U));
+      blockBottomY = Math.max(...spots.map((x) => x.uy + 10 * U));
       blockMidY = (blockTopY + blockBottomY) / 2;
       blockHalfW = Math.max(14, (bxMax - bxMin) / 2);
     } else {
-      blockTopY = c[1] - 24; blockBottomY = c[1] - 6;
+      blockTopY = c[1] - 24 * U; blockBottomY = c[1] - 6 * U;
       blockMidY = c[1] - 15; blockHalfW = 14;
     }
     // 工事标记（砦N）跟着整块走到右上角：固定在质心 +26 的位置会压在兵牌上。
@@ -2344,18 +2349,25 @@ function renderMap() {
 
     const ground = (x) => x.kind_code !== 2 && x.kind_code !== 3;
     if (units.some((x) => x.mine && ground(x)) && units.some((x) => !x.mine && ground(x))) {
-      const rr = Math.max(23, blockHalfW + 9, (blockBottomY - blockTopY) / 2 + 6);
+      const rr = Math.max(23 * U, blockHalfW + 9 * U, (blockBottomY - blockTopY) / 2 + 6 * U);
       el("circle", { cx: c[0], cy: blockMidY, r: rr, class: "clash-ring" }, g);
-      el("circle", { cx: c[0] + rr * 0.72, cy: blockMidY - rr * 0.72, r: 7, class: "clash-badge" }, g);
-      el("text", { x: c[0] + rr * 0.72, y: blockMidY - rr * 0.72 + 2.6, class: "clash-mark" }, g)
-        .textContent = "战";
+      el("circle", { cx: c[0] + rr * 0.72, cy: blockMidY - rr * 0.72, r: 7 * U, class: "clash-badge" }, g);
+      el("text", {
+        x: c[0] + rr * 0.72, y: blockMidY - rr * 0.72 + 2.6 * U,
+        style: "font-size:" + (8 * U) + "px", class: "clash-mark",
+      }, g).textContent = "战";
     }
     spots.forEach(({ k, ux, uy }) => {
       const u = units[k];
       const plateW = pw[k];
       const ug = el("g", { class: "unit " + (u.mine ? "mine" : "enemy") + (selUnit === u.index ? " sel" : "") }, g);
-      el("rect", { x: ux - plateW / 2, y: uy - 7, width: plateW, height: 14, rx: 2, class: "plate" }, ug);
-      const gl = el("text", { x: ux, y: uy + 2.6, class: "glyph" + (codes[k] ? " wide" : "") }, ug);
+      el("rect", { x: ux - plateW / 2, y: uy - 7 * U, width: plateW, height: 14 * U,
+        rx: 2 * U, class: "plate" }, ug);
+      const gl = el("text", {
+        x: ux, y: uy + 2.6 * U,
+        style: "font-size:" + ((codes[k] && codes[k].length > 1 ? 6.2 : 7) * U) + "px",
+        class: "glyph" + (codes[k] ? " wide" : ""),
+      }, ug);
       gl.textContent = codes[k] || (u.kind_code === 2 ? "机" : (u.kind_code === 3 ? "舰" : "兵"));
       // 兵力条：满编为 1。打残的部队在图上就该看得出来 —— 不用点开。
       // 兵力条**只在打残时出现**：满编的部队不需要那条线，
@@ -2363,28 +2375,29 @@ function renderMap() {
       const mx = u.max_strength || u.strength || 1;
       const frac = Math.max(0, Math.min(1, (u.strength || 0) / mx));
       if (frac < 0.95) {
-        el("rect", { x: ux - plateW / 2, y: uy + 8.5, width: plateW, height: 2, class: "sbar-bg" }, ug);
-        el("rect", { x: ux - plateW / 2, y: uy + 8.5, width: Math.max(1.5, plateW * frac), height: 2, class: "sbar" }, ug);
+        el("rect", { x: ux - plateW / 2, y: uy + 8.5 * U, width: plateW, height: 2 * U, class: "sbar-bg" }, ug);
+        el("rect", { x: ux - plateW / 2, y: uy + 8.5 * U, width: Math.max(1.5 * U, plateW * frac), height: 2 * U, class: "sbar" }, ug);
       }
       // 放大后标记里已经是番号了，将领名这一行就收起来：一个省挤五支部队时，
       // 五个 3 字名连成一片，比没有还难读。只在选中的那支下面留一行。
       // 单支部队、且没放大时才显示将领名：放大后标记里已是番号，
       // 将领名只会和省名挤在一起（"摩托化"压在"东四"上面）。
-      if ((units.length === 1 && !zoomed) || selUnit === u.index) {
+      if (units.length === 1 || selUnit === u.index) {
         // 阵地下标：多阵地省里，这支部队站在第几个阵地（对应下面那行阵地牌）
       const possN = p.positions || [];
       if (possN.length > 1) {
         el("text", {
-          x: ux - plateW / 2 - 1.5, y: uy - 6, class: "nbadge",
+          x: ux - plateW / 2 - 1.5 * U, y: uy - 6 * U,
+          style: "font-size:" + (7 * U) + "px", class: "nbadge",
         }, ug).textContent = String((u.node || 0) + 1);
       }
-      const cn = el("text", { x: ux, y: uy + 20, class: "cname" }, ug);
+      const cn = el("text", { x: ux, y: uy + 20 * U, style: "font-size:" + (8.5 * U) + "px", class: "cname" }, ug);
         cn.textContent = u.commander.slice(0, 3);
       }
       // 多阵地省：只给**选中**的单位显示阵地名。
       // 全显示的话，一个省三四个单位就糊成一团，反而看不清地图。
       if (p.positions && p.positions.length > 1 && p.positions[u.node] && selUnit === u.index) {
-        const nd = el("text", { x: ux, y: uy + 29, class: "nname" }, ug);
+        const nd = el("text", { x: ux, y: uy + 29 * U, style: "font-size:" + (8 * U) + "px", class: "nname" }, ug);
         nd.textContent = p.positions[u.node].name;
       }
       ug.addEventListener("click", (ev) => {
