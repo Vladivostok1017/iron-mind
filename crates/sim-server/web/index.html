@@ -159,6 +159,13 @@
   .pos-meta { font-size: 7.5px; fill: #9aa6b4; text-anchor: middle; pointer-events: none;
     paint-order: stroke; stroke: #0a0e13; stroke-width: 1.8px; }
 
+  /* 描边不随缩放变粗：线条权重是"图纸感"的一部分，放到 12 倍时
+     一条 1.3 单位的行军线会变成 18px 宽的黑带。矢量效果交给浏览器处理。 */
+  /* 一律不让描边随缩放变粗。逐个列类名会漏（实测就漏了 `railbed` 和
+     敌方精度外描边），这里干脆对地图里所有图形元素统一开。 */
+  #map path, #map line, #map rect, #map circle, #map polyline, #map polygon {
+    vector-effect: non-scaling-stroke;
+  }
   .unit { cursor: pointer; }
   .unit .plate { stroke: #0a0e13; stroke-width: 1.2; }
   .unit.mine .plate { fill: #74abdd; }
@@ -1186,12 +1193,15 @@ const W = 1000, H = 720, PAD = 26;
 // SVG 用 viewBox 当相机：平移缩放改 viewBox，原生命中测试跟着走，不用自己写拾取。
 // （等省+阵地超过约 800 个多边形，再考虑换 Canvas，见 docs/11）
 let cam = { x: 0, y: 0, z: 1 };
-const CAM_MAX = 6;
+// 上限放得比较宽：有些地图的省非常小，6 倍根本不够看。
+// 标记与文字是屏幕像素恒定的（见下面 U = 1/z），所以放得再大也不会糊。
+const CAM_MAX = 20;
 
 // 放大到这个倍数以上，部队标记里显示**番号短码**（下面那行仍然是将领名）。
 // 不在小比例尺上显示：省里挤 5 支部队、标记只有 14px 宽，番号必然糊成一团。
-const ZOOM_NAMES = 1.8;
-let lodNames = null;
+// 上一次渲染标记时用的缩放值：和当前 cam.z 不一致就要重绘（见 applyCam）
+let markScaleZ = 0;
+let markRepaint = false;
 
 const CN_DIGIT = { 一:1, 二:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9 };
 function cnNum(t) {
@@ -1239,14 +1249,18 @@ function applyCam() {
   const svg = document.getElementById("map");
   if (svg) {
     svg.setAttribute("viewBox", v.x + " " + v.y + " " + v.w + " " + v.h);
-    // 跨过「显示番号」的门槛时要重建一次标记：viewBox 只缩放，
-    // 不会把标记里的文字换掉。缩放本身不重绘，所以这里补一次。
-    const lod = cam.z >= ZOOM_NAMES;
-    if (lodNames !== null && lod !== lodNames) {
-      lodNames = lod;
-      render();
-    } else if (lodNames === null) {
-      lodNames = lod;
+    // 标记/文字的尺寸是**渲染时**按 1/z 算的，所以缩放必须重绘一次，
+    // 否则标记会停在旧倍数的尺寸上 —— 放大后再缩回去，字还是小的（这就是
+    // 之前那个"缩小不恢复"的 bug）。用 rAF 合并连续缩放事件，别每帧全量重建。
+    if (Math.abs(cam.z - markScaleZ) > 0.001) {
+      markScaleZ = cam.z;
+      if (!markRepaint) {
+        markRepaint = true;
+        requestAnimationFrame(() => {
+          markRepaint = false;
+          render();
+        });
+      }
     }
   }
 }
