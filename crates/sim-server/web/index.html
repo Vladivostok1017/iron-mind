@@ -2439,12 +2439,7 @@ function renderMap() {
         el("rect", { x: ux - plateW / 2, y: uy + 8.5 * U, width: plateW, height: 2 * U, class: "sbar-bg" }, ug);
         el("rect", { x: ux - plateW / 2, y: uy + 8.5 * U, width: Math.max(1.5 * U, plateW * frac), height: 2 * U, class: "sbar" }, ug);
       }
-      // 放大后标记里已经是番号了，将领名这一行就收起来：一个省挤五支部队时，
-      // 五个 3 字名连成一片，比没有还难读。只在选中的那支下面留一行。
-      // 单支部队、且没放大时才显示将领名：放大后标记里已是番号，
-      // 将领名只会和省名挤在一起（"摩托化"压在"东四"上面）。
-      if (units.length === 1 || selUnit === u.index) {
-        // 阵地下标：多阵地省里，这支部队站在第几个阵地（对应下面那行阵地牌）
+      // 阵地下标：多阵地省里，这支部队站在第几个阵地（对应那块阵地的说明）
       const possN = p.positions || [];
       if (possN.length > 1) {
         el("text", {
@@ -2452,14 +2447,14 @@ function renderMap() {
           style: "font-size:" + (7 * U) + "px", class: "nbadge",
         }, ug).textContent = String((u.node || 0) + 1);
       }
-      const cn = el("text", { x: ux, y: uy + 20 * U, style: "font-size:" + (8.5 * U) + "px", class: "cname" }, ug);
+      // 将领名：**分格显示时不画** —— 它会压住那块阵地的说明文字，而且
+      // 兵牌已经落在自己那块阵地里，位置信息地图上直接看得见。
+      // 其余情况只在"单支部队"或"选中"时画：多支部队时会互相糊住。
+      const cellsShown = possN.length > 1 && (nodeProv === p.id || curProv === p.id);
+      if (!cellsShown && (units.length === 1 || selUnit === u.index)) {
+        const cn = el("text", { x: ux, y: uy + 20 * U,
+          style: "font-size:" + (8.5 * U) + "px", class: "cname" }, ug);
         cn.textContent = u.commander.slice(0, 3);
-      }
-      // 多阵地省：只给**选中**的单位显示阵地名。
-      // 全显示的话，一个省三四个单位就糊成一团，反而看不清地图。
-      if (p.positions && p.positions.length > 1 && p.positions[u.node] && selUnit === u.index) {
-        const nd = el("text", { x: ux, y: uy + 29 * U, style: "font-size:" + (8 * U) + "px", class: "nname" }, ug);
-        nd.textContent = p.positions[u.node].name;
       }
       ug.addEventListener("click", (ev) => {
         ev.stopPropagation();
