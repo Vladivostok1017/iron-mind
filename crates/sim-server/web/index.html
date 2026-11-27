@@ -146,8 +146,14 @@
      再用裁剪路径裁进省界内。只在选中或右键查看这个省时才画。 */
   .pos-band { fill: #e3b657; opacity: .045; pointer-events: none; }
   .pos-band.alt { opacity: .095; }
-  .pos-line { stroke: #e3b657; stroke-width: .8; stroke-dasharray: 3 3;
-    opacity: .45; pointer-events: none; }
+  /* 阵地的分界线：细、短虚线。**不做实线** —— 它是我们算出来的示意，
+     不是内核里的真实边界，视觉上别冒充省界。 */
+  .pos-line { fill: none; stroke: #e3b657; stroke-width: .65; stroke-dasharray: 2 2;
+    stroke-linecap: round; opacity: .5; pointer-events: none; }
+  /* 阵地牌的底衬用粗描边模拟"芯片"：不用测量文字宽度也能有个背板 */
+  .pos-chip { font-size: 8.5px; fill: #d9c08a; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0d1319; stroke-width: 3.4px; stroke-linejoin: round; }
+  .pos-chip.busy { fill: #f0d69a; }
   .pos-name { font-size: 9px; fill: #e8c48a; text-anchor: middle; pointer-events: none;
     paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
   .pos-meta { font-size: 7.5px; fill: #9aa6b4; text-anchor: middle; pointer-events: none;
@@ -1734,6 +1740,260 @@ function renderTop() {
   $("k-pend").textContent = pend + " 份";
 }
 
+// ── 阵地划分：容量约束的测地 Voronoi ──────────────────────────────────
+//
+// 内核里的阵地只有 `name/width/fort`，**没有坐标**，所以"切在哪儿"得我们自己算。
+// 要求三条：① 每块面积按该阵地的展开宽度分配；② 块要连通、紧凑，不能出现
+// 细长条（异形省上把包围盒等分就会这样）；③ 边界必须待在省界以内。
+//
+// 做法（不依赖任何几何库，纯栅格）：
+//   1. 把省多边形栅格化，只留落在省内的格；
+//   2. 用**测地距离**（沿省内走、不许穿出省界）挑种子：第一颗取离省质心最近的格，
+//      之后每颗取"离已有种子测地距离最远"的格（最远点采样）；
+//   3. 每颗种子各做一次 BFS 得到距离场，然后按"离最近种子的距离"升序、
+//      带**容量上限**（总量 × 宽度占比）贪心分配 —— 面积比例就自动对上了；
+//   4. Lloyd 迭代几轮：种子回到各自块的重心，块变紧凑、边界变平滑；
+//   5. 边界 = 相邻但标签不同的栅格边，串成一条 path。
+//
+// 只在"选中/右键查看一个多阵地省"时算一次，一个省 2500 格左右，几毫秒。
+function partitionShape(pts, weights) {
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (const pt of pts) {
+    if (pt[0] < x0) x0 = pt[0];
+    if (pt[0] > x1) x1 = pt[0];
+    if (pt[1] < y0) y0 = pt[1];
+    if (pt[1] > y1) y1 = pt[1];
+  }
+  const n = weights.length;
+  if (!(x1 > x0) || !(y1 > y0) || n < 2) return null;
+  // 栅格越细，边界看起来越顺。一个省 3 万格左右、只算一个省，几毫秒的事。
+  const step = Math.max(0.5, Math.max(x1 - x0, y1 - y0) / 84);
+  const nx = Math.max(2, Math.ceil((x1 - x0) / step));
+  const ny = Math.max(2, Math.ceil((y1 - y0) / step));
+
+  // 点是否在多边形内（射线法）。顺带算质心，用来放第一颗种子。
+  const inside = new Uint8Array(nx * ny);
+  let cx = 0, cy = 0, cnt = 0;
+  for (let gy = 0; gy < ny; gy++) {
+    for (let gx = 0; gx < nx; gx++) {
+      const px = x0 + (gx + 0.5) * step;
+      const py = y0 + (gy + 0.5) * step;
+      let hit = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+        if ((yi > py) !== (yj > py)) {
+          const t = (py - yi) / (yj - yi);
+          if (px < xi + t * (xj - xi)) hit = !hit;
+        }
+      }
+      if (hit) {
+        inside[gy * nx + gx] = 1;
+        cx += px; cy += py; cnt++;
+      }
+    }
+  }
+  if (cnt < n * 4) return null; // 省太小，别切了
+
+  const idxOf = (gx, gy) => gy * nx + gx;
+  const nbrs = (c) => {
+    const gx = c % nx, gy = (c / nx) | 0, out = [];
+    if (gx > 0) out.push(c - 1);
+    if (gx < nx - 1) out.push(c + 1);
+    if (gy > 0) out.push(c - nx);
+    if (gy < ny - 1) out.push(c + nx);
+    return out;
+  };
+  // 多源 BFS 距离场（4 邻接，格距 1）
+  const bfs = (seeds) => {
+    const dist = new Int32Array(nx * ny).fill(-1);
+    let frontier = [];
+    for (const sp of seeds) {
+      if (inside[sp] && dist[sp] < 0) { dist[sp] = 0; frontier.push(sp); }
+    }
+    while (frontier.length) {
+      const next = [];
+      for (const c of frontier) {
+        for (const nb of nbrs(c)) {
+          if (!inside[nb] || dist[nb] >= 0) continue;
+          dist[nb] = dist[c] + 1;
+          next.push(nb);
+        }
+      }
+      frontier = next;
+    }
+    return dist;
+  };
+
+  let seeds = [];
+  {
+    // 第一颗：离省质心最近且在省内的格
+    let best = -1, bestD = 1e18;
+    for (let c = 0; c < nx * ny; c++) {
+      if (!inside[c]) continue;
+      const gx = c % nx, gy = (c / nx) | 0;
+      const dx = x0 + (gx + 0.5) * step - cx / cnt;
+      const dy = y0 + (gy + 0.5) * step - cy / cnt;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    if (best < 0) return null;
+    seeds.push(best);
+    // 最远点采样：每颗新种子取离已有种子测地距离最远的格
+    while (seeds.length < n) {
+      const d = bfs(seeds);
+      let far = -1, farD = -1;
+      for (let c = 0; c < nx * ny; c++) {
+        if (inside[c] && d[c] > farD) { farD = d[c]; far = c; }
+      }
+      if (far < 0) return null;
+      seeds.push(far);
+    }
+  }
+
+  const wsum = weights.reduce((a, b) => a + b, 0) || n;
+  const capOf = weights.map((w) => Math.max(1, Math.round((cnt * w) / wsum)));
+
+  let labels = new Int32Array(nx * ny).fill(-1);
+  const assign = () => {
+    const dists = seeds.map((sp) => bfs([sp]));
+    // 按"离最近种子的距离"从小到大填，带容量 —— 面积比例就按 cap 走
+    const order = [];
+    for (let c = 0; c < nx * ny; c++) {
+      if (!inside[c]) continue;
+      let m = 1e9;
+      for (let k = 0; k < n; k++) if (dists[k][c] >= 0 && dists[k][c] < m) m = dists[k][c];
+      order.push([m, c]);
+    }
+    order.sort((a, b) => a[0] - b[0]);
+    const used = new Int32Array(n).fill(0);
+    labels = new Int32Array(nx * ny).fill(-1);
+    for (const [, c] of order) {
+      // 选"够得着、还没满、且距离最近"的那块
+      let pick = -1, pickD = 1e9;
+      for (let k = 0; k < n; k++) {
+        if (used[k] >= capOf[k]) continue;
+        const d = dists[k][c];
+        if (d >= 0 && d < pickD) { pickD = d; pick = k; }
+      }
+      if (pick < 0) {
+        for (let k = 0; k < n; k++) if (used[k] < capOf[k]) { pick = k; break; }
+      }
+      if (pick < 0) pick = 0;
+      labels[c] = pick;
+      used[pick] += 1;
+    }
+  };
+
+  for (let it = 0; it < 3; it++) {
+    assign();
+    // 种子回到各自块的重心（就近取一个省内格）——Lloyd
+    const moved = seeds.slice();
+    let changed = false;
+    for (let k = 0; k < n; k++) {
+      let sx = 0, sy = 0, m = 0;
+      for (let c = 0; c < nx * ny; c++) {
+        if (labels[c] !== k) continue;
+        sx += (c % nx); sy += ((c / nx) | 0); m++;
+      }
+      if (!m) continue;
+      let best = -1, bestD = 1e18;
+      const tx = sx / m, ty = sy / m;
+      for (let c = 0; c < nx * ny; c++) {
+        if (!inside[c]) continue;
+        const dx = (c % nx) - tx, dy = ((c / nx) | 0) - ty;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      if (best >= 0 && best !== moved[k]) { moved[k] = best; changed = true; }
+    }
+    seeds = moved;
+    if (!changed) break;
+  }
+
+  // 边界：相邻但标签不同的栅格边 → 先串成折线，再做 Chaikin 平滑。
+  // 不串链直接画，看到的就是一串楼梯；串起来抹两遍才像条线。
+  const key = (x, y) => x.toFixed(2) + "," + y.toFixed(2);
+  const adj = new Map(); // 点 → [边 id]
+  const segs = [];
+  const addSeg = (ax, ay, bx, by) => {
+    const id = segs.length;
+    segs.push([[ax, ay], [bx, by]]);
+    for (const p2 of [[ax, ay], [bx, by]]) {
+      const k = key(p2[0], p2[1]);
+      if (!adj.has(k)) adj.set(k, []);
+      adj.get(k).push(id);
+    }
+  };
+  for (let gy = 0; gy < ny; gy++) {
+    for (let gx = 0; gx < nx; gx++) {
+      const c = idxOf(gx, gy);
+      if (labels[c] < 0) continue;
+      const px = x0 + gx * step, py = y0 + gy * step;
+      if (gx < nx - 1 && labels[c + 1] >= 0 && labels[c + 1] !== labels[c]) {
+        addSeg(px + step, py, px + step, py + step);
+      }
+      if (gy < ny - 1 && labels[c + nx] >= 0 && labels[c + nx] !== labels[c]) {
+        addSeg(px, py + step, px + step, py + step);
+      }
+    }
+  }
+  const walk = [];
+  const seen = new Uint8Array(segs.length);
+  for (let i = 0; i < segs.length; i++) {
+    if (seen[i]) continue;
+    // 从一条没走过的边出发，往两头各走一遍（闭合环也能吃掉）
+    const chainA = [];
+    let cur = i;
+    let k = key(segs[i][0][0], segs[i][0][1]);
+    chainA.push(segs[i][0]);
+    while (cur >= 0) {
+      seen[cur] = 1;
+      const [a, b] = segs[cur];
+      const nxt = key(a[0], a[1]) === k ? b : a;
+      chainA.push(nxt);
+      k = key(nxt[0], nxt[1]);
+      cur = -1;
+      for (const id of adj.get(k) || []) if (!seen[id]) { cur = id; break; }
+    }
+    if (chainA.length > 2) walk.push(chainA);
+  }
+  // Chaikin：每段取 1/4、3/4 两点，折角被抹圆（两遍就够）
+  const chaikin = (pts) => {
+    let out = pts;
+    for (let it = 0; it < 2; it++) {
+      const nx2 = [out[0]];
+      for (let i = 0; i + 1 < out.length; i++) {
+        const [ax, ay] = out[i], [bx, by] = out[i + 1];
+        nx2.push([ax * 0.75 + bx * 0.25, ay * 0.75 + by * 0.25]);
+        nx2.push([ax * 0.25 + bx * 0.75, ay * 0.25 + by * 0.75]);
+      }
+      nx2.push(out[out.length - 1]);
+      out = nx2;
+    }
+    return out;
+  };
+  let d = "";
+  for (const chain of walk) {
+    const sm = chaikin(chain);
+    d += "M" + sm.map((q) => q[0].toFixed(1) + " " + q[1].toFixed(1)).join("L");
+  }
+
+  // 每块的重心（放标签用）
+  const cents = weights.map(() => ({ x: 0, y: 0, n: 0 }));
+  for (let c = 0; c < nx * ny; c++) {
+    const k = labels[c];
+    if (k < 0) continue;
+    cents[k].x += x0 + ((c % nx) + 0.5) * step;
+    cents[k].y += y0 + (((c / nx) | 0) + 0.5) * step;
+    cents[k].n++;
+  }
+  cents.forEach((o) => { if (o.n) { o.x /= o.n; o.y /= o.n; } });
+  return { d, cents, step };
+}
+
+// 每个省的阵地块重心（由 `partitionShape` 算出，画部队时用来落位）
+let posLayout = {};
+
 function renderMap() {
   const svg = $("map");
   svg.innerHTML = "";
@@ -1817,51 +2077,36 @@ function renderMap() {
       class: "land",
     }, g);
 
-    // 阵地分格：**只在选中/右键查看这个省、且确实有多个阵地时**才画。
-    // 阵地在内核里是 name + width + fort 的列表（没有坐标），
-    // 所以这里按省多边形的包围盒等分成 N 条竖带，再用 clipPath 裁进省界 ——
-    // 不假装知道它们的真实地形位置，只是把"N 个阵地、各占多宽、各驻几支"摆出来。
+    // 阵地：**不切省界**。
+    //
+    // 早先是把多边形包围盒等分成 N 条竖带再裁进省界，异形省上切出来的块
+    // 又窄又歪（一条带可能只有一只角落在省内），反而看不懂 ——
+    // 而且内核里阵地根本**没有坐标**，横竖都是编的。
+    // 改成不依赖形状的"阵地牌"：名字 + 展开宽度 + 工事 + 驻军数，
+    // 一行一个，兵牌上再标一个同号的小角标，对应关系就够清楚了。
     const poss = p.positions || [];
     if (poss.length > 1 && (nodeProv === p.id || curProv === p.id)) {
-      let bx0 = 1e9, bx1 = -1e9, by0 = 1e9, by1 = -1e9;
-      for (const pt of poly) {
-        if (pt[0] < bx0) bx0 = pt[0];
-        if (pt[0] > bx1) bx1 = pt[0];
-        if (pt[1] < by0) by0 = pt[1];
-        if (pt[1] > by1) by1 = pt[1];
+      // 按"展开宽度"分配面积：35%/40%/25% 的阵地，块也按这个比例分
+      const part = partitionShape(poly, poss.map((x) => Math.max(0.05, x.width || 1)));
+      if (part) {
+        posLayout[p.id] = part.cents;
+        const posG = el("g", { "pointer-events": "none" }, g);
+        el("path", { d: part.d, class: "pos-line" }, posG);
+        poss.forEach((pos, i) => {
+          const c2 = part.cents[i];
+          if (!c2 || !c2.n) return;
+          const here = (p.units || []).filter((u) => (u.node || 0) === i).length;
+          const t = el("text", {
+            x: c2.x, y: c2.y + 6, class: "pos-chip" + (here ? " busy" : ""),
+          }, posG);
+          t.textContent = (i + 1) + " " + pos.name +
+            " " + Math.round((pos.width || 1) * 100) + "%" +
+            (pos.fort ? " 砦" + pos.fort : "") +
+            (here ? "  ×" + here : "");
+          posLabels.push(t);
+        });
       }
-      // 质心在这里要自己取一次：下面那段 `const c = ...` 在这之后才定义
-      const cc = geom.centroids[p.id] || [(bx0 + bx1) / 2, (by0 + by1) / 2];
-      const bandW = (bx1 - bx0) / poss.length;
-      const cid = "clip-pos-" + p.id;
-      const cp = el("clipPath", { id: cid }, g);
-      el("path", { d: ptsToPath(poly) }, cp);
-      const bandG = el("g", { "clip-path": "url(#" + cid + ")", "pointer-events": "none" }, g);
-      poss.forEach((_, i) => {
-        el("rect", {
-          x: bx0 + i * bandW, y: by0, width: bandW, height: by1 - by0,
-          class: "pos-band" + (i % 2 ? " alt" : ""),
-        }, bandG);
-      });
-      // 界线与说明不裁剪：窄带里的字被裁掉就看不懂了
-      const posG = el("g", { "pointer-events": "none" }, g);
-      poss.forEach((pos, i) => {
-        if (i > 0) {
-          el("line", { x1: bx0 + i * bandW, y1: by0, x2: bx0 + i * bandW, y2: by1, class: "pos-line" }, posG);
-        }
-        const here = (p.units || []).filter((u) => (u.node || 0) === i);
-        const cx = bx0 + (i + 0.5) * bandW;
-        // 这两行要进**置顶图层**：留在省图层里会被兵牌和铁路压住
-        const pn = el("text", { x: cx, y: cc[1] + 28, class: "pos-name" }, posG);
-        pn.textContent = pos.name;
-        const pm = el("text", { x: cx, y: cc[1] + 37, class: "pos-meta" }, posG);
-        pm.textContent = Math.round((pos.width || 1) * 100) + "%" +
-          (pos.fort ? "·砦" + pos.fort : "") +
-          (here.length ? " ·" + here.length + "支" : "");
-        posLabels.push(pn, pm);
-      });
     }
-    // 和 `posLabels` 同作用域地收集：画部队的是**另一个循环**，那边够不到它
     allLabels.push(...posLabels);
 
     // 敌情精度：外描边
@@ -2060,30 +2305,23 @@ function renderMap() {
         cursor += pw[i] + gap;
       }
     });
-    // 如果这个省正显示阵地分格，就把每支部队放回**自己那条带**（竖着叠）——
-    // 分了格、兵还全挤在省中心，等于没分。
-    // 注意：画分格的是**多边形的循环**，这里是**画部队的循环**，两者不共享作用域，
-    // 所以阵地列表要在这里自己取一份（之前用了上一循环的 `poss`，整张图渲染报错）。
-    const possU = p.positions || [];
-    if (rows.length && possU.length > 1 && (nodeProv === p.id || curProv === p.id)) {
-      let bx0 = 1e9, bx1 = -1e9;
-      for (const pt of poly) {
-        if (pt[0] < bx0) bx0 = pt[0];
-        if (pt[0] > bx1) bx1 = pt[0];
-      }
-      const bandW = (bx1 - bx0) / possU.length;
-      spots.length = 0;
-      for (let i = 0; i < possU.length; i++) {
-        const cx = bx0 + (i + 0.5) * bandW;
-        let j = 0;
-        units.forEach((u, k) => {
-          if ((u.node || 0) !== i) return;
-          spots.push({ k, ux: cx, uy: c[1] - 16 - j * rowH });
-          j += 1;
-        });
-      }
+    // 阵地划分算过就把部队放进各自的块里（块重心上方，竖着叠），
+    // 同块多支往上排，避免互相压住。
+    const cents = posLayout[p.id];
+    if (cents && units.length && (nodeProv === p.id || curProv === p.id)) {
+      const used = {};
+      const re = [];
+      units.forEach((u, k) => {
+        const i = u.node || 0;
+        const c2 = cents[i];
+        if (!c2 || !c2.n) return;
+        const j = used[i] = (used[i] || 0);
+        used[i] += 1;
+        re.push({ k, ux: c2.x, uy: c2.y - 11 - j * 15 });
+      });
+      if (re.length) { spots.length = 0; spots.push(...re); }
     }
-    // 几何一律从落点反推：两种布局（整块 / 分带）共用同一段交战环代码
+    // 几何从落点反推（交战环要用）
     let blockTopY, blockBottomY, blockMidY, blockHalfW;
     if (spots.length) {
       const bxMin = Math.min(...spots.map((x) => x.ux - pw[x.k] / 2));
@@ -2133,7 +2371,14 @@ function renderMap() {
       // 单支部队、且没放大时才显示将领名：放大后标记里已是番号，
       // 将领名只会和省名挤在一起（"摩托化"压在"东四"上面）。
       if ((units.length === 1 && !zoomed) || selUnit === u.index) {
-        const cn = el("text", { x: ux, y: uy + 20, class: "cname" }, ug);
+        // 阵地下标：多阵地省里，这支部队站在第几个阵地（对应下面那行阵地牌）
+      const possN = p.positions || [];
+      if (possN.length > 1) {
+        el("text", {
+          x: ux - plateW / 2 - 1.5, y: uy - 6, class: "nbadge",
+        }, ug).textContent = String((u.node || 0) + 1);
+      }
+      const cn = el("text", { x: ux, y: uy + 20, class: "cname" }, ug);
         cn.textContent = u.commander.slice(0, 3);
       }
       // 多阵地省：只给**选中**的单位显示阵地名。

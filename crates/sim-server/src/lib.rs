@@ -4563,11 +4563,27 @@ fn build_hq_ask(state: &Arc<ServerState>, w: &World, side: Side) -> Option<llm::
         if it.accuracy == sim_core::Accuracy::Unknown || p.owner == side {
             continue;
         }
-        known.push((
-            p.name.clone(),
-            it.enemy_strength.to_display_f64(),
-            if p.owner == enemy { "敌方控制".to_string() } else { "归属不明".to_string() },
-        ));
+        // 番号只有认出来了才给 —— 和将领那套同一条规矩。
+        let ids: Vec<String> = if it.identity_known {
+            w.units_in(i as u32)
+                .iter()
+                .filter(|&&j| {
+                    let u = &w.units[j as usize];
+                    u.side == enemy && u.is_alive()
+                })
+                .map(|&j| w.units[j as usize].name.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        known.push(llm::HqEnemy {
+            name: p.name.clone(),
+            est: it.enemy_strength.to_display_f64(),
+            owner: if p.owner == enemy { "敌方控制".to_string() } else { "归属不明".to_string() },
+            rail: if p.rail { Some(p.rail_damage) } else { None },
+            supply: p.is_supply_source,
+            units: ids,
+        });
     }
     known.truncate(18);
 
@@ -4581,6 +4597,15 @@ fn build_hq_ask(state: &Arc<ServerState>, w: &World, side: Side) -> Option<llm::
         objectives: hq.objectives.clone(),
         units,
         enemy: known,
+        // 和将领看到的是同一份事实（敌方数字来自情报表，不是真值）
+        situation: sim_core::ai::theater_facts(w, side).summary,
+        supply_sources: w
+            .provinces
+            .iter()
+            .filter(|q| q.owner == side && q.is_supply_source)
+            .map(|q| q.name.clone())
+            .take(8)
+            .collect(),
         last_plan: state.hq_plan.lock().unwrap().clone(),
     })
 }

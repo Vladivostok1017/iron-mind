@@ -1059,6 +1059,19 @@ impl Broker {
 ///
 /// 他和师团长的关系是关键：**他下的是电报，不是命令**。
 /// 师团长照样走 `Ask` → `Judgement` → 可以抗命。同一条指挥链。
+/// 统帅部看到的一个敌方省。和将领那套一样：兵力是**估计**、番号只有认出来才有。
+#[derive(Clone, Debug, Default)]
+pub struct HqEnemy {
+    pub name: String,
+    pub est: f64,
+    pub owner: String,
+    /// 有铁路才给；`0` = 通、`1-2` = 坏、`>=3` = 断。
+    pub rail: Option<u8>,
+    pub supply: bool,
+    /// 已认出的敌方番号。
+    pub units: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct HqAsk {
     pub day: u32,
@@ -1070,8 +1083,12 @@ pub struct HqAsk {
     pub objectives: Vec<String>,
     /// 己方各部：(番号, 所在省, 兵力千, 补给, 当前命令, 是否被围)
     pub units: Vec<(String, String, f64, f64, String, bool)>,
-    /// 已知敌情：(省, 估计兵力, 归属)
-    pub enemy: Vec<(String, f64, String)>,
+    /// 已知敌情：省 + 估计兵力 + 归属 + 铁路/补给源/认出的番号。
+    pub enemy: Vec<HqEnemy>,
+    /// 当面态势（只有事实，不含判断）：和将领看到的是同一份。
+    pub situation: String,
+    /// 本方的补给源省名。
+    pub supply_sources: Vec<String>,
     pub last_plan: String,
 }
 
@@ -1141,8 +1158,33 @@ fn build_hq_user(a: &HqAsk) -> String {
     if a.enemy.is_empty() {
         s.push_str("- （还没有可靠情报）\n");
     }
-    for (prov, str_, owner) in &a.enemy {
-        s.push_str(&format!("- {}：{}，估计 {:.1} 千\n", prov, owner, str_));
+    for e in &a.enemy {
+        s.push_str(&format!("- {}：{}，估计 {:.1} 千", e.name, e.owner, e.est));
+        if let Some(d) = e.rail {
+            if d == 0 {
+                s.push_str("，铁路通车");
+            } else if d >= 3 {
+                s.push_str("，铁路已炸断");
+            } else {
+                s.push_str(&format!("，铁路坏 {d} 级"));
+            }
+        }
+        if e.supply {
+            s.push_str("，补给源");
+        }
+        if !e.units.is_empty() {
+            s.push_str(&format!("，番号 {}", e.units.join("、")));
+        }
+        s.push_str("\n");
+    }
+    if !a.situation.is_empty() {
+        s.push_str(&format!(
+            "\n当面态势（只有事实，不含任何建议）：{}\n怎么解读由你自己判断。\n",
+            a.situation
+        ));
+    }
+    if !a.supply_sources.is_empty() {
+        s.push_str(&format!("\n你的补给源：{}\n", a.supply_sources.join("、")));
     }
     if !a.last_plan.is_empty() {
         s.push_str(&format!("\n你上一阶段的方针：{}\n", a.last_plan));
@@ -1401,7 +1443,17 @@ mod hq_tests {
                 ("第1师".into(), "乙城".into(), 24.0, 0.6, "固守".into(), false),
                 ("第2师".into(), "丙岭".into(), 16.0, 0.2, "进攻".into(), true),
             ],
-            enemy: vec![("甲城".into(), 20.0, "敌方控制".into())],
+            enemy: vec![HqEnemy {
+                name: "甲城".into(),
+                est: 20.0,
+                owner: "敌方控制".into(),
+                rail: Some(3),
+                supply: true,
+                units: vec!["第5师团".into()],
+            }],
+            situation: "当面：我 40.0 千 / 敌方已知 20.0 千（战力比 2.00，敌方数字来自情报，未必准）。"
+                .into(),
+            supply_sources: vec!["乙城".into()],
             last_plan: String::new(),
         }
     }
@@ -1427,6 +1479,13 @@ mod hq_tests {
         assert!(s.contains("第2师"), "提示词里要有麾下各部");
         assert!(s.contains("被围"), "被围的部队要标出来");
         assert!(s.contains("甲城"), "提示词里要有已知敌情");
+        // 统帅部也要看到和将领同一份事实，不能比将领还瞎
+        assert!(s.contains("铁路已炸断"), "敌情要带铁路状态：{s}");
+        assert!(s.contains("补给源"), "敌情要带补给源");
+        assert!(s.contains("番号 第5师团"), "认出来的番号要给名字");
+        assert!(s.contains("当面态势（只有事实"), "要带态势事实");
+        assert!(s.contains("你的补给源：乙城"), "要给本方补给源");
+        assert!(!s.contains("建议推进"), "不许给判断");
     }
 
     #[test]
