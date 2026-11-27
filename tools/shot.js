@@ -47,6 +47,9 @@ const metrics = arg("metrics", null);
 const port = Number(arg("port", 9333));
 
 const CANDIDATES = [
+  // macOS（同一套 CDP，Chromium 内核的 Edge / Chrome 都行）
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",

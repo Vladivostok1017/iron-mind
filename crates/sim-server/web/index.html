@@ -151,6 +151,18 @@
   .unit .glyph { font-size: 7px; fill: #0a0e13; font-weight: 700; text-anchor: middle; pointer-events: none; }
   .unit .cname { font-size: 8.5px; fill: #bcc7d3; text-anchor: middle; pointer-events: none;
     paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
+  /* 交战：这一省里敌我双方都有地面部队。**只加一圈虚线环，不改省份填色** ——
+     改了填色会和"归属色"打架，玩家分不清红色是"敌占"还是"正在打"。 */
+  #map .clash-ring { fill: none; stroke: #e05c4a; stroke-width: 1.4;
+    stroke-dasharray: 4 3; opacity: .85; pointer-events: none; }
+  /* 交战徽标：一个实心红点 + 白字「战」。不用 ⚔ 那种符号 —— 它在
+     WebKit/WebView2 的默认字体里经常退化成一个小叉，反而看不懂。 */
+  #map .clash-badge { fill: #c0392b; stroke: #1a0f0c; stroke-width: .8; }
+  #map .clash-mark { font-size: 8px; fill: #fff2ee; text-anchor: middle;
+    font-weight: 700; pointer-events: none; }
+  /* 兵力条：一眼看出这支部队还剩几成 */
+  #map .sbar-bg { fill: #0a0e13; opacity: .8; pointer-events: none; }
+  #map .sbar { fill: #cfe6ff; pointer-events: none; }
   .unit .nname { font-size: 8px; fill: #93a2b3; text-anchor: middle; pointer-events: none;
     paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
   .pulse { animation: pulse 1.4s ease-in-out infinite; }
@@ -1888,6 +1900,14 @@ function renderMap() {
 
     // 单位
     const units = p.units || [];
+    // 交战标记：这一省里敌我都有**地面**部队（空军/海军不占地，不算交战）。
+    // 以前玩家只能靠"两种颜色的兵挨在一起"去猜，打进打出全凭感觉。
+    const ground = (x) => x.kind_code !== 2 && x.kind_code !== 3;
+    if (units.some((x) => x.mine && ground(x)) && units.some((x) => !x.mine && ground(x))) {
+      el("circle", { cx: c[0], cy: c[1] - 16, r: 23, class: "clash-ring" }, g);
+      el("circle", { cx: c[0] + 26, cy: c[1] - 34, r: 7, class: "clash-badge" }, g);
+      el("text", { x: c[0] + 26, y: c[1] - 31.4, class: "clash-mark" }, g).textContent = "战";
+    }
     units.forEach((u, k) => {
       const ux = c[0] + (k - (units.length - 1) / 2) * 15;
       const uy = c[1] - 16;
@@ -1895,12 +1915,21 @@ function renderMap() {
       el("rect", { x: ux - 7, y: uy - 7, width: 14, height: 14, rx: 2, class: "plate" }, ug);
       const gl = el("text", { x: ux, y: uy + 2.6, class: "glyph" }, ug);
       gl.textContent = u.kind_code === 2 ? "机" : (u.kind_code === 3 ? "舰" : "兵");
-      const cn = el("text", { x: ux, y: uy + 17, class: "cname" }, ug);
+      // 兵力条：满编为 1。打残的部队在图上就该看得出来 —— 不用点开。
+      // 兵力条**只在打残时出现**：满编的部队不需要那条线，
+      // 每人一条反而让地图更花（实测整屏 30 支部队的时候很吵）。
+      const mx = u.max_strength || u.strength || 1;
+      const frac = Math.max(0, Math.min(1, (u.strength || 0) / mx));
+      if (frac < 0.95) {
+        el("rect", { x: ux - 7, y: uy + 8.5, width: 14, height: 2, class: "sbar-bg" }, ug);
+        el("rect", { x: ux - 7, y: uy + 8.5, width: Math.max(1.5, 14 * frac), height: 2, class: "sbar" }, ug);
+      }
+      const cn = el("text", { x: ux, y: uy + 20, class: "cname" }, ug);
       cn.textContent = u.commander.slice(0, 3);
       // 多阵地省：只给**选中**的单位显示阵地名。
       // 全显示的话，一个省三四个单位就糊成一团，反而看不清地图。
       if (p.positions && p.positions.length > 1 && p.positions[u.node] && selUnit === u.index) {
-        const nd = el("text", { x: ux, y: uy + 26, class: "nname" }, ug);
+        const nd = el("text", { x: ux, y: uy + 29, class: "nname" }, ug);
         nd.textContent = p.positions[u.node].name;
       }
       ug.addEventListener("click", (ev) => {

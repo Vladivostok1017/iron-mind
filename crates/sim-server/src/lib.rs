@@ -4044,6 +4044,9 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
                     "side": id_of(u.side),
                     "mine": mine,
                     "strength": round1(u.strength.to_display_f64()),
+                    // 满编兵力：界面据此画一条"还剩几成"的细条，
+                    // 不用点开就看得出哪支部队已经打残了。
+                    "max_strength": round1(u.max_strength.to_display_f64()),
                     "morale": round2(u.morale.to_display_f64()),
                     "supply": round2(u.supply.to_display_f64()),
                     "encircled": u.encircled,
