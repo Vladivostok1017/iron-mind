@@ -36,7 +36,7 @@ fn main() {
         return;
     };
     // 端口：不写死 8899。开发时那边可能正跑着一个，撞上去会连到别人的世界。
-    let port = free_port().unwrap_or(8899);
+    let port = pick_port();
     let portable = data_root();
     let root = portable
         .clone()
@@ -295,6 +295,23 @@ fn bundled_modules() -> Option<PathBuf> {
 fn free_port() -> Option<u16> {
     let l = TcpListener::bind("127.0.0.1:0").ok()?;
     l.local_addr().ok().map(|a| a.port())
+}
+
+/// 想要的端口。**不是洁癖**：页面按 `http://127.0.0.1:<port>` 区分 origin，
+/// 端口一变 `localStorage` 就是另一份 —— "引导看过了""上次玩到哪"这些标记
+/// 每次启动都会丢，于是上手引导每次都自己弹一遍。
+///
+/// 被占了就退到系统分配（绝不因为冲突起不来），代价只是这一次的标记会丢。
+/// 18735 而不是 18731：iOS 那个壳固定用 18731（+1/+2 顺延），同一个 App 的
+/// 两个平台版本可能装在同一台机器上，端口偏好错开才不会互相挤掉。
+const PREFERRED_PORT: u16 = 18735;
+
+fn pick_port() -> u16 {
+    // 先试固定的：能绑上说明没人占。绑完立刻放掉，紧接着让服务去绑同一个端口。
+    if TcpListener::bind(("127.0.0.1", PREFERRED_PORT)).is_ok() {
+        return PREFERRED_PORT;
+    }
+    free_port().unwrap_or(8899)
 }
 
 /// settings.env：一行一个 `KEY=VALUE`，`#` 开头是注释。
