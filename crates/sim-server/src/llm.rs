@@ -189,6 +189,51 @@ pub struct Judgement {
     pub reply: String,
 }
 
+/// 一个邻省。字段拆开写，是为了让"他能看见什么"一眼可查：
+/// 兵力是**估计**（情报表，±40% 且带送达延迟），铁路与补给源是**硬件**，
+/// 番号只有"这一仗里认出来了"才有。
+#[derive(Clone, Debug, Default)]
+pub struct NeighborInfo {
+    pub name: String,
+    pub owner: String,
+    pub enemy_est: f64,
+    pub terrain: String,
+    /// 有铁路才为真；没有铁路时 `rail_damage` 无意义。
+    pub has_rail: bool,
+    /// 铁路损坏 0-3（0 = 通，3 = 断）。
+    pub rail_damage: u8,
+    pub supply_source: bool,
+    /// 已认出的敌方番号（情报 `identity_known` 为真时才有）。
+    pub enemy_units: Vec<String>,
+}
+
+/// 一个远处目标（2-7 日行程内）。
+#[derive(Clone, Debug, Default)]
+pub struct FarTarget {
+    pub name: String,
+    pub hops: u32,
+    pub owner: String,
+    pub enemy_est: f64,
+    pub terrain: String,
+    pub has_rail: bool,
+    pub rail_damage: u8,
+    pub supply_source: bool,
+    pub enemy_units: Vec<String>,
+}
+
+/// 附近的一支**我方**部队。
+///
+/// 以前提示词里一条友军信息都没有：将领不知道自己侧翼有没有人，
+/// "要不要冒险""往哪退"就只能瞎猜 —— 而协同恰恰是这类战役的关键。
+#[derive(Clone, Debug, Default)]
+pub struct FriendUnit {
+    pub name: String,
+    pub province: String,
+    pub strength: f64,
+    /// 他当前在干什么（"进攻""固守"…）。不给判断，只给状态。
+    pub order: String,
+}
+
 /// 问一次模型需要的全部信息。**只放他能知道的**。
 #[derive(Clone, Default)]
 pub struct Ask {
@@ -213,14 +258,12 @@ pub struct Ask {
     pub owner: String,
     pub node_fort: u8,
     pub width: f64,
-    /// (省名, 归属, 敌方兵力估计, 地形)
-    pub neighbors: Vec<(String, String, f64, String)>,
-    /// (省名, 要走几天, 归属, 敌方兵力估计, 地形)
-    ///
+    /// 邻省：归属、兵力估计、地形、铁路状态、是否补给源、是否认出番号。
+    pub neighbors: Vec<NeighborInfo>,
     /// 远距离目标：将领不该只看得见邻省。没有这一项，"千里奔袭"
     /// 就永远落不了地——模型只会从邻省里挑一个，玩家说"抽两个师
     /// 去守万家岭"它就理解成"往邻省挪一步"。
-    pub far: Vec<(String, u32, String, f64, String)>,
+    pub far: Vec<FarTarget>,
     /// 上级要他做什么
     pub order_label: String,
     /// 命令来自"统帅部"还是"玩家亲自"
@@ -241,6 +284,10 @@ pub struct Ask {
     /// 战区态势：**只有事实**（敌我有效战力、够得着的敌方省及其设施与守军兵力）。
     /// 不含任何"该推进还是该收缩"的判断 —— 怎么解读是这名将领自己的事。
     pub situation: String,
+    /// 附近（同省 + 邻省）的我方部队。协同用：侧翼有没有人、谁在进攻。
+    pub friends: Vec<FriendUnit>,
+    /// 本方的补给源省名。他晓得 `supply` 是多少，但不晓得补给从哪来。
+    pub supply_sources: Vec<String>,
 }
 
 const SYSTEM: &str = r#"你是一名正在前线亲自指挥部队的将领。你不是助手、不是客服，也不在回答"用户"的提问。
@@ -339,10 +386,14 @@ fn build_sitrep_user(a: &Ask) -> String {
         s.push_str(&format!("本省阵地：{}\n", a.nodes.join(" / ")));
     }
     s.push_str("你打听到的邻省情况（**打听来的，未必准**）：\n");
-    for (name, owner, est, terr) in &a.neighbors {
+    for n in &a.neighbors {
         s.push_str(&format!(
-            "- {}（{}，{}，你估的敌军约 {:.1} 千）\n",
-            name, owner, terr, est
+            "- {}（{}，{}，你估的敌军约 {:.1} 千{}）\n",
+            n.name,
+            n.owner,
+            n.terrain,
+            n.enemy_est,
+            rail_bit(n.has_rail, n.rail_damage)
         ));
     }
     s.push_str(&format!(
@@ -350,6 +401,19 @@ fn build_sitrep_user(a: &Ask) -> String {
         a.obedience, a.initiative, a.aggression, a.caution
     ));
     s
+}
+
+/// 铁路状态的一小段文字。没铁路就什么都不加 —— 别在提示词里写"铁路：无"，
+/// 那会被模型当成"铁路被毁了"。
+fn rail_bit(has_rail: bool, damage: u8) -> String {
+    if !has_rail {
+        return String::new();
+    }
+    match damage {
+        0 => "，铁路通车".to_string(),
+        d if d >= 3 => "，铁路已炸断".to_string(),
+        d => format!("，铁路坏 {d} 级"),
+    }
 }
 
 fn build_user(a: &Ask) -> String {
@@ -390,20 +454,58 @@ fn build_user(a: &Ask) -> String {
         a.obedience, a.initiative, a.aggression, a.caution
     ));
     s.push_str("邻接省份：\n");
-    for (name, owner, est, terr) in &a.neighbors {
+    for n in &a.neighbors {
         s.push_str(&format!(
-            "- {}（{}，{}，敌军估计 {:.1} 千）\n",
-            name, owner, terr, est
+            "- {}（{}，{}，敌军估计 {:.1} 千{}",
+            n.name,
+            n.owner,
+            n.terrain,
+            n.enemy_est,
+            rail_bit(n.has_rail, n.rail_damage)
         ));
+        if n.supply_source {
+            s.push_str("，补给源");
+        }
+        if !n.enemy_units.is_empty() {
+            s.push_str(&format!("，番号 {}", n.enemy_units.join("、")));
+        }
+        s.push_str("）\n");
     }
     if !a.far.is_empty() {
         s.push_str("更远处的战场（要走几天，路上会被打、会掉队）：\n");
-        for (name, hops, owner, est, terr) in &a.far {
+        for f in &a.far {
             s.push_str(&format!(
-                "- {}（{}日行程，{}，{}，敌军估计 {:.1} 千）\n",
-                name, hops, owner, terr, est
+                "- {}（{}日行程，{}，{}，敌军估计 {:.1} 千{}",
+                f.name,
+                f.hops,
+                f.owner,
+                f.terrain,
+                f.enemy_est,
+                rail_bit(f.has_rail, f.rail_damage)
+            ));
+            if f.supply_source {
+                s.push_str("，补给源");
+            }
+            if !f.enemy_units.is_empty() {
+                s.push_str(&format!("，番号 {}", f.enemy_units.join("、")));
+            }
+            s.push_str("）\n");
+        }
+    }
+    // 友军：协同的基础。没有它，"要不要冒险"只能瞎猜。
+    if a.friends.is_empty() {
+        s.push_str("\n你附近没有其他我方部队。\n");
+    } else {
+        s.push_str("\n你附近的我方部队（不是你的人，同一条战线；可以指望，但不能替他们做主）：\n");
+        for f in a.friends.iter().take(8) {
+            s.push_str(&format!(
+                "- {} 在 {}（{:.1} 千，当前 {}）\n",
+                f.name, f.province, f.strength, f.order
             ));
         }
+    }
+    if !a.supply_sources.is_empty() {
+        s.push_str(&format!("\n你的补给源：{}\n", a.supply_sources.join("、")));
     }
     if !a.situation.is_empty() {
         // 给它**事实**，不给结论。以前这里写"司令部的作战方针：推进：主攻方向 X、Y"，
@@ -627,9 +729,10 @@ fn mock_sitrep(a: &Ask) -> Judgement {
         "我部在{}，兵 {:.1} 千，气 {:.2}，粮 {:.2}。",
         a.province, a.strength, a.morale, a.supply
     );
-    let enemy = a.neighbors.iter().find(|n| n.1 == "敌方控制");
+    let enemy = a.neighbors.iter().find(|n| n.owner == "敌方控制");
     match enemy {
-        Some((name, _, est, _)) if *est > 0.0 => {
+        Some(n) if n.enemy_est > 0.0 => {
+            let (name, est) = (&n.name, n.enemy_est);
             let bias = if a.aggression > 0.7 {
                 0.8
             } else if a.caution > 0.6 {
@@ -671,13 +774,13 @@ fn mock_judgement(a: &Ask) -> Judgement {
     let enemy = a
         .neighbors
         .iter()
-        .find(|n| n.1 == "敌方控制")
-        .map(|n| n.0.clone());
+        .find(|n| n.owner == "敌方控制")
+        .map(|n| n.name.clone());
     let own = a
         .neighbors
         .iter()
-        .find(|n| n.1 == "我方控制")
-        .map(|n| n.0.clone());
+        .find(|n| n.owner == "我方控制")
+        .map(|n| n.name.clone());
 
     // 有电报时先看电报里点了哪个地名——**邻省和远处都算**。
     //
@@ -691,10 +794,10 @@ fn mock_judgement(a: &Ask) -> Judgement {
             let where_ = a
                 .neighbors
                 .iter()
-                .map(|n| n.0.clone())
-                .chain(a.far.iter().map(|f| f.0.clone()))
+                .map(|n| n.name.clone())
+                .chain(a.far.iter().map(|f| f.name.clone()))
                 .find(|n| a.incoming.contains(n.as_str()))
-                .or_else(|| a.neighbors.iter().find(|n| n.1 == "敌方控制").map(|n| n.0.clone()));
+                .or_else(|| a.neighbors.iter().find(|n| n.owner == "敌方控制").map(|n| n.name.clone()));
             if let Some(name) = where_ {
                 return Judgement {
                     order: "bomb_rail".into(),
@@ -708,16 +811,16 @@ fn mock_judgement(a: &Ask) -> Judgement {
             }
         }
         let mut hit: Option<(String, bool)> = None;
-        for (name, owner, _, _) in &a.neighbors {
-            if a.incoming.contains(name.as_str()) {
-                hit = Some((name.clone(), owner == "我方控制"));
+        for n in &a.neighbors {
+            if a.incoming.contains(n.name.as_str()) {
+                hit = Some((n.name.clone(), n.owner == "我方控制"));
                 break;
             }
         }
         if hit.is_none() {
-            for (name, _hops, owner, _, _) in &a.far {
-                if a.incoming.contains(name.as_str()) {
-                    hit = Some((name.clone(), owner == "我方控制"));
+            for f in &a.far {
+                if a.incoming.contains(f.name.as_str()) {
+                    hit = Some((f.name.clone(), f.owner == "我方控制"));
                     break;
                 }
             }
@@ -1156,8 +1259,8 @@ fn local_talk(a: &Ask, question: &str) -> String {
     let enemy = a
         .neighbors
         .iter()
-        .find(|n| n.1 == "敌方控制")
-        .map(|n| n.0.clone());
+        .find(|n| n.owner == "敌方控制")
+        .map(|n| n.name.clone());
     let strength = format!("{:.1} 千", a.strength);
     let supply = if a.supply < 0.3 {
         "补给很紧，撑不了几天"
@@ -1183,8 +1286,8 @@ fn local_talk(a: &Ask, question: &str) -> String {
                 e,
                 (a.neighbors
                     .iter()
-                    .find(|n| n.1 == "敌方控制")
-                    .map(|n| n.2)
+                    .find(|n| n.owner == "敌方控制")
+                    .map(|n| n.enemy_est)
                     .unwrap_or(0.0)
                     .max(1.0))
                 .round()
@@ -1341,6 +1444,53 @@ mod hq_tests {
         assert!(s.contains("怎么解读由你自己判断"), "要明确判断归将领");
         assert!(!s.contains("作战方针"), "不许再把结论包装成方针");
         assert!(!s.contains("这是方向，不是命令"), "旧框架不许残留");
+    }
+
+    #[test]
+    fn prompt_carries_friends_rail_and_known_enemy_units() {
+        // A（友军）+ B（铁路/补给）+ D（番号）三条边界：都要出现在提示词里。
+        let mut a = Ask::default();
+        a.situation = "当面：我 10.0 千 / 敌方已知 5.0 千（战力比 2.00，敌方数字来自情报，未必准）。"
+            .into();
+        a.neighbors = vec![
+            NeighborInfo {
+                name: "德安".into(),
+                owner: "敌方控制".into(),
+                enemy_est: 6.0,
+                terrain: "丘陵".into(),
+                has_rail: true,
+                rail_damage: 3,
+                supply_source: true,
+                enemy_units: vec!["第106师团".into()],
+            },
+            NeighborInfo {
+                name: "沙河".into(),
+                owner: "我方控制".into(),
+                enemy_est: 0.0,
+                terrain: "平原".into(),
+                has_rail: false,
+                rail_damage: 0,
+                supply_source: false,
+                enemy_units: vec![],
+            },
+        ];
+        a.friends = vec![FriendUnit {
+            name: "第74军".into(),
+            province: "沙河".into(),
+            strength: 12.0,
+            order: "进攻".into(),
+        }];
+        a.supply_sources = vec!["九江".into()];
+        let s = build_user(&a);
+        assert!(s.contains("第74军 在 沙河"), "友军要在里面：{s}");
+        assert!(s.contains("进攻"), "友军当前在干什么也要给");
+        assert!(s.contains("铁路已炸断"), "铁路状态要报：{s}");
+        assert!(s.contains("补给源"), "补给源要报");
+        assert!(s.contains("番号 第106师团"), "认出来的番号要给名字：{s}");
+        assert!(s.contains("你的补给源：九江"), "本方的补给源要单独一段");
+        // 没铁路的省别写"铁路"，否则模型会以为被炸了
+        let shahe = s.split("- 沙河").nth(1).unwrap_or("");
+        assert!(!shahe.starts_with('（') || !shahe.split('）').next().unwrap_or("").contains("铁路"));
     }
 
     #[test]

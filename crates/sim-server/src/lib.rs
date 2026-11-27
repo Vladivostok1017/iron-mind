@@ -3237,15 +3237,39 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
     }
     let p = w.provinces.get(u.position as usize)?;
     let node = p.position_at(u.node);
+    // 番号：情报系统一直有 `identity_known` 这一层（第一次接触认不出、第二次才认出），
+    // 但从来没进过提示词 —— 等于白做。这里把它接上：认出来了才给名字。
+    let identity_of = |pid: u32| -> Vec<String> {
+        let known = w
+            .intel(u.side)
+            .get(pid as usize)
+            .map(|i| i.identity_known)
+            .unwrap_or(false);
+        if !known {
+            return Vec::new();
+        }
+        w.units_in(pid)
+            .iter()
+            .filter(|&&j| {
+                let x = &w.units[j as usize];
+                x.side == u.side.opponent() && x.is_alive()
+            })
+            .map(|&j| w.units[j as usize].name.clone())
+            .collect()
+    };
     let mut neighbors = Vec::new();
     for &nb in &p.neighbors {
         let q = &w.provinces[nb as usize];
-        neighbors.push((
-            q.name.clone(),
-            if q.owner == u.side { "我方控制" } else { "敌方控制" }.to_string(),
-            w.enemy_estimate(u.side, nb).to_display_f64(),
-            terrain_cn(q.terrain).to_string(),
-        ));
+        neighbors.push(llm::NeighborInfo {
+            name: q.name.clone(),
+            owner: if q.owner == u.side { "我方控制" } else { "敌方控制" }.to_string(),
+            enemy_est: w.enemy_estimate(u.side, nb).to_display_f64(),
+            terrain: terrain_cn(q.terrain).to_string(),
+            has_rail: q.rail,
+            rail_damage: q.rail_damage,
+            supply_source: q.is_supply_source,
+            enemy_units: identity_of(nb),
+        });
     }
     // 远处的地：将领不该只看得见邻省。
     //
@@ -3279,17 +3303,55 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
             continue;
         }
         let q = &w.provinces[pid as usize];
-        far.push((
-            q.name.clone(),
+        far.push(llm::FarTarget {
+            name: q.name.clone(),
             hops,
-            if q.owner == u.side { "我方控制" } else { "敌方控制" }.to_string(),
-            w.enemy_estimate(u.side, pid).to_display_f64(),
-            terrain_cn(q.terrain).to_string(),
-        ));
+            owner: if q.owner == u.side { "我方控制" } else { "敌方控制" }.to_string(),
+            enemy_est: w.enemy_estimate(u.side, pid).to_display_f64(),
+            terrain: terrain_cn(q.terrain).to_string(),
+            has_rail: q.rail,
+            rail_damage: q.rail_damage,
+            supply_source: q.is_supply_source,
+            enemy_units: identity_of(pid),
+        });
         if far.len() >= 10 {
             break;
         }
     }
+    // 附近的我方部队：同省 + 邻省。将领得知道侧翼有没有人，
+    // 否则"要不要冒险""往哪退"全靠猜 —— 而协同正是这类战役的胜负手。
+    let mut friends: Vec<llm::FriendUnit> = Vec::new();
+    {
+        let mut pids: Vec<u32> = vec![u.position];
+        pids.extend(p.neighbors.iter().copied());
+        for pid in pids {
+            for &j in w.units_in(pid).iter() {
+                if j as usize == idx {
+                    continue;
+                }
+                let x = &w.units[j as usize];
+                if x.side != u.side || !x.is_alive() {
+                    continue;
+                }
+                friends.push(llm::FriendUnit {
+                    name: x.name.clone(),
+                    province: w.provinces[pid as usize].name.clone(),
+                    strength: x.strength.to_display_f64(),
+                    order: x.order.label().to_string(),
+                });
+            }
+        }
+        friends.truncate(8);
+    }
+    // 本方补给源：他晓得自己的 supply 是多少，但不知道补给从哪来。
+    let supply_sources: Vec<String> = w
+        .provinces
+        .iter()
+        .filter(|q| q.owner == u.side && q.is_supply_source)
+        .map(|q| q.name.clone())
+        .take(8)
+        .collect();
+
     Some(llm::Ask {
         day: w.tick,
         sitrep: false,
@@ -3323,6 +3385,8 @@ fn build_ask_kind(state: &Arc<ServerState>, w: &World, idx: usize, incoming: &st
         incoming: incoming.to_string(),
         rail_damage: w.fx.rail_damage,
         situation: sim_core::ai::theater_facts(w, u.side).summary,
+        friends,
+        supply_sources,
     })
 }
 

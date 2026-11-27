@@ -32,6 +32,10 @@ fn map() -> World {
     ];
     let mut w = World::new(1, vec![a, b, c, d], units);
     w.campaign_days = u32::MAX;
+    // 情报表：给"沙河"一条估计（10 千），模拟"我们大致知道那边有多少人"。
+    // `theater_facts` **只读情报表** —— 这正是迷雾模型的边界：
+    // 部队真值再怎么变，只要情报没刷新，报出来的就该是旧估计。
+    w.intel_mut(Side::A)[1].enemy_strength = sim_core::Fixed::from_int(10);
     w
 }
 
@@ -67,7 +71,7 @@ fn reports_power_ratio_and_garrison_as_facts() {
         "沙河守军 10 千：{}",
         f.targets[0].garrison
     );
-    assert!(f.summary.contains("守军"), "{}", f.summary);
+    assert!(f.summary.contains("守军约"), "{}", f.summary);
 }
 
 #[test]
@@ -100,6 +104,38 @@ fn summary_contains_no_recommendation() {
     // 该有的都得有：双方兵力、兵力比、够得着的省
     assert!(s.contains("战力比"), "{}", s);
     assert!(s.contains("沙河"), "{}", s);
+}
+
+#[test]
+fn enemy_numbers_come_from_intel_not_truth() {
+    // 迷雾边界：真值抬到 100 千，但情报表还停在 10 千 —— 报出来的必须是 10。
+    let mut w = map();
+    w.units[1].strength = sim_core::Fixed::from_int(100);
+    w.units[1].max_strength = sim_core::Fixed::from_int(100);
+    let f = theater_facts(&w, Side::A);
+    assert!(
+        (f.foe_power - 10.0).abs() < 0.01,
+        "敌方总兵力只该用情报里的估计：{}",
+        f.foe_power
+    );
+    assert!(
+        (f.targets[0].garrison - 10.0).abs() < 0.01,
+        "守军也只该用估计，不许读真值：{}",
+        f.targets[0].garrison
+    );
+}
+
+#[test]
+fn without_intel_it_says_so() {
+    let mut w = map();
+    w.intel_mut(Side::A)[1].enemy_strength = sim_core::Fixed::ZERO;
+    let f = theater_facts(&w, Side::A);
+    assert!((f.foe_power - 0.0).abs() < 0.01);
+    assert!(
+        f.summary.contains("情报不足"),
+        "没有情报就要说没有，不能编一个比值：{}",
+        f.summary
+    );
 }
 
 #[test]

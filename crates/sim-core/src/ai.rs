@@ -285,10 +285,17 @@ pub struct Target {
 pub fn theater_facts(world: &World, side: Side) -> TheaterFacts {
     let enemy = side.opponent();
     let own_power = world.total_combat_power(side);
-    let foe_power = world.total_combat_power(enemy);
+    // 敌方总兵力**不能取真值**：这是迷雾模型，将领只该知道情报表里那些估计。
+    // 原来的写法读 `total_combat_power(enemy)`，等于把敌方全图兵力精确值
+    // 塞进每个将领的提示词（"兵力比 1.82"就是这么来的）。现在改成
+    // "情报表里所有已知省之和" —— 不知道的省就是 0，跟他本人知道的一样多。
+    let foe_v: f64 = world
+        .intel(side)
+        .iter()
+        .map(|i| i.enemy_strength.to_display_f64())
+        .sum();
     let own_v = own_power.to_display_f64();
-    let foe_v = foe_power.to_display_f64();
-    let ratio = if foe_power.is_zero() { 9.99 } else { own_v / foe_v };
+    let ratio = if foe_v > 0.0 { own_v / foe_v } else { 9.99 };
 
     let mut targets: Vec<Target> = Vec::new();
     for (i, prov) in world.provinces.iter().enumerate() {
@@ -315,15 +322,9 @@ pub fn theater_facts(world: &World, side: Side) -> TheaterFacts {
         if prov.fort > 0 {
             facilities.push(format!("工事 {} 级", prov.fort));
         }
-        let garrison: f64 = world
-            .units_in(i as u32)
-            .iter()
-            .filter(|&&j| {
-                let u = &world.units[j as usize];
-                u.side == enemy && u.kind.is_ground() && u.is_alive()
-            })
-            .map(|&j| world.units[j as usize].strength.to_display_f64())
-            .sum();
+        // 守军也只给**估计**（情报表）。读 `units_in` 的真值会直接漏掉迷雾：
+        // 同一句提示词里，邻省是 ±40% 的估计、守军却是精确值，两个口径打架。
+        let garrison = world.enemy_estimate(side, i as u32).to_display_f64();
         targets.push(Target {
             province: i as u32,
             name: prov.name.clone(),
@@ -340,10 +341,16 @@ pub fn theater_facts(world: &World, side: Side) -> TheaterFacts {
     });
     targets.truncate(4);
 
+    // 数字一律标明口径：敌方是"已知"、来自情报。别让它读成精确真值。
+    let ratio_txt = if foe_v > 0.0 {
+        format!("（战力比 {:.2}，敌方数字来自情报，未必准）", ratio)
+    } else {
+        "（敌方情报不足）".to_string()
+    };
     let summary = if targets.is_empty() {
         format!(
-            "当面：我 {:.1} 千 / 敌 {:.1} 千（战力比 {:.2}）。没有与我方地面部队相邻的敌方省份。",
-            own_v, foe_v, ratio
+            "当面：我 {:.1} 千 / 敌方已知 {:.1} 千{}。没有与我方地面部队相邻的敌方省份。",
+            own_v, foe_v, ratio_txt
         )
     } else {
         let list = targets
@@ -354,15 +361,15 @@ pub fn theater_facts(world: &World, side: Side) -> TheaterFacts {
                     bits.push_str(&format!("（{}）", t.facilities.join("、")));
                 }
                 if t.garrison > 0.0 {
-                    bits.push_str(&format!(" 守军 {:.1} 千", t.garrison));
+                    bits.push_str(&format!(" 守军约 {:.1} 千", t.garrison));
                 }
                 bits
             })
             .collect::<Vec<_>>()
             .join("；");
         format!(
-            "当面：我 {:.1} 千 / 敌 {:.1} 千（战力比 {:.2}）。与我方地面部队相邻的敌方省份（按设施多寡排序）：{}。",
-            own_v, foe_v, ratio, list
+            "当面：我 {:.1} 千 / 敌方已知 {:.1} 千{}。与我方地面部队相邻的敌方省份（按设施多寡排序）：{}。",
+            own_v, foe_v, ratio_txt, list
         )
     };
 
