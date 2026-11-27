@@ -536,6 +536,10 @@ pub struct Province {
     /// 铁路断了（省丢了），同一支部队的补给立刻塌。
     /// 以前 supply_throughput 只是一个省上的常数，看不出"干线"这件事。
     pub rail: bool,
+    /// 车站名（可选）。有车站 = 铁路上的转运点：补给经过它会被"重新装载"，
+    /// 于是补给能靠车站一站一站往前推，而不是从补给源一路衰减。
+    /// 只在 `rail` 为真、且 `rail_damage < 3` 时起作用（见 `compute_supply`）。
+    pub station: Option<String>,
     /// 铁路损坏程度 0-3（0 = 通，3 = 断）。**只有 `Features::rail_damage` 开启时才变**；
     /// 老模块永远是 0，也不进哈希——定稿的行为不受影响。
     pub rail_damage: u8,
@@ -564,6 +568,7 @@ impl Province {
             owner,
             is_supply_source: false,
             rail: false,
+            station: None,
             rail_damage: 0,
             rail_repair: 0,
             lon: Fixed::ZERO,

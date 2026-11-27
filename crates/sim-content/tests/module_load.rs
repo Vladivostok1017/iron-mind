@@ -93,6 +93,7 @@ fn prov(id: u32, name: &str, owner: SideDef, nb: &[u32]) -> ProvinceDef {
         owner: Some(owner),
         supply_source: false,
         rail: false,
+        station: None,
         fort: 0,
         positions: Vec::new(),
         elev: None,

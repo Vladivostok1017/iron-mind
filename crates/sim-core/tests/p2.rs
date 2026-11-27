@@ -178,6 +178,55 @@ fn railway_carries_supply_further() {
 }
 
 #[test]
+fn station_reloads_supply() {
+    // 0(补给源) — 1 — 2 — 3 — 4(车站) — 5 — 6 — 7(前线)
+    // 一条长线：没有车站时补给从源头一路衰减到底；中间那站有车站时，
+    // 补给在站上"重新装载"到 0.9，前线因此明显更足。
+    let build = |station: bool| {
+        let mut provs = Vec::new();
+        for i in 0..8u32 {
+            let mut p = Province::new(&format!("p{i}"), Terrain::Plain, Side::A);
+            if i == 0 {
+                p.is_supply_source = true;
+            }
+            // 铁路是**一段**，不是一站：3、4 两省都在线上，车站在 4。
+            // （"沿铁路过来"这个条件要求上一段也是铁路，所以不能只把站标成铁路。）
+            if i == 3 || i == 4 {
+                p.rail = true;
+                if i == 4 && station {
+                    p.station = Some("九江站".into());
+                }
+            }
+            provs.push(p);
+        }
+        for i in 0..8usize {
+            let mut nb = Vec::new();
+            if i > 0 {
+                nb.push(i as u32 - 1);
+            }
+            if i < 7 {
+                nb.push(i as u32 + 1);
+            }
+            provs[i].neighbors = nb;
+        }
+        let mut u = Unit::new("前线师", Side::A, 7, 8);
+        u.supply_reach = Fixed::ZERO;
+        u.manual = true;
+        u.order = Order::Hold;
+        let mut w = World::new(1, provs, vec![u]);
+        w.campaign_days = u32::MAX;
+        sim_core::run_ticks(&mut w, 1);
+        w.units[0].supply.to_display_f64()
+    };
+    let plain = build(false);
+    let with_station = build(true);
+    assert!(
+        with_station > plain * 1.5,
+        "车站应当把补给明显推得更远（{plain} → {with_station}）"
+    );
+}
+
+#[test]
 fn river_carries_supply() {
     // 补给源在江对岸的水道省：以前水道被直接跳过，根本送不过去
     let mut a = Province::new("后方", Terrain::Plain, Side::A);

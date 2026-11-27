@@ -4115,6 +4115,8 @@ fn snapshot(w: &World, viewer: Side, sides: &Sides) -> String {
             "owner_known": p.owner == viewer || i_intel.is_known(),
             "mine": p.owner == viewer,
             // 铁路：地形视图里要画出来。
+            // 车站名：有车站在图上会有一个站点符号，悬停能看到名字。
+            "station": p.station,
             // 之前只有引擎知道（`Province.rail` 参与补给计算），界面拿不到，
             // 于是"守住南浔铁路"这条最重要的战略提示在图上完全看不见。
             "rail": p.rail,

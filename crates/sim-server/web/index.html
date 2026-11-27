@@ -319,11 +319,24 @@
      补给每过一省乘"通路损耗 × 省吞吐"（铁路 0.95 / 水路 0.85 / 陆路 0.75），
      所以铁路是这张图上最重要的战略提示——以前它根本没画出来。 */
   .rail { pointer-events: none; }
-  .rail .railbed { stroke: #151c24; stroke-width: 3.4; stroke-linecap: round; opacity: .85; }
-  .rail .rails { stroke: #8a7448; stroke-width: 1.4; stroke-dasharray: 5 4; stroke-linecap: round; }
+  /* 铁路：照地图的经典画法 —— 深色描边 + **浅灰轨面** + 深色短横当枕木，
+     远看就是灰白交替的一条线。以前是一条暖色虚线，看着像"小路"而不是干线。 */
+  .rail .railbed { stroke: #0a0f15; stroke-width: 5.2; stroke-linecap: round; opacity: .9; }
+  .rail .rails { stroke: #e6ebf1; stroke-width: 3.0; stroke-linecap: butt; }
+  /* 枕木：**比轨面略宽**的深色短横，两端露出来一点 —— 这才是地图上"铁轨"的样子。
+     比轨面窄就成了"白线段"，比轨面宽太多又像黑线。1.2 实 / 4.6 空。 */
+  .rail .sleepers { stroke: #10171f; stroke-width: 4.4; stroke-dasharray: 1.2 4.6; stroke-linecap: butt; }
   /* 预览版铁路被炸：坏一段变橙、断了变红并拉开间隔 */
-  .rail .rails.hurt { stroke: #d08a2a; stroke-width: 1.6; stroke-dasharray: 3 6; }
-  .rail .rails.cut { stroke: #c0392b; stroke-width: 1.8; stroke-dasharray: 1 9; }
+  /* 被炸：线还在，但颜色转橙；炸断（3 级）：轨面转红、枕木断成点，表示这段不通了 */
+  .rail .rails.hurt { stroke: #f0b45c; }
+  .rail .sleepers.hurt { stroke: #8a5416; }
+  .rail .rails.cut { stroke: #d0503e; }
+  .rail .sleepers.cut { stroke: #d0503e; stroke-dasharray: 1 7; }
+  /* 车站：地图上的站点符号（双圈） */
+  #map .station-ring { fill: #0a0f15; stroke: #eceff3; stroke-width: 1.1; }
+  #map .station-core { fill: #eceff3; }
+  #map .station-name { fill: #dfe6ee; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0a0e13; stroke-width: calc(2px * var(--u, 1)); }
   .marchline text { fill: #c9a227; font-size: 9px; font-weight: 600;
     text-anchor: middle; paint-order: stroke; stroke: #0b1016; stroke-width: 2.4px; }
   /* 地形视图的高程色标 */
@@ -2245,14 +2258,11 @@ function renderMap() {
         // 预览版铁路被炸：坏的段落换颜色、断了画成红色虚点。
         // 这一层不加文字标注（图上已经够挤），点省份看详情里有具体等级。
         const dmg = fxOn("rail_damage") ? Math.max(p.rail_damage || 0, q.rail_damage || 0) : 0;
-        if (dmg > 0) {
-          const cls = dmg >= 3 ? "rails cut" : "rails hurt";
-          el("line", Object.assign({ class: "railbed" }, seg), railG);
-          el("line", Object.assign({ class: cls }, seg), railG);
-        } else {
-          el("line", Object.assign({ class: "railbed" }, seg), railG);
-          el("line", Object.assign({ class: "rails" }, seg), railG);
-        }
+        const state = dmg >= 3 ? " cut" : dmg > 0 ? " hurt" : "";
+        el("line", { x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, class: "railbed" }, railG);
+        el("line", { x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, class: "rails" + state }, railG);
+        // 枕木：叠在轨面上，做出灰白交替的效果
+        el("line", { x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, class: "sleepers" + state }, railG);
       }
     }
   }
@@ -2518,6 +2528,20 @@ function renderMap() {
   }
 
   // 省名统一放到最后建的一层：压在兵牌和行军线之上。
+  // 车站符号：**画在部队层之上** —— 它只是个双圈小点，不会挡住兵牌；
+  // 画在下面的话，省心（质心）上正好压着部队标记，站点就永远看不见了。
+  {
+    const stG = el("g", { class: "stations", "pointer-events": "none" }, svg);
+    for (const p of S.provinces) {
+      if (!p.station) continue;
+      const c = geom.centroids[p.id];
+      if (!c) continue;
+      const u = markUnit();
+      el("circle", { cx: c[0], cy: c[1] - 9 * u, r: 3.8 * u, class: "station-ring" }, stG);
+      el("circle", { cx: c[0], cy: c[1] - 9 * u, r: 3.8 * u * 0.42, class: "station-core" }, stG);
+    }
+  }
+
   if (allLabels.length) {
     allLabels.forEach((e) => labelLayer.appendChild(e));
   }
@@ -3201,6 +3225,7 @@ function showTip(ev, p) {
       "<span style='color:#7d8794'>　江面被封锁</span></div>");
   }
   rows.push("<div class='t-row'>归属：<b>" + (p.mine ? "我方" : (p.owner_known ? "敌方" : "未知")) + "</b></div>");
+  if (p.station) rows.push("<div class='t-row'>车站：<b>" + p.station + "</b>（铁路转运点）</div>");
   if (p.supply_source) rows.push("<div class='t-row'>补给源</div>");
   // 预览版铁路状态：炸了几级、还能不能通车。图上只有颜色深浅，这里给数字。
   if (fxOn("rail_damage") && p.rail) {

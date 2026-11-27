@@ -441,7 +441,18 @@ fn compute_supply(world: &World, side: Side) -> Vec<Fixed> {
             } else {
                 decay
             };
-            let cand = cur_level * base * np.supply_throughput * pass;
+            let mut cand = cur_level * base * np.supply_throughput * pass;
+            // 车站：铁路上的转运点。补给到这里被"重新装载"——不论从补给源走了
+            // 多远，只要这条线上的车站是通的，这一省至少能拿到 0.9 的补给。
+            // 于是铁路能一站一站把补给推到前线，而不是从源头 ×0.95 一路衰减。
+            // 前置条件：这段铁路没被炸断、也没有敌军踩在这条线上（`interdicted`）。
+            let cur_rail = world.provinces[cur as usize].rail;
+            if np.station.is_some() && np.rail && cur_rail && dmg < 3 && !interdicted {
+                let loaded = Fixed::ratio(90, 100) * np.supply_throughput;
+                if loaded > cand {
+                    cand = loaded;
+                }
+            }
             if cand > level[nb as usize] {
                 level[nb as usize] = cand;
                 queue.push_back(nb);
