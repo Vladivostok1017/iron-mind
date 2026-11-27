@@ -417,7 +417,7 @@ content/scenarios/
   并套 try/catch 把错误显示成 toast。
 - 激活：`startModule()` 把模块路径写进 `sessionStorage.im_module`，`renderTop()` 每次
   调 `Tutorial.maybeStart()`。走 sessionStorage 是因为**转屏会重载页面**，内存变量会丢。
-- 卡片贴左下角、可「跳过」；最后一步给「完成，回首页」。首页菜单「教程 · 三分钟」。
+- 卡片贴左下角、可「跳过」；最后一步给「完成，回首页」。首页菜单「教程」。
 
 `docs/27-玩家手册.md` 只留作开发/QA 与模块作者参考，**不是给玩家的入口**。
 

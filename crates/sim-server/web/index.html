@@ -902,6 +902,9 @@
   #tut .tut-dots i { width: 5px; height: 5px; border-radius: 50%; background: #2f3d4c; }
   #tut .tut-dots i.on { background: #c9a227; }
   #tut .tut-dots i.done { background: #4a7a52; }
+  #tut .tut-lk { background: transparent; border: none; color: #6f8aa6; font-size: 10.5px;
+    cursor: pointer; padding: 0 4px; text-decoration: underline dotted; }
+  #tut .tut-lk:hover { color: #a9c8e4; }
   #tut .tut-x { background: transparent; border: none; color: #6f7a86; font-size: 15px;
     cursor: pointer; line-height: 1; padding: 0 2px; }
   #tut .tut-x:hover { color: #cfd8e3; }
@@ -1054,6 +1057,7 @@
     <div class="tut-h">
       <span id="tut-step"></span>
       <span class="tut-dots" id="tut-dots"></span>
+      <button class="tut-lk" id="tut-guide" title="看文字版说明">文字版</button>
       <button class="tut-x" id="tut-skip" title="跳过教程">×</button>
     </div>
     <div class="tut-t" id="tut-t"></div>
@@ -1148,12 +1152,8 @@
         <div><div class="i-t">读取存档</div><div class="i-d">存档存的是命令流，读档会核对哈希</div></div>
       </button>
       <button class="h-item" id="hm-tutorial">
-        <div class="i-k">?</div>
-        <div><div class="i-t">教程 · 三分钟</div><div class="i-d">一条桥、两个团：跟着做完五步，就会玩了</div></div>
-      </button>
-      <button class="h-item" id="hm-guide">
         <div class="i-k">T</div>
-        <div><div class="i-t">上手引导</div><div class="i-d">五分钟：怎么发电报、为什么会抗命</div></div>
+        <div><div class="i-t">教程</div></div>
       </button>
       <button class="h-item" id="hm-set">
         <div class="i-k">S</div>
@@ -1767,7 +1767,7 @@ function render() {
   }
 }
 
-// ── 教学关（教程 · 三分钟）─────────────────────────────────────────────
+// ── 教学关（首页「教程」）─────────────────────────────────────────────
 //
 // 为什么不做"读手册"：玩家不该为了玩游戏先读说明书。所以教学关就是**一局真战役**，
 // 只是地图小、对面弱，屏幕上多一张卡写着"现在该点哪儿"，你照做它就往下走。
@@ -1776,27 +1776,18 @@ function render() {
 // 切了补给视图），不按时间、也不硬编码坐标 —— 换一张教学地图照样能用。
 const Tutorial = (() => {
   const STEPS = [
-    { k: "select", t: "点一下你的兵牌",
-      d: "地图上蓝色的「兵」是你的地面部队。点它，能看到兵力、士气、补给和当前命令。" },
-    { k: "telegram", t: "在右侧电报台给第1团发一句人话",
-      d: "写「推进到界桥」就行。你不是在点按钮，你是在下命令——将领按自己的理解执行，可能打折扣、可能抗命。" },
-    { k: "advance", t: "点底部「推进 1 日」",
-      d: "一天一天过。命令不是立刻生效的，传令要时间。看顶栏的「战报 N 份在途」——那是还在路上的消息。" },
-    { k: "mail", t: "打开战报信箱",
-      d: "谁打了、打掉多少、谁抗命了，全在这儿。你不是上帝视角，只能从报告里知道战场。" },
-    { k: "supply", t: "切到「补给」视图",
-      d: "补给从「北岸车站」出发，沿铁路一站一站往前推：车站会把补给重新装载回 0.9。铁路被炸断，靠它转运的补给会一起塌。" },
-    { k: "positions", t: "右键点一下「北岸桥头」",
-      d: "一个省可以有好几个阵地。这一省有「桥头堡」和「北岸高地」；阵地的展开宽度决定能站几个团——界桥的桥面只有 30%，两个团挤不进去。" },
-    { k: "air", t: "点一下空军的牌子（写着「机」）",
-      d: "空军不占省、不会走路，只有两条命令：侦察（只出情报、不损耗）和出击（投弹，会损耗飞机）。它还能炸铁路——炸断一段，车站转运全废。" },
-    { k: "naval", t: "点一下舰队的牌子（写着「舰」）",
-      d: "舰队只能待在水面（江面那块）。它的作用是「封锁」：掐断对岸港口的海运补给；沿岸的仗它还能给舰炮支援。" },
-    { k: "intel", t: "切到「情报」视图",
-      d: "敌情有三档：精确、近似（±40%）、未知。番号要**接触两次**才认得出，情报超过 3 天就标「已过期」。数字是打听到的，不是真的。" },
-    { k: "done", t: "学会了",
-      d: "整个游戏就是这四步循环：看态势 → 下命令 → 推进一天 → 读战报。去正片里打一场真的。" },
+    { k: "select", t: "点一下你的兵牌", d: "看兵力、士气、补给、当前命令。" },
+    { k: "telegram", t: "给第1团发一句电报", d: "写「推进到界桥」。将领可能打折扣，甚至抗命。" },
+    { k: "advance", t: "点「推进 1 日」", d: "命令不是立刻生效的。" },
+    { k: "mail", t: "打开战报信箱", d: "战场只从报告里知道。" },
+    { k: "supply", t: "切到「补给」视图", d: "补给沿铁路走，车站在这里重新装载。" },
+    { k: "positions", t: "右键「北岸桥头」", d: "一省多阵地。展开宽度决定能站几个团。" },
+    { k: "air", t: "点空军牌子（「机」）", d: "侦察不损耗，出击损耗；能炸铁路。" },
+    { k: "naval", t: "点舰队牌子（「舰」）", d: "只能待水面。封锁断对岸海运。" },
+    { k: "intel", t: "切到「情报」视图", d: "敌情三档精度，番号要接触两次。" },
+    { k: "done", t: "学会了", d: "看态势 → 下命令 → 推进 → 读战报。" },
   ];
+
   let step = -1;
   let active = false;
   let started = false;
@@ -1852,6 +1843,7 @@ const Tutorial = (() => {
 })();
 
 bind("tut-skip", "click", () => Tutorial.stop());
+bind("tut-guide", "click", () => { Tutorial.stop(); Home.hide(); Guide.start(); });
 bind("tut-next", "click", () => { Tutorial.stop(); Home.show(); });
 bind("hm-tutorial", "click", async () => {
   // `startModule` 是 Home 内部的函数（不是全局），必须走 Home.startModule。
@@ -4703,7 +4695,8 @@ const Home = (() => {
     // 而不是把玩家丢回首页。sessionStorage 在进程内有效，正好。
     try { sessionStorage.setItem("im_in_game", "1"); } catch (e) { }
     // 第一次真正进游戏时把引导跑一遍。跳过也算看过，之后不再打扰。
-    if (!localStorage.getItem("im_onboarded") && !autoGuided) {
+    const tutOn = (() => { try { return Tutorial.isActive(); } catch (e) { return false; } })();
+    if (!localStorage.getItem("im_onboarded") && !autoGuided && !tutOn) {
       autoGuided = true;
       setTimeout(() => Guide.start(), 300);
     }
@@ -5249,7 +5242,7 @@ bind("hm-continue", "click", async () => {
 });
 bind("hm-new", "click", () => Home.newCampaign());
 bind("hm-load", "click", () => loadGame());
-bind("hm-guide", "click", () => { Home.hide(); Guide.start(); });
+
 bind("hm-set", "click", () => Home.settings());
 bind("hm-about", "click", () => Home.about());
 bind("oc-home", "click", () => {
