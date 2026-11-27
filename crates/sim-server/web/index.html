@@ -323,19 +323,14 @@
      远看就是灰白交替的一条线。以前是一条暖色虚线，看着像"小路"而不是干线。 */
   /* 铁路（照高德/OSM 那种画法）：**深色底轨 + 白色短刻度**。
      之前做成"白底 + 深色枕木"是反的 —— 真实地图上白的是刻度、底是深色。 */
-  /* 外圈只留一层很淡的投影：深色描边会在深色地图上像"把省切开"。 */
-  .rail .railbed { stroke: #05090d; stroke-width: 5.2; stroke-linecap: round; opacity: .28; }
-  /* 底轨要比白刻度**明显宽**：这样白段是"嵌在暗带里"的刻度，
-     而不是"白虚线"。宽度差不够时，远看就只是一条虚线。 */
-  /* 轨带用**浅灰**：深色地图上一条近黑的线会像把图切开。
-     浅灰轨带 + 中灰刻度 = "一段浅、一段深"，远看是铁轨而不是色块。 */
-  .rail .rails { stroke: #cbd3dd; stroke-width: 3.4; stroke-linecap: butt; }
-  /* 白色刻度：短实线 + 较长的空，沿线条均匀排开，远看就是"缝合线"那种铁轨 */
-  /* 白刻度要**短于**灰段（5 实 / 10 空）：白段一长，整条线就读成"白虚线"了。
-     真实的铁路图是暗带为主、白刻度为辅。 */
-  .rail .sleepers { stroke: #5b6572; stroke-width: 3.4; stroke-dasharray: 4 6; stroke-linecap: butt; }
-  /* 预览版铁路被炸：坏一段变橙、断了变红并拉开间隔 */
-  /* 被炸：线还在，但颜色转橙；炸断（3 级）：轨面转红、枕木断成点，表示这段不通了 */
+  /* 铁路：**整组半透明**。在深色地图上和明暗较劲没意义 ——
+     半透明之后它自然融进底色，既看得出是干线，又不会像一条把省切开的线。 */
+  .rail { opacity: .55; }
+  .rail .railbed { stroke: #05090d; stroke-width: 4.6; stroke-linecap: round; opacity: .5; }
+  .rail .rails { stroke: #cbd3dd; stroke-width: 3.2; stroke-linecap: butt; }
+  /* 一段浅灰、一段中灰：刻度比轨带深一档就够 */
+  .rail .sleepers { stroke: #59636f; stroke-width: 3.2; stroke-dasharray: 4 6; stroke-linecap: butt; }
+  /* 被炸 / 炸断：颜色照旧，但同样吃整组的半透明 */
   .rail .rails.hurt { stroke: #d8a86a; }
   .rail .sleepers.hurt { stroke: #8a5a20; }
   .rail .rails.cut { stroke: #a5453a; }
@@ -350,7 +345,7 @@
   /* 空袭爆点：八条射线 + 实心点 */
   #map .blast-ray { stroke: #ff7a4d; stroke-width: 1.6; stroke-linecap: round; }
   #map .blast-core { fill: #ff9a5c; stroke: #2a0f06; stroke-width: 1; }
-  /* 封锁环：圈住被舰队封住的那片水面 */
+  /* 封锁环：圈住被舰队封住的那片水面（虚线、不填充） */
   #map .blockade-ring { fill: none; stroke: #d0503e; stroke-width: 1.4;
     stroke-dasharray: 6 4; opacity: .8; pointer-events: none; }
   /* 车站：地图上的站点符号（双圈） */
