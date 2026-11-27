@@ -142,6 +142,16 @@
   .est { font-size: 9.5px; fill: #e8c9a0; text-anchor: middle; pointer-events: none;
     paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
   .fortmark { font-size: 8px; fill: #b09a63; text-anchor: middle; pointer-events: none; }
+  /* 阵地分格：内核只给阵地名/宽度/工事，**没有坐标**，所以按省包围盒等分成 N 条，
+     再用裁剪路径裁进省界内。只在选中或右键查看这个省时才画。 */
+  .pos-band { fill: #e3b657; opacity: .045; pointer-events: none; }
+  .pos-band.alt { opacity: .095; }
+  .pos-line { stroke: #e3b657; stroke-width: .8; stroke-dasharray: 3 3;
+    opacity: .45; pointer-events: none; }
+  .pos-name { font-size: 9px; fill: #e8c48a; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0a0e13; stroke-width: 2px; }
+  .pos-meta { font-size: 7.5px; fill: #9aa6b4; text-anchor: middle; pointer-events: none;
+    paint-order: stroke; stroke: #0a0e13; stroke-width: 1.8px; }
 
   .unit { cursor: pointer; }
   .unit .plate { stroke: #0a0e13; stroke-width: 1.2; }
@@ -1801,6 +1811,48 @@ function renderMap() {
       fill: landFill(p),
       class: "land",
     }, g);
+
+    // 阵地分格：**只在选中/右键查看这个省、且确实有多个阵地时**才画。
+    // 阵地在内核里是 name + width + fort 的列表（没有坐标），
+    // 所以这里按省多边形的包围盒等分成 N 条竖带，再用 clipPath 裁进省界 ——
+    // 不假装知道它们的真实地形位置，只是把"N 个阵地、各占多宽、各驻几支"摆出来。
+    const poss = p.positions || [];
+    if (poss.length > 1 && (nodeProv === p.id || curProv === p.id)) {
+      let bx0 = 1e9, bx1 = -1e9, by0 = 1e9, by1 = -1e9;
+      for (const pt of poly) {
+        if (pt[0] < bx0) bx0 = pt[0];
+        if (pt[0] > bx1) bx1 = pt[0];
+        if (pt[1] < by0) by0 = pt[1];
+        if (pt[1] > by1) by1 = pt[1];
+      }
+      // 质心在这里要自己取一次：下面那段 `const c = ...` 在这之后才定义
+      const cc = geom.centroids[p.id] || [(bx0 + bx1) / 2, (by0 + by1) / 2];
+      const bandW = (bx1 - bx0) / poss.length;
+      const cid = "clip-pos-" + p.id;
+      const cp = el("clipPath", { id: cid }, g);
+      el("path", { d: ptsToPath(poly) }, cp);
+      const bandG = el("g", { "clip-path": "url(#" + cid + ")", "pointer-events": "none" }, g);
+      poss.forEach((_, i) => {
+        el("rect", {
+          x: bx0 + i * bandW, y: by0, width: bandW, height: by1 - by0,
+          class: "pos-band" + (i % 2 ? " alt" : ""),
+        }, bandG);
+      });
+      // 界线与说明不裁剪：窄带里的字被裁掉就看不懂了
+      const posG = el("g", { "pointer-events": "none" }, g);
+      poss.forEach((pos, i) => {
+        if (i > 0) {
+          el("line", { x1: bx0 + i * bandW, y1: by0, x2: bx0 + i * bandW, y2: by1, class: "pos-line" }, posG);
+        }
+        const here = (p.units || []).filter((u) => (u.node || 0) === i);
+        const cx = bx0 + (i + 0.5) * bandW;
+        el("text", { x: cx, y: cc[1] + 28, class: "pos-name" }, posG).textContent = pos.name;
+        el("text", { x: cx, y: cc[1] + 37, class: "pos-meta" }, posG).textContent =
+          Math.round((pos.width || 1) * 100) + "%" +
+          (pos.fort ? "·砦" + pos.fort : "") +
+          (here.length ? " ·" + here.length + "支" : "");
+      });
+    }
 
     // 敌情精度：外描边
     if (!p.mine && p.intel.known) {
