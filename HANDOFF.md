@@ -620,6 +620,9 @@ docs/24 §7.8                   写清为什么存档不能进 bundle
 | 换 bundle 后文件面板返 nil | wry 的注释里写明：`NSOpenPanel` 在 bundle 被替换后拿不到 XPC 服务。**重打包前先退出 App** |
 | 导入 .imod：选完文件点「打开」没反应 | `runModal` 在非激活窗口下会吃掉那一下。**双击文件可以**；或直接放进 modules/ 目录 |
 | 同一份页面，三端三种「导入坏了」 | `accept=".imod"` 的三种死法：iOS 全灰、macOS 选完静默丢弃、老安卓看不出。**结论：不设 accept**，把关交给内核的加载器 |
+| macOS 上「选阵营/换战役」点了没反应 | `confirm()` 要宿主实现 `WKUIDelegate` 对话框代理，**wry 一个都没实现** → 恒返回 false。改用自绘 `Dlg.confirm()`（WebView2 自带默认对话框，所以 Windows 上一直没暴露） |
+| 回首页后「点不动」 | `#guide`(150) / `#setup`(140) / `#dlg`(130) 的 z-index 都高于 `#home`(110)，任意一层还开着就会吃掉首页的点击。`Home.show()` 现在先把它们全收掉 |
+| 每局都自己弹上手引导 | 桌面版端口原来是随机的 → `http://127.0.0.1:<port>` 的 origin 每次都变 → `localStorage` 换了一份，"看过引导"永远存不住。现在首选固定端口（桌面/Mac 18735、iOS 18731），占不到才随机 |
 
 ---
 
