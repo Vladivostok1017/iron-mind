@@ -601,7 +601,28 @@ Swift 类型检查零错误、5 个文件 + 26 MB 静态库链成 arm64 可执�
 
 ---
 
+## 16 macOS（1.5.1，2026-11）
+
+**没有新壳。** `crates/sim-desktop` 一直是跨平台的（tao + wry），Windows 用 WebView2、
+macOS 用 WKWebView；只是从来没人给它打过 macOS 的包。补的：
+
+```
+tools/build-mac.sh             装配 .app（两二进制 + modules + icns + Info.plist + ad-hoc 签名）
+crates/sim-desktop/src/main.rs mac_data_root()：数据落 ~/Library/Application Support/IronMind
+docs/24 §7.8                   写清为什么存档不能进 bundle
+```
+
+| 踩过的坑 | 原因 |
+|---|---|
+| 裸二进制启动后存档写不进 | Finder 启动时工作目录是 `/`。现在没有便携布局就显式设 `IRONMIND_DATA` |
+| 不设 `NSAllowsLocalNetworking` 白屏 | ATS 只放行 https，页面走的是 `http://127.0.0.1` |
+| 没有 bundle 就没有 Dock 图标 / 不能双击 | 必须打成 `.app`；顺带解决了激活问题 |
+| 换 bundle 后文件面板返 nil | wry 的注释里写明：`NSOpenPanel` 在 bundle 被替换后拿不到 XPC 服务。**重打包前先退出 App** |
+| 导入 .imod：选完文件点「打开」没反应 | `runModal` 在非激活窗口下会吃掉那一下。**双击文件可以**；或直接放进 modules/ 目录 |
+| 同一份页面，三端三种「导入坏了」 | `accept=".imod"` 的三种死法：iOS 全灰、macOS 选完静默丢弃、老安卓看不出。**结论：不设 accept**，把关交给内核的加载器 |
+
 ---
+
 ## 13 1.0 与 1.1（2026-12）
 
 | 版本 | 做了什么 |

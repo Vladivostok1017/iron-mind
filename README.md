@@ -198,6 +198,13 @@ pwsh -File install.ps1 -Modules F:\dsh\nanxun-1938 -DefaultModule nanxun_1938.im
 装好之后开始菜单和桌面会有「钢心」，双击就是**原生窗口**：首页 → 选战役 → 上手引导。
 配置（模型 key、敌方统帅部节奏、模块目录）在 `%LOCALAPPDATA%\IronMind\settings.env`，记事本可改。
 `pwsh -File install.ps1 -Uninstall` 卸载，存档会先备份到「我的文档」。
+**macOS** 是同一个外壳（wry 在 Mac 上就是系统的 WKWebView），只是打包方式不同：
+
+```bash
+tools/build-mac.sh          # → dist/IronMind.app + dist/IronMind-<版本>-mac.zip
+open dist/IronMind.app      # 存档在 ~/Library/Application Support/IronMind/
+```
+
 细节与已知限制见 [`docs/24-桌面版.md`](docs/24-桌面版.md)。
 
 ### 开发：做模块（改完存盘就重载）

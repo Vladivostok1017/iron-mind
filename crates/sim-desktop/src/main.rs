@@ -37,9 +37,28 @@ fn main() {
     };
     // 端口：不写死 8899。开发时那边可能正跑着一个，撞上去会连到别人的世界。
     let port = free_port().unwrap_or(8899);
-    let root = data_root()
+    let portable = data_root();
+    let root = portable
+        .clone()
+        .or_else(mac_data_root)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
+    // 非便携布局（macOS 的 .app）要显式告诉内核数据落在哪：
+    // 否则它的 `.` 是 "/"（Finder 启动时的工作目录），存档根本写不下去。
+    if portable.is_none() {
+        if std::env::var_os("IRONMIND_DATA").is_none() {
+            std::env::set_var("IRONMIND_DATA", &root);
+        }
+        if std::env::var_os("IRONMIND_MODULES").is_none() {
+            // 顺序有意义：**可写的数据目录在前**（导入往这里落），
+            // 再由内核追加 `.app` 里那份只读的演示模块。
+            let mut roots = vec![root.join("modules").to_string_lossy().into_owned()];
+            if let Some(b) = bundled_modules() {
+                roots.push(b.to_string_lossy().into_owned());
+            }
+            std::env::set_var("IRONMIND_MODULES", roots.join(";"));
+        }
+    }
     log_line(&root, &format!(
         "启动 server={} port={} root={}",
         server.display(), port, root.display()
@@ -236,6 +255,40 @@ fn find_server() -> Option<PathBuf> {
             return Some(cand);
         }
     }
+    None
+}
+
+/// macOS：`.app` 里的可执行文件旁边**不能**放可写目录。
+///
+/// 存档写进 bundle 会破坏代码签名；从只读卷、网盘、或 /Applications 只读挂载启动时
+/// 更是直接失败。所以没有便携布局（exe 旁边的 modules/、saves/）时，落到系统惯例的
+/// `~/Library/Application Support/IronMind`。
+#[cfg(target_os = "macos")]
+fn mac_data_root() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let dir = PathBuf::from(home).join("Library").join("Application Support").join("IronMind");
+    for sub in ["modules", "saves", "logs"] {
+        std::fs::create_dir_all(dir.join(sub)).ok()?;
+    }
+    Some(dir)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_data_root() -> Option<PathBuf> {
+    None
+}
+
+/// `.app` 里随包带的演示模块：`Contents/Resources/modules`。
+/// 只读，所以只能"看得见"，导入要落到数据目录那份。
+#[cfg(target_os = "macos")]
+fn bundled_modules() -> Option<PathBuf> {
+    let dir = exe_dir().join("..").join("Resources").join("modules");
+    let dir = std::fs::canonicalize(&dir).ok()?;
+    if dir.is_dir() { Some(dir) } else { None }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bundled_modules() -> Option<PathBuf> {
     None
 }
 
